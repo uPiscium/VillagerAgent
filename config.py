@@ -7,8 +7,8 @@ import tqdm
 
 import logging
 from pipeline.utils import *
+from model.config_loader import load_llm_config
 from model.init_model import init_language_model
-from model.openai_models import OpenAILanguageModel
 from speaking_style import generate_conversation_prompt, generate_conversation_prompt_zh
 from datetime import datetime
 room_width = 25
@@ -23,39 +23,12 @@ task_number = 1
 
 logger = init_logger("TASK_GOAL", dump=False, level=logging.DEBUG, silent=False)
 
-api_key_list = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"]
-# llm_config = {
-#     # "api_model": "gpt-4o",
-#     "api_model": "gpt-4-1106-preview",
-#     # "api_base": "https://api.openai.com/v1/",
-#     "api_base": "https://api.chatanywhere.tech/v1",
-#     "api_key_list": api_key_list,
-#     "api_key": random.choice(api_key_list)
-# }
-llm_config = {
-    "api_key": api_key_list[0],
-    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "api_model": "qwen3-235b-a22b",
-    "api_key_list": api_key_list
-}
+LLM_CONFIG_PATH = os.environ.get(
+    "VILLAGER_AGENT_LLM_CONFIG",
+    "configs/llm/ollama-qwen3.5-9b.json",
+)
 
-# llm_config ={
-#     "api_key": api_key_list[0],
-#     "api_base": "https://api.deepseek.com",
-#     "api_model": "deepseek-chat",
-#     "api_key_list":api_key_list
-# }
-
-# llm_config = {
-#     "api_key": "sk-villageragent",
-#     "api_base": "http://10.130.130.13:8000/v1",
-#     "api_model": "llama_gptq4/"
-# }
-# llm_config = {
-#     "api_key": "sk-qwen05b",
-#     "api_base": "http://10.130.130.13:8002/v1",
-#     "api_model": "/mount/NAS1/public/Qwen2.5-0.5B-Instruct-GPTQ-Int8"
-# }
+llm_config = load_llm_config(LLM_CONFIG_PATH)
 llm = init_language_model(llm_config)
 # task_goal_prompt = "Randomly choose another way to express the following sentence. Try to change the sentence pattern instead of replacing words and try to avoid repetitive sentence patterns as much as possible. Making sure the meaning does not change: "
 task_goal_prompt = """

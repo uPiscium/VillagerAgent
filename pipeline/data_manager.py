@@ -136,7 +136,7 @@ class DataManager:
         }
         blocks_info = info_copy["status"]["blocks"]
         entity_info = info_copy["status"]["nearby_entities"]
-        sign_info = info_copy["status"]["sign"]
+        sign_info = str(info_copy["status"]["sign"])
         time = info_copy["status"]["timeOfDay"]
 
         return {
@@ -309,7 +309,7 @@ class DataManager:
             for block in env["blocks_info"]:
                 if block not in self._env_data["blocks_info"]:
                     self._env_data["blocks_info"].append(block)
-            self._env_data["sign_info"] = env["sign_info"]
+            self._env_data["sign_info"] = str(env["sign_info"])
             self._env_data["time"] = env["time"]
             self._env_data["nearby_entities"] = env["nearby_entities"]
             self._logger.info(f"Update env successfully")
@@ -358,7 +358,7 @@ class DataManager:
         for block in env["blocks_info"]:
             if block not in self._env_data["blocks_info"]:
                 self._env_data["blocks_info"].append(block)
-        self._env_data["sign_info"] = env["sign_info"]
+        self._env_data["sign_info"] = str(env["sign_info"])
         self._env_data["time"] = env["time"]
         self._env_data["nearby_entities"] = env["nearby_entities"]
         self._logger.info(f"Update env successfully")

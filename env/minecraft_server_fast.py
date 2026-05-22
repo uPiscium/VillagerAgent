@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from functools import wraps
 from env_api import *
 import uvicorn
+import platform
 
 # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
 os.environ["REQ_TIMEOUT"] = "1800000"
@@ -34,12 +35,16 @@ mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
 collectBlock = require('mineflayer-collectblock')
 pvp = require("mineflayer-pvp").plugin
-minecraftHawkEye = require("minecrafthawkeye")
 Vec3 = require("vec3")
 # viewer = require('prismarine-viewer').mineflayer
 Socks = require("socks5-client")
 minecraftData = require('minecraft-data')
 mcData = minecraftData('1.19.2')
+# Match the non-fast server's module shape.
+if platform.system().lower() == 'linux':
+    minecraftHawkEye = require("minecrafthawkeye").default
+else:
+    minecraftHawkEye = require("minecrafthawkeye")
 # print(mcData.itemsByName['yellow_carpet'])
 bot = mineflayer.createBot({
     "host": args.host,
@@ -66,6 +71,12 @@ def timeout(seconds: float):
                 raise HTTPException(status_code=408, detail="Request timed out")
         return wrapper
     return decorator
+
+
+@app.get('/post_ping')
+@app.post('/post_ping')
+async def ping():
+    return JSONResponse({'message': 'pong', 'status': True})
 
 
 @app.post("/post_render")
@@ -331,7 +342,7 @@ async def environment_info(request: Request):
     blocks = BlocksNearby(bot, Vec3, mcData, RenderRange=32, max_same_block=3)
     hint = readNearestSign(bot, Vec3, mcData, max_distance=5)
     msg["blocks"] = blocks
-    msg["sign"] = hint
+    msg["sign"] = str(hint)
     if os.path.exists(".cache/env.cache"):
         with open(".cache/env.cache", "r") as f:
             cache = json.load(f)
@@ -791,7 +802,6 @@ def handle(this, entity, *args):
         move_to(pathfinder, bot, Vec3, 1, entity['position'])
 
 async def main():
-    assert False, "This module needs to be rewrite"
     # 配置 Uvicorn 服务器
     config = uvicorn.Config("minecraft_server_fast:app", port=local_port)
     server = uvicorn.Server(config)
