@@ -32,3 +32,10 @@ def test_condition_override_preserves_comparison_axes():
     assert config["run"]["structures"] == [0]
     assert config["run"]["turns"] == 2
     assert config["run"]["seed"] == 7
+
+
+def test_qwen_ollama_config_uses_native_provider_without_openai_key():
+    config = load_config("configs/craft/villageragent_qwen_ollama.yaml")
+    assert config["models"]["director"]["provider"] == "ollama_native"
+    assert config["models"]["builder"]["provider"] == "ollama_native"
+    assert config["models"]["director"]["think"] is False
