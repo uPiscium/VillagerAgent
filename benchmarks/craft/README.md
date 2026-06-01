@@ -63,6 +63,14 @@ For a small qwen/Ollama batch evaluation across structures `0, 1, 2` and five tu
 python -m benchmarks.craft.run --config configs/craft/eval_qwen_ollama.yaml
 ```
 
+To run the qwen/Ollama VillagerAgent condition, the D1-only single-director ablation, the comparable official baseline artifact, and then generate a comparison report in one command, use:
+
+```bash
+python -m benchmarks.craft.experiment --config configs/craft/experiments/qwen_batch_v1.yaml
+```
+
+Use `--dry-run` to validate the manifest and resolved run outputs without calling model endpoints.
+
 ## Single Director Ablation
 
 ```bash
@@ -101,7 +109,7 @@ python -m benchmarks.craft.report \
   --json-output result/craft/comparison_summary.json
 ```
 
-The comparison report includes run condition, number of games, turns, final progress, completion rate, models, VillagerAgent component flags, and leakage status.
+The comparison report includes run condition, number of games, turns, final progress, completion rate, models, providers, active Directors, Builder fallback rate, VillagerAgent component flags, baseline type, and leakage status.
 
 ## Partial-Information Guard
 
@@ -132,4 +140,4 @@ The runtime also uses `CraftStateManagerAdapter` to keep each `PrivateAgentState
 - Full CRAFT judge script integration is a follow-up task.
 - CRAFT environment and metric logic are not modified.
 - The Director side is a CRAFT-specific VillagerAgent adapter runtime, not the full Minecraft-oriented task pipeline.
-- The official baseline artifact path is comparable by seed/structure/turn settings, but full official CRAFT API execution remains follow-up work.
+- The official baseline artifact path is marked as `baseline_type=comparable_artifact` and is comparable by seed/structure/turn settings, but full official CRAFT API execution remains follow-up work.

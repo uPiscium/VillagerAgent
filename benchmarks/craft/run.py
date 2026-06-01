@@ -32,19 +32,8 @@ def _structure_override(value: str | None) -> list[int] | None:
     return [int(part) for part in value.split(",") if part.strip()]
 
 
-def _write_command(output_dir: Path, args: argparse.Namespace) -> None:
+def _write_command_text(output_dir: Path, command: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    command = "python -m benchmarks.craft.run --config " + args.config
-    if args.dry_run:
-        command += " --dry-run"
-    if args.structure is not None:
-        command += f" --structure {args.structure}"
-    if args.turns is not None:
-        command += f" --turns {args.turns}"
-    if args.seed is not None:
-        command += f" --seed {args.seed}"
-    if args.condition is not None:
-        command += f" --condition {args.condition}"
     (output_dir / "command.txt").write_text(command + "\n", encoding="utf-8")
 
 
@@ -70,27 +59,27 @@ def _require_runtime_api_keys(config: dict) -> None:
             )
 
 
-def main() -> None:
-    args = parse_args()
-    overrides = {
-        "structures": _structure_override(args.structure),
-        "turns": args.turns,
-        "seed": args.seed,
-        "condition": args.condition,
-    }
-    config = load_config(args.config, overrides=overrides, require_api_keys=False)
-    condition = args.condition or condition_from_config(config)
-    if not args.dry_run and condition != "official_baseline":
+def run_config(
+    config_path: str,
+    *,
+    dry_run: bool = False,
+    overrides: dict | None = None,
+    command_text: str | None = None,
+) -> Path:
+    config = load_config(config_path, overrides=overrides, require_api_keys=False)
+    condition = (overrides or {}).get("condition") or condition_from_config(config)
+    if not dry_run and condition != "official_baseline":
         _require_runtime_api_keys(config)
     output_dir = output_dir_for_config(config)
     save_resolved_config(config, output_dir)
-    _write_command(output_dir, args)
+    if command_text:
+        _write_command_text(output_dir, command_text)
     (output_dir / "logs").mkdir(parents=True, exist_ok=True)
     (output_dir / "raw").mkdir(parents=True, exist_ok=True)
     (output_dir / "normalized").mkdir(parents=True, exist_ok=True)
-    if args.dry_run:
+    if dry_run:
         _print_dry_run(config, condition, output_dir)
-        return
+        return output_dir
 
     adapter = CraftEnvAdapter(config, output_dir)
     raw_result = adapter.run(condition)
@@ -99,6 +88,34 @@ def main() -> None:
         condition=condition,
         raw_result=raw_result,
         output_dir=output_dir,
+    )
+    return output_dir
+
+
+def main() -> None:
+    args = parse_args()
+    overrides = {
+        "structures": _structure_override(args.structure),
+        "turns": args.turns,
+        "seed": args.seed,
+        "condition": args.condition,
+    }
+    command = "python -m benchmarks.craft.run --config " + args.config
+    if args.dry_run:
+        command += " --dry-run"
+    if args.structure is not None:
+        command += f" --structure {args.structure}"
+    if args.turns is not None:
+        command += f" --turns {args.turns}"
+    if args.seed is not None:
+        command += f" --seed {args.seed}"
+    if args.condition is not None:
+        command += f" --condition {args.condition}"
+    run_config(
+        args.config,
+        dry_run=args.dry_run,
+        overrides=overrides,
+        command_text=command,
     )
 
 

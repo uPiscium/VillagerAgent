@@ -2,7 +2,7 @@ run:
   name: "craft_official_baseline"
   seed: 3
   output_dir: "result/craft"
-  structures: [0]
+  structures: [0, 1, 2]
   turns: 5
 
 craft:
