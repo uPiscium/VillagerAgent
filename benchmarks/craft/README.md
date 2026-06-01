@@ -30,6 +30,15 @@ The official baseline condition is tracked for comparability. CRAFT environment 
 python -m benchmarks.craft.run --config configs/craft/villageragent_qwen.yaml --dry-run
 ```
 
+For an Ollama-only qwen smoke/non-dry run that does not require `OPENAI_API_KEY`, use:
+
+```bash
+python -m benchmarks.craft.run \
+  --config configs/craft/villageragent_qwen_ollama.yaml \
+  --structure 0 \
+  --turns 1
+```
+
 This condition maps CRAFT Directors to VillagerAgent-side Director adapters:
 
 - `D1` -> VillagerAgent BaseAgent-style Director D1
@@ -45,6 +54,8 @@ result/craft/{run_name}/raw/prompts/structure_{id}/{director}_turn_{nnn}.json
 ```
 
 These prompt files contain only the messages sent to the Director LLM. They do not include forbidden leakage guard payloads such as `target_structure`, oracle moves, or other Directors' raw private views.
+
+For qwen3-style OpenAI-compatible endpoints, the CRAFT adapter records response diagnostics in raw turn metadata. If a response returns reasoning but empty public `content`, the adapter retries once with a stricter final-answer instruction and larger token budget. This is intended to make qwen smoke runs diagnosable without exposing hidden CRAFT state.
 
 ## Single Director Ablation
 

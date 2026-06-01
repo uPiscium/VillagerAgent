@@ -26,7 +26,10 @@ class VillagerCraftControllerAdapter:
     def _make_llm_client(self, llm_config: dict):
         provider = llm_config.get("provider")
         if provider == "ollama_native":
-            return OllamaNativeClient(base_url=llm_config["base_url"])
+            return OllamaNativeClient(
+                base_url=llm_config["base_url"],
+                think=llm_config.get("think", False),
+            )
         if provider in {"openai", "openai_compatible", "ollama"}:
             return OpenAICompatibleClient(
                 base_url=llm_config["base_url"],
@@ -85,6 +88,7 @@ class VillagerCraftControllerAdapter:
                 temperature=self.llm_config.get("temperature", 0.0),
                 max_tokens=self.llm_config.get("max_tokens"),
             ).strip()
+            llm_response_info = getattr(self.llm_client, "last_response_info", {})
             if not message:
                 message = "I am uncertain based on my private view and the public history."
             output = DirectorTurnOutput(
@@ -100,6 +104,7 @@ class VillagerCraftControllerAdapter:
                     },
                     "runtime_adapter": "villageragent_director_runtime_v1",
                     "state_manager_snapshot": self.state_manager.snapshot_for_metadata(),
+                    "llm_response_info": llm_response_info,
                 },
             )
             self.own_message_history[director_id].append(

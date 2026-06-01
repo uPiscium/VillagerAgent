@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.craft.adapters.openai_compatible import OpenAICompatibleClient
+from benchmarks.craft.adapters.ollama_client import OllamaNativeClient
 from benchmarks.craft.craft_protocol import CraftPrivateView, CraftPublicState
 from benchmarks.craft.leakage_guard import LeakageGuard
 from benchmarks.craft.villager.villager_craft_agent import VillagerCraftDirectorGroup
@@ -119,11 +120,18 @@ class CraftEnvAdapter:
                 visible_constructed_structure=copy.deepcopy(game_state.current_structure),
                 progress_summary=_safe_progress_summary(game_state),
             )
-            messages = director_group.generate_director_messages(
+            outputs = director_group.controller.step(
                 private_views=private_views,
                 public_state=public_state,
-                turn_index=turn_index,
             )
+            messages = {
+                output.director_id: output.public_message
+                for output in outputs
+            }
+            director_metadata = {
+                output.director_id: _safe_turn_metadata(output.metadata)
+                for output in outputs
+            }
             leakage_reports = []
             for director_id, prompt_messages in director_group.controller.prompts_by_director.items():
                 if self.config.get("logging", {}).get("save_prompts", False):
@@ -170,6 +178,7 @@ class CraftEnvAdapter:
                 "structure_id": structure_index,
                 "turn_index": turn_index,
                 "director_messages": messages,
+                "director_metadata": director_metadata,
                 "builder_action": builder_action,
                 "move_executed": move_executed,
                 "progress": progress,
@@ -285,10 +294,7 @@ class CraftEnvAdapter:
             use_tools=self.config["craft"].get("builder_tool_use", False),
             oracle_moves=oracle_moves,
         )
-        client = OpenAICompatibleClient(
-            base_url=builder_model["base_url"],
-            api_key=builder_model.get("api_key", ""),
-        )
+        client = _make_chat_client(builder_model)
         response = client.chat(
             [
                 {"role": "system", "content": "You are the CRAFT Builder. Respond with one valid move line."},
@@ -300,11 +306,64 @@ class CraftEnvAdapter:
         )
         first_line = next((line.strip() for line in response.split("\n") if line.strip()), "")
         parsed = prompt_builder.parse_builder_response(first_line)
+        parsed["_builder_response_info"] = getattr(client, "last_response_info", {})
+        parsed["_builder_raw_first_line"] = first_line
         if parsed.get("action") == "clarify" and oracle_moves:
-            fallback = dict(oracle_moves[0])
-            fallback["confirmation"] = "Using the first oracle-assisted candidate after an unparseable Builder response."
-            return fallback
+            return _oracle_fallback_action(
+                oracle_moves=oracle_moves,
+                response_info=getattr(client, "last_response_info", {}),
+                first_line=first_line,
+                reason="oracle_first_candidate_after_unparseable_response",
+            )
+        if oracle_moves and not _matches_oracle_candidate(parsed, oracle_moves):
+            return _oracle_fallback_action(
+                oracle_moves=oracle_moves,
+                response_info=getattr(client, "last_response_info", {}),
+                first_line=first_line,
+                reason="oracle_first_candidate_after_non_candidate_response",
+            )
         return parsed
+
+
+def _make_chat_client(model_config: dict):
+    provider = model_config.get("provider")
+    if provider == "ollama_native":
+        return OllamaNativeClient(
+            base_url=model_config["base_url"],
+            think=model_config.get("think", False),
+        )
+    if provider in {"openai", "openai_compatible", "ollama"}:
+        return OpenAICompatibleClient(
+            base_url=model_config["base_url"],
+            api_key=model_config.get("api_key", ""),
+        )
+    raise ValueError(f"Unsupported builder LLM provider: {provider}")
+
+
+def _matches_oracle_candidate(action: dict, oracle_moves: list[dict]) -> bool:
+    return any(
+        action.get("action") == move.get("action")
+        and action.get("position") == move.get("position")
+        and action.get("layer") == move.get("layer")
+        and action.get("block") == move.get("block")
+        and action.get("span_to") == move.get("span_to")
+        for move in oracle_moves
+    )
+
+
+def _oracle_fallback_action(
+    *,
+    oracle_moves: list[dict],
+    response_info: dict,
+    first_line: str,
+    reason: str,
+) -> dict:
+    fallback = dict(oracle_moves[0])
+    fallback["confirmation"] = "Using the first oracle-assisted candidate after an incompatible Builder response."
+    fallback["_builder_response_info"] = response_info
+    fallback["_builder_raw_first_line"] = first_line
+    fallback["_builder_fallback"] = reason
+    return fallback
 
 
 def _oracle_moves_for_builder(game_state, config: dict) -> list[dict] | None:
@@ -389,3 +448,12 @@ def _save_prompt_messages(
             ensure_ascii=False,
             indent=2,
         )
+
+
+def _safe_turn_metadata(metadata: dict) -> dict:
+    return {
+        "used_villageragent_components": metadata.get("used_villageragent_components", {}),
+        "runtime_adapter": metadata.get("runtime_adapter"),
+        "state_manager_snapshot": metadata.get("state_manager_snapshot", {}),
+        "llm_response_info": metadata.get("llm_response_info", {}),
+    }
