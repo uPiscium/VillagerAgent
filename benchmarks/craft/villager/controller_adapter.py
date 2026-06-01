@@ -7,6 +7,10 @@ from benchmarks.craft.craft_protocol import (
     PrivateAgentState,
     PublicCoordinationState,
 )
+from benchmarks.craft.dual_dag.epistemic_extractor import (
+    empty_epistemic_metadata,
+    epistemic_metadata_for_director,
+)
 from benchmarks.craft.villager.prompt_builder import build_director_prompt
 from benchmarks.craft.villager.state_manager_adapter import CraftStateManagerAdapter
 from benchmarks.craft.villager.state_translator import craft_private_view_to_agent_state
@@ -65,11 +69,18 @@ class VillagerCraftControllerAdapter:
                     metadata={
                         "runtime_adapter": "villageragent_director_runtime_v1",
                         "inactive_director": True,
+                        "epistemic": empty_epistemic_metadata(),
                     },
                 ))
                 continue
 
             private_view = private_views[director_id]
+            epistemic_metadata = epistemic_metadata_for_director(
+                director_id=director_id,
+                turn_index=public_state.turn_index,
+                private_view=private_view,
+                public_state=public_state,
+            )
             self.state_manager.update_private_state(PrivateAgentState(
                 agent_id=director_id,
                 private_view_text=private_view.text_view,
@@ -117,6 +128,7 @@ class VillagerCraftControllerAdapter:
                     "runtime_adapter": "villageragent_director_runtime_v1",
                     "state_manager_snapshot": self.state_manager.snapshot_for_metadata(),
                     "llm_response_info": llm_response_info,
+                    "epistemic": epistemic_metadata,
                 },
             )
             self.own_message_history[director_id].append(
