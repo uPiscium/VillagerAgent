@@ -3,18 +3,29 @@ import csv
 import json
 from pathlib import Path
 
+import yaml
+
 from benchmarks.craft.config import repo_root
 
 
 REPORT_FIELDS = [
     "run_name",
     "condition",
+    "seed",
+    "structures",
     "num_games",
     "turns",
     "mean_final_progress",
     "completion_rate",
     "director_model",
     "builder_model",
+    "director_provider",
+    "builder_provider",
+    "active_directors",
+    "active_director_count",
+    "builder_fallback_count",
+    "builder_fallback_rate",
+    "baseline_type",
     "use_task_decomposer",
     "use_agent_controller",
     "use_state_manager",
@@ -37,17 +48,41 @@ def load_run_summary(run_name: str, *, result_root: Path) -> dict:
 
     with summary_path.open("r", encoding="utf-8") as f:
         summary = json.load(f)
+    resolved_config = _load_resolved_config(run_dir / "config.resolved.yaml")
     metrics_rows = _read_metrics(metrics_path)
     leakage_passed = all(_as_bool(row.get("leakage_passed", True)) for row in metrics_rows)
+    condition = summary.get("condition", "")
+    runtime = summary.get("runtime", {})
+    active_directors = runtime.get("active_directors") or _active_directors_from_config(
+        resolved_config,
+        condition,
+    )
     return {
         "run_name": summary.get("run_name", run_name),
-        "condition": summary.get("condition", ""),
+        "condition": condition,
+        "seed": summary.get("seed", ""),
+        "structures": ",".join(str(item) for item in summary.get("structures", []) or []),
         "num_games": summary.get("num_games", len(metrics_rows)),
         "turns": summary.get("turns", ""),
         "mean_final_progress": summary.get("mean_final_progress", 0.0),
         "completion_rate": summary.get("completion_rate", 0.0),
         "director_model": summary.get("models", {}).get("director", ""),
         "builder_model": summary.get("models", {}).get("builder", ""),
+        "director_provider": summary.get("providers", {}).get("director", "")
+        or resolved_config.get("models", {}).get("director", {}).get("provider", ""),
+        "builder_provider": summary.get("providers", {}).get("builder", "")
+        or resolved_config.get("models", {}).get("builder", {}).get("provider", ""),
+        "active_directors": ",".join(active_directors),
+        "active_director_count": runtime.get("active_director_count", len(active_directors)),
+        "builder_fallback_count": runtime.get(
+            "builder_fallback_count",
+            _builder_fallback_count(run_dir / "normalized" / "turns.jsonl"),
+        ),
+        "builder_fallback_rate": runtime.get(
+            "builder_fallback_rate",
+            _builder_fallback_rate(run_dir / "normalized" / "turns.jsonl"),
+        ),
+        "baseline_type": runtime.get("baseline_type", _baseline_type(condition)),
         "use_task_decomposer": summary.get("villageragent", {}).get("use_task_decomposer", False),
         "use_agent_controller": summary.get("villageragent", {}).get("use_agent_controller", False),
         "use_state_manager": summary.get("villageragent", {}).get("use_state_manager", False),
@@ -115,6 +150,61 @@ def _as_bool(value) -> bool:
     if isinstance(value, str):
         return value.lower() in {"true", "1", "yes"}
     return bool(value)
+
+
+def _load_resolved_config(config_path: Path) -> dict:
+    if not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _active_directors_from_config(config: dict, condition: str) -> list[str]:
+    if condition == "single_director_ablation":
+        return ["D1"]
+    villageragent = config.get("villageragent", {})
+    if villageragent.get("enabled", False):
+        return list(
+            villageragent.get("active_director_ids")
+            or villageragent.get("director_ids", ["D1", "D2", "D3"])
+        )
+    return []
+
+
+def _baseline_type(condition: str) -> str:
+    if condition == "official_baseline":
+        return "comparable_artifact"
+    return ""
+
+
+def _builder_fallback_count(turns_path: Path) -> int:
+    if not turns_path.exists():
+        return 0
+    count = 0
+    with turns_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            turn = json.loads(line)
+            if (turn.get("builder_action") or {}).get("_builder_fallback"):
+                count += 1
+    return count
+
+
+def _builder_fallback_rate(turns_path: Path) -> float:
+    if not turns_path.exists():
+        return 0.0
+    total = 0
+    fallback = 0
+    with turns_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            total += 1
+            turn = json.loads(line)
+            if (turn.get("builder_action") or {}).get("_builder_fallback"):
+                fallback += 1
+    return fallback / total if total else 0.0
 
 
 if __name__ == "__main__":

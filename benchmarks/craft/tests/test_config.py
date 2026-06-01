@@ -15,7 +15,7 @@ def test_config_rejects_target_structure_exposure():
 
 def test_baseline_and_villageragent_use_same_seed_structure_turns():
     baseline = load_config("configs/craft/official_baseline.yaml")
-    villager = load_config("configs/craft/villageragent_qwen.yaml")
+    villager = load_config("configs/craft/eval_qwen_ollama.yaml")
     assert baseline["run"]["seed"] == villager["run"]["seed"]
     assert baseline["run"]["structures"] == villager["run"]["structures"]
     assert baseline["run"]["turns"] == villager["run"]["turns"]
@@ -56,3 +56,11 @@ def test_single_director_qwen_ollama_config_uses_native_provider():
     assert config["run"]["turns"] == 5
     assert config["models"]["director"]["provider"] == "ollama_native"
     assert config["models"]["builder"]["provider"] == "ollama_native"
+
+
+def test_official_baseline_matches_qwen_batch_eval_axis():
+    baseline = load_config("configs/craft/official_baseline.yaml")
+    batch = load_config("configs/craft/eval_qwen_ollama.yaml")
+    assert baseline["run"]["seed"] == batch["run"]["seed"]
+    assert baseline["run"]["structures"] == batch["run"]["structures"]
+    assert baseline["run"]["turns"] == batch["run"]["turns"]

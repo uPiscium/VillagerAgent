@@ -18,6 +18,10 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         sum(1 for game in games if game.get("completed", False)) / len(games)
         if games else 0.0
     )
+    builder_fallback_count = sum(
+        1 for turn in turns if (turn.get("builder_action") or {}).get("_builder_fallback")
+    )
+    active_directors = _active_directors(config, condition)
     summary = {
         "benchmark": "CRAFT",
         "condition": condition,
@@ -31,6 +35,17 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         "models": {
             "director": config["models"]["director"]["model"],
             "builder": config["models"]["builder"]["model"],
+        },
+        "providers": {
+            "director": config["models"]["director"].get("provider", ""),
+            "builder": config["models"]["builder"].get("provider", ""),
+        },
+        "runtime": {
+            "active_directors": active_directors,
+            "active_director_count": len(active_directors),
+            "builder_fallback_count": builder_fallback_count,
+            "builder_fallback_rate": builder_fallback_count / len(turns) if turns else 0.0,
+            "baseline_type": _baseline_type(condition),
         },
         "villageragent": {
             "enabled": config.get("villageragent", {}).get("enabled", False),
@@ -63,6 +78,13 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         "completion_rate",
         "director_model",
         "builder_model",
+        "director_provider",
+        "builder_provider",
+        "active_directors",
+        "active_director_count",
+        "builder_fallback_count",
+        "builder_fallback_rate",
+        "baseline_type",
         "use_task_decomposer",
         "use_agent_controller",
         "use_state_manager",
@@ -83,6 +105,16 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
                 "completion_rate": 1.0 if game.get("completed", False) else 0.0,
                 "director_model": config["models"]["director"]["model"],
                 "builder_model": config["models"]["builder"]["model"],
+                "director_provider": config["models"]["director"].get("provider", ""),
+                "builder_provider": config["models"]["builder"].get("provider", ""),
+                "active_directors": ",".join(active_directors),
+                "active_director_count": len(active_directors),
+                "builder_fallback_count": sum(
+                    1 for turn in game.get("turns", [])
+                    if (turn.get("builder_action") or {}).get("_builder_fallback")
+                ),
+                "builder_fallback_rate": _fallback_rate(game.get("turns", [])),
+                "baseline_type": _baseline_type(condition),
                 "use_task_decomposer": config.get("villageragent", {}).get("use_task_decomposer", False),
                 "use_agent_controller": config.get("villageragent", {}).get("use_agent_controller", False),
                 "use_state_manager": config.get("villageragent", {}).get("use_state_manager", False),
@@ -92,3 +124,30 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
     leakage_report = raw_result.get("leakage_report", {"checks": []})
     with (normalized_dir / "leakage_report.json").open("w", encoding="utf-8") as f:
         json.dump(leakage_report, f, ensure_ascii=False, indent=2)
+
+
+def _active_directors(config: dict, condition: str) -> list[str]:
+    if condition == "single_director_ablation":
+        return ["D1"]
+    villageragent = config.get("villageragent", {})
+    if villageragent.get("enabled", False):
+        return list(
+            villageragent.get("active_director_ids")
+            or villageragent.get("director_ids", ["D1", "D2", "D3"])
+        )
+    return []
+
+
+def _baseline_type(condition: str) -> str:
+    if condition == "official_baseline":
+        return "comparable_artifact"
+    return ""
+
+
+def _fallback_rate(turns: list[dict]) -> float:
+    if not turns:
+        return 0.0
+    fallback_count = sum(
+        1 for turn in turns if (turn.get("builder_action") or {}).get("_builder_fallback")
+    )
+    return fallback_count / len(turns)

@@ -20,6 +20,34 @@ def test_result_converter_writes_normalized_files(tmp_path):
     assert (tmp_path / "normalized" / "metrics.csv").exists()
     summary = json.loads((tmp_path / "normalized" / "summary.json").read_text())
     assert summary["benchmark"] == "CRAFT"
+    assert summary["runtime"]["active_directors"] == ["D1", "D2", "D3"]
+
+
+def test_result_converter_records_runtime_metrics(tmp_path):
+    config = {
+        "run": {"name": "test", "seed": 3, "structures": [0], "turns": 1},
+        "models": {
+            "director": {"model": "d", "provider": "ollama_native"},
+            "builder": {"model": "b", "provider": "ollama_native"},
+        },
+        "villageragent": {"enabled": False},
+    }
+    normalize_results(
+        config=config,
+        condition="single_director_ablation",
+        raw_result={
+            "structure_id": 0,
+            "turns": [{"builder_action": {"_builder_fallback": "fallback"}}],
+            "final_progress": 0.0,
+            "completed": False,
+        },
+        output_dir=tmp_path,
+    )
+    summary = json.loads((tmp_path / "normalized" / "summary.json").read_text())
+    assert summary["providers"] == {"director": "ollama_native", "builder": "ollama_native"}
+    assert summary["runtime"]["active_directors"] == ["D1"]
+    assert summary["runtime"]["builder_fallback_count"] == 1
+    assert summary["runtime"]["builder_fallback_rate"] == 1.0
 
 
 def test_result_converter_writes_metrics_for_each_game(tmp_path):

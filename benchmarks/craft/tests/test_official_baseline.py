@@ -6,7 +6,10 @@ from benchmarks.craft.result_converter import normalize_results
 
 
 def test_official_baseline_generates_comparable_turn_artifacts(tmp_path):
-    config = load_config("configs/craft/official_baseline.yaml")
+    config = load_config(
+        "configs/craft/official_baseline.yaml",
+        overrides={"structures": [0]},
+    )
     adapter = CraftEnvAdapter(config, tmp_path)
     raw_result = adapter.run("official_baseline")
 

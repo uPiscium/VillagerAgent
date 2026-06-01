@@ -42,6 +42,8 @@ def test_report_aggregates_multiple_runs(tmp_path):
     ]
     assert rows[0]["leakage_passed"] is True
     assert rows[1]["use_state_manager"] is True
+    assert rows[1]["builder_fallback_count"] == 1
+    assert rows[1]["builder_fallback_rate"] == 1.0
 
     csv_path = tmp_path / "comparison_summary.csv"
     json_path = tmp_path / "comparison_summary.json"
@@ -85,6 +87,8 @@ def _write_run(tmp_path, run_name, *, condition, leakage_values, use_state_manag
         },
     }
     (normalized / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    with (normalized / "turns.jsonl").open("w", encoding="utf-8") as f:
+        f.write(json.dumps({"builder_action": {"_builder_fallback": "test"}}) + "\n")
     with (normalized / "metrics.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["leakage_passed"])
         writer.writeheader()
