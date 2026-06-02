@@ -50,6 +50,7 @@ def test_result_converter_records_runtime_metrics(tmp_path):
     assert summary["runtime"]["active_directors"] == ["D1"]
     assert summary["runtime"]["builder_fallback_count"] == 1
     assert summary["runtime"]["builder_fallback_rate"] == 1.0
+    assert summary["runtime"]["mean_action_confidence"] == 0.0
 
 
 def test_result_converter_writes_metrics_for_each_game(tmp_path):
@@ -108,3 +109,39 @@ def test_result_converter_counts_epistemic_metadata(tmp_path):
     assert summary["runtime"]["reported_claim_count"] == 2
     assert summary["runtime"]["hypothesis_count"] == 1
     assert "observed_fact_count" in metrics_text
+
+
+def test_result_converter_counts_action_candidate_metadata(tmp_path):
+    config = {
+        "run": {"name": "test", "seed": 3, "structures": [0], "turns": 1},
+        "models": {"director": {"model": "d"}, "builder": {"model": "b"}},
+        "villageragent": {"enabled": True},
+    }
+    normalize_results(
+        config=config,
+        condition="villageragent_directors",
+        raw_result={
+            "structure_id": 0,
+            "turns": [{
+                "builder_action": {
+                    "action": "place",
+                    "_action_candidate_metadata": {
+                        "candidate_count": 2,
+                        "chosen_confidence": 0.75,
+                        "claim_support_count": 1,
+                        "claim_conflict_count": 1,
+                    },
+                },
+            }],
+            "final_progress": 0.0,
+            "completed": False,
+        },
+        output_dir=tmp_path,
+    )
+    summary = json.loads((tmp_path / "normalized" / "summary.json").read_text())
+    metrics_text = (tmp_path / "normalized" / "metrics.csv").read_text()
+    assert summary["runtime"]["mean_action_confidence"] == 0.75
+    assert summary["runtime"]["claim_support_count"] == 1
+    assert summary["runtime"]["claim_conflict_count"] == 1
+    assert summary["runtime"]["candidate_count"] == 2
+    assert "mean_action_confidence" in metrics_text

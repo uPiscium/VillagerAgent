@@ -38,12 +38,14 @@ def test_oracle_fallback_preserves_diagnostics():
         response_info={"content_empty": False},
         first_line="PLACE:yl:(0,0):0:CONFIRM:bad",
         reason="oracle_first_candidate_after_non_candidate_response",
+        action_candidate_metadata={"chosen_by": "oracle_fallback"},
     )
 
     assert fallback["block"] == "bl"
     assert fallback["_builder_response_info"] == {"content_empty": False}
     assert fallback["_builder_raw_first_line"].startswith("PLACE:yl")
     assert fallback["_builder_fallback"] == "oracle_first_candidate_after_non_candidate_response"
+    assert fallback["_action_candidate_metadata"] == {"chosen_by": "oracle_fallback"}
 
 
 def test_builder_contract_lists_exact_oracle_response_lines():
