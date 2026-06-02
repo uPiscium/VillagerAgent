@@ -8,6 +8,7 @@ from typing import Any
 from benchmarks.craft.adapters.openai_compatible import OpenAICompatibleClient
 from benchmarks.craft.adapters.ollama_client import OllamaNativeClient
 from benchmarks.craft.craft_protocol import CraftPrivateView, CraftPublicState
+from benchmarks.craft.dual_dag.epistemic_extractor import reported_claim_from_message
 from benchmarks.craft.leakage_guard import LeakageGuard
 from benchmarks.craft.villager.villager_craft_agent import VillagerCraftDirectorGroup
 
@@ -128,6 +129,15 @@ class CraftEnvAdapter:
                 output.director_id: output.public_message
                 for output in outputs
             }
+            epistemic_claims = {
+                director_id: reported_claim_from_message(
+                    director_id=director_id,
+                    turn_index=turn_index,
+                    message=message,
+                )
+                for director_id, message in messages.items()
+                if message.strip()
+            }
             director_metadata = {
                 output.director_id: _safe_turn_metadata(output.metadata)
                 for output in outputs
@@ -179,6 +189,7 @@ class CraftEnvAdapter:
                 "turn_index": turn_index,
                 "director_messages": messages,
                 "director_metadata": director_metadata,
+                "epistemic_claims": epistemic_claims,
                 "builder_action": builder_action,
                 "move_executed": move_executed,
                 "progress": progress,
@@ -506,6 +517,8 @@ def _safe_turn_metadata(metadata: dict) -> dict:
     return {
         "used_villageragent_components": metadata.get("used_villageragent_components", {}),
         "runtime_adapter": metadata.get("runtime_adapter"),
+        "inactive_director": metadata.get("inactive_director", False),
         "state_manager_snapshot": metadata.get("state_manager_snapshot", {}),
         "llm_response_info": metadata.get("llm_response_info", {}),
+        "epistemic": metadata.get("epistemic", {}),
     }

@@ -22,6 +22,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         1 for turn in turns if (turn.get("builder_action") or {}).get("_builder_fallback")
     )
     active_directors = _active_directors(config, condition)
+    epistemic_counts = _epistemic_counts(turns)
     summary = {
         "benchmark": "CRAFT",
         "condition": condition,
@@ -46,6 +47,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
             "builder_fallback_count": builder_fallback_count,
             "builder_fallback_rate": builder_fallback_count / len(turns) if turns else 0.0,
             "baseline_type": _baseline_type(condition),
+            **epistemic_counts,
         },
         "villageragent": {
             "enabled": config.get("villageragent", {}).get("enabled", False),
@@ -84,6 +86,9 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         "active_director_count",
         "builder_fallback_count",
         "builder_fallback_rate",
+        "observed_fact_count",
+        "reported_claim_count",
+        "hypothesis_count",
         "baseline_type",
         "use_task_decomposer",
         "use_agent_controller",
@@ -94,6 +99,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for game in games:
+            game_epistemic_counts = _epistemic_counts(game.get("turns", []))
             writer.writerow({
                 "run_name": config["run"]["name"],
                 "condition": condition,
@@ -114,6 +120,9 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
                     if (turn.get("builder_action") or {}).get("_builder_fallback")
                 ),
                 "builder_fallback_rate": _fallback_rate(game.get("turns", [])),
+                "observed_fact_count": game_epistemic_counts["observed_fact_count"],
+                "reported_claim_count": game_epistemic_counts["reported_claim_count"],
+                "hypothesis_count": game_epistemic_counts["hypothesis_count"],
                 "baseline_type": _baseline_type(condition),
                 "use_task_decomposer": config.get("villageragent", {}).get("use_task_decomposer", False),
                 "use_agent_controller": config.get("villageragent", {}).get("use_agent_controller", False),
@@ -151,3 +160,20 @@ def _fallback_rate(turns: list[dict]) -> float:
         1 for turn in turns if (turn.get("builder_action") or {}).get("_builder_fallback")
     )
     return fallback_count / len(turns)
+
+
+def _epistemic_counts(turns: list[dict]) -> dict:
+    observed_fact_count = 0
+    hypothesis_count = 0
+    reported_claim_count = 0
+    for turn in turns:
+        reported_claim_count += len(turn.get("epistemic_claims", {}))
+        for metadata in turn.get("director_metadata", {}).values():
+            epistemic = metadata.get("epistemic", {}) if isinstance(metadata, dict) else {}
+            observed_fact_count += len(epistemic.get("observed_facts", []))
+            hypothesis_count += len(epistemic.get("hypotheses", []))
+    return {
+        "observed_fact_count": observed_fact_count,
+        "reported_claim_count": reported_claim_count,
+        "hypothesis_count": hypothesis_count,
+    }

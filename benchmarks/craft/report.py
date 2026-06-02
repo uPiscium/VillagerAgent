@@ -25,6 +25,9 @@ REPORT_FIELDS = [
     "active_director_count",
     "builder_fallback_count",
     "builder_fallback_rate",
+    "observed_fact_count",
+    "reported_claim_count",
+    "hypothesis_count",
     "baseline_type",
     "use_task_decomposer",
     "use_agent_controller",
@@ -81,6 +84,18 @@ def load_run_summary(run_name: str, *, result_root: Path) -> dict:
         "builder_fallback_rate": runtime.get(
             "builder_fallback_rate",
             _builder_fallback_rate(run_dir / "normalized" / "turns.jsonl"),
+        ),
+        "observed_fact_count": runtime.get(
+            "observed_fact_count",
+            _sum_metric_rows(metrics_rows, "observed_fact_count"),
+        ),
+        "reported_claim_count": runtime.get(
+            "reported_claim_count",
+            _sum_metric_rows(metrics_rows, "reported_claim_count"),
+        ),
+        "hypothesis_count": runtime.get(
+            "hypothesis_count",
+            _sum_metric_rows(metrics_rows, "hypothesis_count"),
         ),
         "baseline_type": runtime.get("baseline_type", _baseline_type(condition)),
         "use_task_decomposer": summary.get("villageragent", {}).get("use_task_decomposer", False),
@@ -150,6 +165,16 @@ def _as_bool(value) -> bool:
     if isinstance(value, str):
         return value.lower() in {"true", "1", "yes"}
     return bool(value)
+
+
+def _sum_metric_rows(rows: list[dict], field: str) -> int:
+    total = 0
+    for row in rows:
+        try:
+            total += int(float(row.get(field, 0) or 0))
+        except ValueError:
+            continue
+    return total
 
 
 def _load_resolved_config(config_path: Path) -> dict:
