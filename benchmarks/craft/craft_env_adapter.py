@@ -8,6 +8,11 @@ from typing import Any
 from benchmarks.craft.adapters.openai_compatible import OpenAICompatibleClient
 from benchmarks.craft.adapters.ollama_client import OllamaNativeClient
 from benchmarks.craft.craft_protocol import CraftPrivateView, CraftPublicState
+from benchmarks.craft.dual_dag.action_candidates import (
+    action_candidate_from_parsed_action,
+    action_candidates_from_moves,
+    build_action_candidate_metadata,
+)
 from benchmarks.craft.dual_dag.epistemic_extractor import reported_claim_from_message
 from benchmarks.craft.leakage_guard import LeakageGuard
 from benchmarks.craft.villager.villager_craft_agent import VillagerCraftDirectorGroup
@@ -175,6 +180,8 @@ class CraftEnvAdapter:
             builder_action = self._builder_action(
                 game_state=game_state,
                 director_messages=messages,
+                epistemic_claims=epistemic_claims,
+                turn_index=turn_index,
             )
             builder_actions.append(builder_action)
             move_executed = False
@@ -290,7 +297,14 @@ class CraftEnvAdapter:
             "sample_id": sample.get("id", structure_index),
         }
 
-    def _builder_action(self, *, game_state, director_messages: dict[str, str]) -> dict:
+    def _builder_action(
+        self,
+        *,
+        game_state,
+        director_messages: dict[str, str],
+        epistemic_claims: dict[str, dict],
+        turn_index: int,
+    ) -> dict:
         from agents.builder_agent import BuilderAgent
 
         builder_model = self.config["models"]["builder"]
@@ -298,6 +312,11 @@ class CraftEnvAdapter:
         oracle_moves = None
         if self.config["craft"].get("use_oracle"):
             oracle_moves = _oracle_moves_for_builder(game_state, self.config)
+        action_candidates = action_candidates_from_moves(
+            moves=oracle_moves,
+            reported_claims=epistemic_claims,
+            turn_index=turn_index,
+        )
         prompt_builder = object.__new__(BuilderAgent)
         prompt = prompt_builder.get_builder_prompt(
             director_discussion=discussion,
@@ -321,12 +340,23 @@ class CraftEnvAdapter:
         parsed = prompt_builder.parse_builder_response(first_line)
         parsed["_builder_response_info"] = getattr(client, "last_response_info", {})
         parsed["_builder_raw_first_line"] = first_line
+        if not action_candidates:
+            action_candidates = [action_candidate_from_parsed_action(
+                action=parsed,
+                reported_claims=epistemic_claims,
+                turn_index=turn_index,
+            )]
         if parsed.get("action") == "clarify" and oracle_moves:
             return _oracle_fallback_action(
                 oracle_moves=oracle_moves,
                 response_info=getattr(client, "last_response_info", {}),
                 first_line=first_line,
                 reason="oracle_first_candidate_after_unparseable_response",
+                action_candidate_metadata=build_action_candidate_metadata(
+                    candidates=action_candidates,
+                    chosen_action=oracle_moves[0],
+                    chosen_by="oracle_fallback",
+                ),
             )
         if oracle_moves and not _matches_oracle_candidate(parsed, oracle_moves):
             return _oracle_fallback_action(
@@ -334,7 +364,17 @@ class CraftEnvAdapter:
                 response_info=getattr(client, "last_response_info", {}),
                 first_line=first_line,
                 reason="oracle_first_candidate_after_non_candidate_response",
+                action_candidate_metadata=build_action_candidate_metadata(
+                    candidates=action_candidates,
+                    chosen_action=oracle_moves[0],
+                    chosen_by="oracle_fallback",
+                ),
             )
+        parsed["_action_candidate_metadata"] = build_action_candidate_metadata(
+            candidates=action_candidates,
+            chosen_action=parsed,
+            chosen_by="builder_response",
+        )
         return parsed
 
 
@@ -420,12 +460,15 @@ def _oracle_fallback_action(
     response_info: dict,
     first_line: str,
     reason: str,
+    action_candidate_metadata: dict | None = None,
 ) -> dict:
     fallback = dict(oracle_moves[0])
     fallback["confirmation"] = "Using the first oracle-assisted candidate after an incompatible Builder response."
     fallback["_builder_response_info"] = response_info
     fallback["_builder_raw_first_line"] = first_line
     fallback["_builder_fallback"] = reason
+    if action_candidate_metadata is not None:
+        fallback["_action_candidate_metadata"] = action_candidate_metadata
     return fallback
 
 

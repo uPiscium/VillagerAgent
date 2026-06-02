@@ -23,6 +23,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
     )
     active_directors = _active_directors(config, condition)
     epistemic_counts = _epistemic_counts(turns)
+    action_candidate_metrics = _action_candidate_metrics(turns)
     summary = {
         "benchmark": "CRAFT",
         "condition": condition,
@@ -48,6 +49,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
             "builder_fallback_rate": builder_fallback_count / len(turns) if turns else 0.0,
             "baseline_type": _baseline_type(condition),
             **epistemic_counts,
+            **action_candidate_metrics,
         },
         "villageragent": {
             "enabled": config.get("villageragent", {}).get("enabled", False),
@@ -89,6 +91,10 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         "observed_fact_count",
         "reported_claim_count",
         "hypothesis_count",
+        "mean_action_confidence",
+        "claim_support_count",
+        "claim_conflict_count",
+        "candidate_count",
         "baseline_type",
         "use_task_decomposer",
         "use_agent_controller",
@@ -100,6 +106,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         writer.writeheader()
         for game in games:
             game_epistemic_counts = _epistemic_counts(game.get("turns", []))
+            game_action_candidate_metrics = _action_candidate_metrics(game.get("turns", []))
             writer.writerow({
                 "run_name": config["run"]["name"],
                 "condition": condition,
@@ -123,6 +130,10 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
                 "observed_fact_count": game_epistemic_counts["observed_fact_count"],
                 "reported_claim_count": game_epistemic_counts["reported_claim_count"],
                 "hypothesis_count": game_epistemic_counts["hypothesis_count"],
+                "mean_action_confidence": game_action_candidate_metrics["mean_action_confidence"],
+                "claim_support_count": game_action_candidate_metrics["claim_support_count"],
+                "claim_conflict_count": game_action_candidate_metrics["claim_conflict_count"],
+                "candidate_count": game_action_candidate_metrics["candidate_count"],
                 "baseline_type": _baseline_type(condition),
                 "use_task_decomposer": config.get("villageragent", {}).get("use_task_decomposer", False),
                 "use_agent_controller": config.get("villageragent", {}).get("use_agent_controller", False),
@@ -176,4 +187,27 @@ def _epistemic_counts(turns: list[dict]) -> dict:
         "observed_fact_count": observed_fact_count,
         "reported_claim_count": reported_claim_count,
         "hypothesis_count": hypothesis_count,
+    }
+
+
+def _action_candidate_metrics(turns: list[dict]) -> dict:
+    confidences = []
+    claim_support_count = 0
+    claim_conflict_count = 0
+    candidate_count = 0
+    for turn in turns:
+        metadata = (turn.get("builder_action") or {}).get("_action_candidate_metadata", {})
+        if not metadata:
+            continue
+        candidate_count += int(metadata.get("candidate_count", 0) or 0)
+        claim_support_count += int(metadata.get("claim_support_count", 0) or 0)
+        claim_conflict_count += int(metadata.get("claim_conflict_count", 0) or 0)
+        confidence = metadata.get("chosen_confidence")
+        if confidence is not None:
+            confidences.append(float(confidence))
+    return {
+        "mean_action_confidence": sum(confidences) / len(confidences) if confidences else 0.0,
+        "claim_support_count": claim_support_count,
+        "claim_conflict_count": claim_conflict_count,
+        "candidate_count": candidate_count,
     }

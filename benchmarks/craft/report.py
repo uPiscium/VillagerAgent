@@ -28,6 +28,10 @@ REPORT_FIELDS = [
     "observed_fact_count",
     "reported_claim_count",
     "hypothesis_count",
+    "mean_action_confidence",
+    "claim_support_count",
+    "claim_conflict_count",
+    "candidate_count",
     "baseline_type",
     "use_task_decomposer",
     "use_agent_controller",
@@ -96,6 +100,22 @@ def load_run_summary(run_name: str, *, result_root: Path) -> dict:
         "hypothesis_count": runtime.get(
             "hypothesis_count",
             _sum_metric_rows(metrics_rows, "hypothesis_count"),
+        ),
+        "mean_action_confidence": runtime.get(
+            "mean_action_confidence",
+            _mean_metric_rows(metrics_rows, "mean_action_confidence"),
+        ),
+        "claim_support_count": runtime.get(
+            "claim_support_count",
+            _sum_metric_rows(metrics_rows, "claim_support_count"),
+        ),
+        "claim_conflict_count": runtime.get(
+            "claim_conflict_count",
+            _sum_metric_rows(metrics_rows, "claim_conflict_count"),
+        ),
+        "candidate_count": runtime.get(
+            "candidate_count",
+            _sum_metric_rows(metrics_rows, "candidate_count"),
         ),
         "baseline_type": runtime.get("baseline_type", _baseline_type(condition)),
         "use_task_decomposer": summary.get("villageragent", {}).get("use_task_decomposer", False),
@@ -175,6 +195,16 @@ def _sum_metric_rows(rows: list[dict], field: str) -> int:
         except ValueError:
             continue
     return total
+
+
+def _mean_metric_rows(rows: list[dict], field: str) -> float:
+    values = []
+    for row in rows:
+        try:
+            values.append(float(row.get(field, 0.0) or 0.0))
+        except ValueError:
+            continue
+    return sum(values) / len(values) if values else 0.0
 
 
 def _load_resolved_config(config_path: Path) -> dict:
