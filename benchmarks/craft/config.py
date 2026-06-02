@@ -60,6 +60,8 @@ def _apply_overrides(config: dict, overrides: dict | None) -> dict:
         run["turns"] = overrides["turns"]
     if overrides.get("seed") is not None:
         run["seed"] = overrides["seed"]
+    if overrides.get("run_name_suffix"):
+        run["name"] = f"{run.get('name', 'craft_run')}{overrides['run_name_suffix']}"
     if overrides.get("condition") is not None:
         condition = overrides["condition"]
         va = config.setdefault("villageragent", {})

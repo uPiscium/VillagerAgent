@@ -2,7 +2,14 @@ import pytest
 import yaml
 
 from benchmarks.craft.config import repo_root
-from benchmarks.craft.experiment import ExperimentConfigError, load_experiment, run_experiment
+from benchmarks.craft.experiment import (
+    ExperimentConfigError,
+    _experiment_overrides,
+    _report_path,
+    _structure_override,
+    load_experiment,
+    run_experiment,
+)
 
 
 def test_load_experiment_manifest():
@@ -46,6 +53,29 @@ def test_load_experiment_rejects_empty_runs(tmp_path):
     manifest_path.write_text(yaml.safe_dump({"experiment": {"runs": []}}), encoding="utf-8")
     with pytest.raises(ExperimentConfigError, match="experiment.runs"):
         load_experiment(str(manifest_path))
+
+
+def test_load_experiment_rejects_non_mapping_overrides(tmp_path):
+    manifest_path = tmp_path / "bad_overrides.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({"experiment": {"runs": ["config.yaml"], "overrides": ["bad"]}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ExperimentConfigError, match="experiment.overrides"):
+        load_experiment(str(manifest_path))
+
+
+def test_experiment_cli_overrides_replace_manifest_overrides():
+    overrides = _experiment_overrides(
+        {"overrides": {"structures": [0, 1], "turns": 5, "run_name_suffix": "_manifest"}},
+        {"structures": [2], "turns": 1, "seed": None, "run_name_suffix": "_smoke"},
+    )
+
+    assert overrides == {"structures": [2], "turns": 1, "run_name_suffix": "_smoke"}
+    assert _structure_override("0,2") == [0, 2]
+    assert str(_report_path("result/craft/comparison.csv", overrides)).endswith(
+        "result/craft/comparison_smoke.csv"
+    )
 
 
 def test_run_experiment_dry_run_creates_run_output(tmp_path):
@@ -97,5 +127,15 @@ def test_run_experiment_dry_run_creates_run_output(tmp_path):
         encoding="utf-8",
     )
 
-    assert run_experiment(str(manifest_path), dry_run=True) == []
-    assert (tmp_path / "results" / "craft_experiment_dry_run" / "config.resolved.yaml").exists()
+    assert run_experiment(
+        str(manifest_path),
+        dry_run=True,
+        overrides={"structures": [0], "turns": 1, "seed": 9, "run_name_suffix": "_smoke"},
+    ) == []
+    output = tmp_path / "results" / "craft_experiment_dry_run_smoke"
+    resolved_config = yaml.safe_load((output / "config.resolved.yaml").read_text())
+    command_text = (output / "command.txt").read_text()
+    assert resolved_config["run"]["structures"] == [0]
+    assert resolved_config["run"]["turns"] == 1
+    assert resolved_config["run"]["seed"] == 9
+    assert "--run-name-suffix _smoke" in command_text
