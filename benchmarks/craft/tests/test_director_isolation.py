@@ -59,6 +59,11 @@ def test_controller_returns_three_director_messages():
     assert snapshot["stores_target_blueprint"] is False
     assert snapshot["stores_oracle_plan"] is False
     assert snapshot["private_state_agents"] == ["D1", "D2", "D3"]
+    for director_id in ["D1", "D2", "D3"]:
+        source_metadata = group.controller.prompt_source_metadata_by_director[director_id]
+        private_source_id = f"private_view:{director_id}:1"
+        assert private_source_id in source_metadata["included_source_ids"]
+        assert source_metadata["source_visibility"][private_source_id] == {"visible_to": [director_id]}
 
 
 def test_single_director_ablation_only_calls_d1():

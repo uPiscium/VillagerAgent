@@ -1,0 +1,161 @@
+{
+  "fixture_version": 1,
+  "description": "Deterministic CRAFT Dual-DAG smoke fixture with no external CRAFT runner or LLM calls.",
+  "config": {
+    "run": {
+      "name": "craft_regression_dual_dag_smoke",
+      "seed": 3,
+      "structures": [0],
+      "turns": 1
+    },
+    "models": {
+      "director": {
+        "model": "deterministic-director-stub"
+      },
+      "builder": {
+        "model": "deterministic-builder-stub"
+      }
+    },
+    "villageragent": {
+      "enabled": true,
+      "use_task_decomposer": true,
+      "use_agent_controller": true,
+      "use_state_manager": true,
+      "expose_private_views_to_global_state": false,
+      "expose_target_structure": false,
+      "expose_oracle_moves": false
+    }
+  },
+  "private_views": [
+    {
+      "director_id": "D1",
+      "view_name": "left",
+      "raw_view": "hidden-left-view",
+      "text_view": "bottom left yellow small",
+      "structured_view": {
+        "row_0": [
+          {
+            "color": "yellow",
+            "size": 1
+          }
+        ]
+      }
+    },
+    {
+      "director_id": "D2",
+      "view_name": "back",
+      "raw_view": "hidden-back-view",
+      "text_view": "top right blue large",
+      "structured_view": {
+        "row_2": [
+          {},
+          {},
+          {
+            "color": "blue",
+            "size": 2
+          }
+        ]
+      }
+    },
+    {
+      "director_id": "D3",
+      "view_name": "right",
+      "raw_view": "hidden-right-view",
+      "text_view": "no visible block",
+      "structured_view": {}
+    }
+  ],
+  "initial_public_state": {
+    "turn_index": 1,
+    "public_messages": [],
+    "builder_actions": [],
+    "visible_constructed_structure": {},
+    "progress_summary": {
+      "progress": 0.0
+    }
+  },
+  "director_messages": [
+    {
+      "director_id": "D1",
+      "turn_index": 1,
+      "message": "Please place yellow small at bottom left."
+    },
+    {
+      "director_id": "D2",
+      "turn_index": 1,
+      "message": "I am unsure whether top right is blue large."
+    }
+  ],
+  "oracle_moves": [
+    {
+      "action": "place",
+      "block": "ys",
+      "position": "(0,0)",
+      "layer": 0,
+      "span_to": null
+    },
+    {
+      "action": "place",
+      "block": "bs",
+      "position": "(2,2)",
+      "layer": 0,
+      "span_to": null
+    }
+  ],
+  "selected_builder_action": {
+    "action": "place",
+    "block": "ys",
+    "position": "(0,0)",
+    "layer": 0,
+    "_action_candidate_metadata": {
+      "chosen_candidate_id": "action:1:0"
+    }
+  },
+  "expected": {
+    "candidate_ids": ["action:1:0", "action:1:1"],
+    "recommended_candidate_id": "action:1:0",
+    "selected_candidate_final_state": "executed",
+    "candidate_states_after_update": {
+      "action:1:0": "executable",
+      "action:1:1": "executable"
+    },
+    "required_node_ids": [
+      "observed:D1:1:row_0:0",
+      "observed:D2:1:row_2:2",
+      "claim:D1:1",
+      "claim:D2:1",
+      "constraint:D1:1:0",
+      "constraint:D2:1:0",
+      "hypothesis:unresolved_claim:claim:D2:1",
+      "public:builder_action:1:0"
+    ],
+    "private_visibility_node_ids": [
+      "observed:D1:1:row_0:0",
+      "observed:D2:1:row_2:2"
+    ],
+    "public_visibility_node_ids": [
+      "claim:D1:1",
+      "claim:D2:1",
+      "constraint:D1:1:0",
+      "constraint:D2:1:0",
+      "hypothesis:unresolved_claim:claim:D2:1",
+      "public:builder_action:1:0"
+    ],
+    "forbidden_serialized_terms": [
+      "hidden-left-view",
+      "hidden-back-view",
+      "hidden-right-view",
+      "target_structure",
+      "oracle_moves",
+      "raw_private_view"
+    ],
+    "normalized_artifacts": [
+      "summary.json",
+      "turns.jsonl",
+      "metrics.csv",
+      "dual_dag_summary.json",
+      "dual_dag_nodes.jsonl",
+      "dual_dag_edges.jsonl"
+    ]
+  }
+}
