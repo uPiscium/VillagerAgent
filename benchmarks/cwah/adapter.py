@@ -115,12 +115,13 @@ class CWAHSymbolicAdapter:
         action_space = self.env.get_action_space() if hasattr(self.env, "get_action_space") else {}
         agent_index = _agent_index(agent_id)
         visible_object_ids = action_space.get(agent_index, []) if isinstance(action_space, dict) else []
+        object_names = _visible_object_names(self._last_observations.get(agent_id, {}))
         actions = [ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})]
         actions.extend(
             ActionSpec(
                 action_id=f"walktowards:{agent_id}:{object_id}",
                 action_type="walktowards",
-                parameters={"object_id": object_id},
+                parameters={"object_id": object_id, "object_name": object_names.get(object_id, "object")},
             )
             for object_id in visible_object_ids
         )
@@ -245,6 +246,14 @@ def _candidate_from_action(action: ActionSpec) -> dict[str, Any]:
         "parameters": dict(action.parameters),
         "state": "ready",
         "confidence": 1.0,
+    }
+
+
+def _visible_object_names(observation: dict[str, Any]) -> dict[Any, str]:
+    return {
+        node.get("id"): str(node.get("class_name", "object"))
+        for node in observation.get("nodes", [])
+        if isinstance(node, dict) and node.get("id") is not None
     }
 
 

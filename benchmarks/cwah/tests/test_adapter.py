@@ -52,6 +52,10 @@ def test_cwah_decision_context_is_agent_facing_and_candidate_backed():
     assert context.actor_id == "agent_0"
     assert any(candidate["action_type"] == "send_message" for candidate in context.visible_candidates)
     assert any(action.action_type == "walktowards" for action in context.legal_actions)
+    assert any(
+        action.action_type == "walktowards" and action.parameters == {"object_id": 20, "object_name": "plate"}
+        for action in context.legal_actions
+    )
     assert context.remaining_budget.remaining_steps == 250
 
 

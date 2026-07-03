@@ -43,6 +43,7 @@ def main() -> None:
         "max_policy_steps": max_policy_steps,
         "full_episode": args.full_episode,
         "model": args.model,
+        "prefer_physical_after_steps": args.prefer_physical_after_steps,
     }
     events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
 
@@ -60,7 +61,8 @@ def main() -> None:
                 max_tokens=args.max_tokens,
                 context=context,
             )
-            action = action_from_decision(agent_id, decision, context.legal_actions)
+            prefer_physical = args.prefer_physical_after_steps >= 0 and context.step >= args.prefer_physical_after_steps
+            action = action_from_decision(agent_id, decision, context.legal_actions, prefer_physical=prefer_physical)
             if action.action_type == "send_message":
                 result = adapter.execute_information_action(agent_id, action)
             else:
@@ -94,14 +96,15 @@ def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_token
     prompt = {
         "agent_id": context.actor_id,
         "step": context.step,
-        "visible_observation_count": len(context.visible_epistemic_nodes),
+        "observation_summary": summarize_observations(context.visible_epistemic_nodes),
         "legal_actions": [
             {"action_id": action.action_id, "action_type": action.action_type, "parameters": action.parameters}
             for action in context.legal_actions
         ],
         "instruction": (
-            "Choose exactly one legal action by action_id. Use send_message when coordination is useful, "
-            "otherwise choose a physical action or wait. Return compact JSON only: "
+            "Choose exactly one legal action by action_id. Prefer physical actions that move toward, grab, "
+            "or place visible task objects. Use send_message only to share useful new information. "
+            "Return compact JSON only: "
             "{\"action_id\": \"...\", \"message\": \"...\"}. The message field is only used for send_message."
         ),
     }
@@ -123,9 +126,50 @@ def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_token
     return decision
 
 
-def action_from_decision(agent_id: str, decision: dict, legal_actions: tuple[ActionSpec, ...]) -> ActionSpec:
+def summarize_observations(visible_epistemic_nodes: tuple[dict, ...]) -> dict:
+    objects = []
+    rooms = []
+    relations = []
+    messages = []
+    for record in visible_epistemic_nodes:
+        source_kind = record.get("source_kind")
+        proposition = record.get("proposition", {})
+        grounding = record.get("grounding", {})
+        if source_kind == "agent_message":
+            messages.append(proposition.get("object"))
+            continue
+        node = grounding.get("node") if isinstance(grounding, dict) else None
+        if isinstance(node, dict):
+            item = {"id": node.get("id"), "class_name": node.get("class_name"), "category": node.get("category")}
+            if node.get("category") == "Rooms":
+                rooms.append(item)
+            else:
+                objects.append(item)
+            continue
+        if proposition:
+            relations.append(proposition)
+    return {
+        "visible_objects": objects[:25],
+        "visible_rooms": rooms[:10],
+        "relations": relations[:25],
+        "recent_messages": [message for message in messages if message][:10],
+    }
+
+
+def action_from_decision(
+    agent_id: str,
+    decision: dict,
+    legal_actions: tuple[ActionSpec, ...],
+    *,
+    prefer_physical: bool = False,
+) -> ActionSpec:
     action_by_id = {action.action_id: action for action in legal_actions}
     selected = action_by_id.get(str(decision.get("action_id", "")))
+    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"}):
+        physical = first_physical_action(legal_actions)
+        if physical is not None:
+            decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id}
+            return physical
     if selected is not None:
         if selected.action_type == "send_message":
             return InformationActionSpec(
@@ -138,6 +182,11 @@ def action_from_decision(agent_id: str, decision: dict, legal_actions: tuple[Act
 
     action_type = str(decision.get("action_type", "send_message"))
     if action_type == "send_message":
+        if prefer_physical:
+            physical = first_physical_action(legal_actions)
+            if physical is not None:
+                decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id}
+                return physical
         return InformationActionSpec(
             action_id=f"send_message:{agent_id}",
             action_type="send_message",
@@ -145,6 +194,13 @@ def action_from_decision(agent_id: str, decision: dict, legal_actions: tuple[Act
             information_subtype="send_message",
         )
     return ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})
+
+
+def first_physical_action(legal_actions: tuple[ActionSpec, ...]) -> ActionSpec | None:
+    for action in legal_actions:
+        if action.action_type not in {"send_message", "wait"}:
+            return action
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,6 +212,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=250)
     parser.add_argument("--max-policy-steps", type=int, default=2)
     parser.add_argument("--full-episode", action="store_true", help="Run until terminal or max_steps instead of the smoke-step cap.")
+    parser.add_argument("--prefer-physical-after-steps", type=int, default=2, help="Prefer physical actions after this environment step; use -1 to disable.")
     parser.add_argument("--base-url", default=os.environ.get("CWAH_LLM_BASE_URL", "http://ollama.arc.upiscium.dev/v1"))
     parser.add_argument("--api-key", default=os.environ.get("CWAH_LLM_API_KEY", "ollama"))
     parser.add_argument("--model", default=os.environ.get("CWAH_LLM_MODEL", "gemma4:e4b"))
