@@ -111,6 +111,81 @@ def test_saved_builder_prompt_artifact_reports_hidden_key(tmp_path):
     assert guard.reports[0]["violations"][0]["label"] == "hidden_key:target_structure"
 
 
+def test_prompt_source_visibility_allows_public_and_own_private_sources():
+    guard = LeakageGuard({})
+
+    report = guard.inspect_prompt(
+        director_id="D1",
+        prompt_messages=[{"role": "user", "content": "Use allowed evidence."}],
+        forbidden_payloads={},
+        included_source_ids=["public:builder_action:1:0", "observed:D1:1:row_0:0"],
+        source_visibility={
+            "public:builder_action:1:0": {"public": True},
+            "observed:D1:1:row_0:0": {"visible_to": ["D1"]},
+        },
+    )
+
+    assert report["passed"] is True
+    assert report["included_source_ids"] == ["public:builder_action:1:0", "observed:D1:1:row_0:0"]
+
+
+def test_prompt_source_visibility_rejects_other_agent_private_source():
+    guard = LeakageGuard({})
+
+    with pytest.raises(PartialInformationLeakageError):
+        guard.inspect_prompt(
+            director_id="D1",
+            prompt_messages=[{"role": "user", "content": "This text is harmless."}],
+            forbidden_payloads={},
+            included_source_ids=["observed:D2:1:row_2:2"],
+            source_visibility={"observed:D2:1:row_2:2": {"visible_to": ["D2"]}},
+        )
+
+    violation = guard.reports[0]["violations"][0]
+    assert violation == {
+        "label": "source_visibility",
+        "source_id": "observed:D2:1:row_2:2",
+        "reason": "not_visible_to_agent",
+    }
+
+
+def test_prompt_source_visibility_rejects_evaluator_only_source():
+    guard = LeakageGuard({})
+
+    with pytest.raises(PartialInformationLeakageError):
+        guard.inspect_prompt(
+            director_id="D1",
+            prompt_messages=[{"role": "user", "content": "This text is harmless."}],
+            forbidden_payloads={},
+            included_source_ids=["target_structure:0"],
+            source_visibility={"target_structure:0": {"evaluator_only": True}},
+        )
+
+    assert guard.reports[0]["violations"][0]["reason"] == "evaluator_only"
+
+
+def test_prompt_artifact_uses_embedded_source_visibility(tmp_path):
+    artifact_path = tmp_path / "D1_turn_001.json"
+    artifact_path.write_text(
+        json.dumps({
+            "director_id": "D1",
+            "prompt_messages": [{"role": "user", "content": "Use public evidence."}],
+            "included_source_ids": ["claim:D1:1"],
+            "source_visibility": {"claim:D1:1": {"public": True}},
+        }),
+        encoding="utf-8",
+    )
+    guard = LeakageGuard({})
+
+    report = guard.inspect_prompt_artifact(
+        artifact_path=artifact_path,
+        forbidden_payloads={},
+    )
+
+    assert report["passed"] is True
+    assert report["included_source_ids"] == ["claim:D1:1"]
+
+
 def test_target_structure_guard_allows_publicly_completed_structure():
     target = {"(0,0)": ["gs"], "(0,1)": []}
     sample = {"structure": target}

@@ -25,6 +25,7 @@ class VillagerCraftControllerAdapter:
         self.active_director_ids = set(villager_config.get("active_director_ids", self.director_ids))
         self.own_message_history = {director_id: [] for director_id in self.director_ids}
         self.prompts_by_director = {}
+        self.prompt_source_metadata_by_director = {}
         self.state_manager = CraftStateManagerAdapter(self.director_ids)
         self.llm_client = self._make_llm_client(llm_config)
 
@@ -46,6 +47,7 @@ class VillagerCraftControllerAdapter:
         self.craft_task_info = dict(craft_task_info)
         self.own_message_history = {director_id: [] for director_id in self.director_ids}
         self.prompts_by_director = {}
+        self.prompt_source_metadata_by_director = {}
         self.state_manager.reset()
 
     def step(
@@ -104,7 +106,13 @@ class VillagerCraftControllerAdapter:
                 public_state=public_state,
                 task_objective=task_objective,
             )
+            prompt_source_metadata = _prompt_source_metadata(
+                director_id=director_id,
+                private_view=private_view,
+                public_state=public_state,
+            )
             self.prompts_by_director[director_id] = prompt_messages
+            self.prompt_source_metadata_by_director[director_id] = prompt_source_metadata
             message = self.llm_client.chat(
                 prompt_messages,
                 model=self.llm_config["model"],
@@ -119,6 +127,7 @@ class VillagerCraftControllerAdapter:
                 public_message=message,
                 metadata={
                     "prompt_messages": prompt_messages,
+                    "prompt_source_metadata": prompt_source_metadata,
                     "private_agent_state": private_agent_state,
                     "used_villageragent_components": {
                         "task_decomposer": self.villager_config.get("use_task_decomposer", False),
@@ -139,3 +148,39 @@ class VillagerCraftControllerAdapter:
         if len(outputs) != 3:
             raise RuntimeError("CRAFT director adapter must return exactly three outputs.")
         return outputs
+
+
+def _prompt_source_metadata(
+    *,
+    director_id: str,
+    private_view: CraftPrivateView,
+    public_state: CraftPublicState,
+) -> dict:
+    private_source_id = f"private_view:{director_id}:{public_state.turn_index}"
+    source_visibility = {
+        private_source_id: {"visible_to": [director_id]},
+    }
+    included_source_ids = [private_source_id]
+
+    for index, _message in enumerate(public_state.public_messages):
+        source_id = f"public_message:{index}"
+        included_source_ids.append(source_id)
+        source_visibility[source_id] = {"public": True}
+    for index, _action in enumerate(public_state.builder_actions):
+        source_id = f"public_builder_action:{index}"
+        included_source_ids.append(source_id)
+        source_visibility[source_id] = {"public": True}
+    if public_state.visible_constructed_structure:
+        source_id = f"visible_constructed_structure:{public_state.turn_index}"
+        included_source_ids.append(source_id)
+        source_visibility[source_id] = {"public": True}
+    if public_state.progress_summary is not None:
+        source_id = f"progress_summary:{public_state.turn_index}"
+        included_source_ids.append(source_id)
+        source_visibility[source_id] = {"public": True}
+
+    return {
+        "included_source_ids": included_source_ids,
+        "source_visibility": source_visibility,
+        "private_view_source_id": private_source_id,
+    }

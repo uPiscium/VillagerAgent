@@ -35,7 +35,14 @@ ui/logs/*
 result/*
 !result/*.py
 processed_result/*
+Player_*.log
+port_*.txt
 *.zip
+
+# C-WAH external runtime assets downloaded from CoELA setup instructions.
+/external/CoELA/executable/
+/external/CoELA/executable.zip
+/external/CoELA/virtualhome/
 
 .cache/*.cache
 .cache/state.json

@@ -173,6 +173,10 @@ class CraftEnvAdapter:
             }
             leakage_reports = []
             for director_id, prompt_messages in director_group.controller.prompts_by_director.items():
+                prompt_source_metadata = director_group.controller.prompt_source_metadata_by_director.get(
+                    director_id,
+                    {},
+                )
                 if self.config.get("logging", {}).get("save_prompts", False):
                     _save_prompt_messages(
                         output_dir=self.output_dir,
@@ -180,6 +184,8 @@ class CraftEnvAdapter:
                         director_id=director_id,
                         turn_index=turn_index,
                         prompt_messages=prompt_messages,
+                        included_source_ids=prompt_source_metadata.get("included_source_ids"),
+                        source_visibility=prompt_source_metadata.get("source_visibility"),
                     )
                 forbidden = {
                     "target_structure": _target_structure_for_guard(sample=sample, game_state=game_state),
@@ -192,6 +198,8 @@ class CraftEnvAdapter:
                     director_id=director_id,
                     prompt_messages=prompt_messages,
                     forbidden_payloads=forbidden,
+                    included_source_ids=prompt_source_metadata.get("included_source_ids"),
+                    source_visibility=prompt_source_metadata.get("source_visibility"),
                 ))
 
             for director_id, message in messages.items():
@@ -1435,22 +1443,24 @@ def _save_prompt_messages(
     director_id: str,
     turn_index: int,
     prompt_messages: list[dict],
+    included_source_ids: list[str] | None = None,
+    source_visibility: dict | None = None,
 ) -> Path:
     prompt_dir = output_dir / "raw" / "prompts" / f"structure_{structure_index}"
     prompt_dir.mkdir(parents=True, exist_ok=True)
     prompt_path = prompt_dir / f"{director_id}_turn_{turn_index:03d}.json"
     with prompt_path.open("w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "structure_id": structure_index,
-                "director_id": director_id,
-                "turn_index": turn_index,
-                "prompt_messages": prompt_messages,
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
+        artifact = {
+            "structure_id": structure_index,
+            "director_id": director_id,
+            "turn_index": turn_index,
+            "prompt_messages": prompt_messages,
+        }
+        if included_source_ids is not None:
+            artifact["included_source_ids"] = included_source_ids
+        if source_visibility is not None:
+            artifact["source_visibility"] = source_visibility
+        json.dump(artifact, f, ensure_ascii=False, indent=2)
     return prompt_path
 
 
@@ -1462,4 +1472,5 @@ def _safe_turn_metadata(metadata: dict) -> dict:
         "state_manager_snapshot": metadata.get("state_manager_snapshot", {}),
         "llm_response_info": metadata.get("llm_response_info", {}),
         "epistemic": metadata.get("epistemic", {}),
+        "prompt_source_metadata": metadata.get("prompt_source_metadata", {}),
     }

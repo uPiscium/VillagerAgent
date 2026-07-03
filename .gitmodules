@@ -1,3 +1,6 @@
 [submodule "external/CRAFT"]
 	path = external/CRAFT
 	url = https://github.com/csu-signal/CRAFT
+[submodule "external/CoELA"]
+	path = external/CoELA
+	url = https://github.com/UMass-Embodied-AGI/CoELA.git
