@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
 from benchmarks.cwah.adapter import CWAHConfig, CWAHSymbolicAdapter
+from benchmarks.cwah.artifacts import write_normalized_artifacts
 from benchmarks.cwah.coela_env import coela_cwah_env_factory
 from benchmarks.cwah.mock_env import mock_cwah_env_factory
 
@@ -81,6 +82,8 @@ def main() -> None:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps({"run_config": run_config, "events": events, "metrics": metrics}, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+    if args.artifact_dir:
+        write_normalized_artifacts(artifact_dir=Path(args.artifact_dir), run_config=run_config, events=events, metrics=metrics)
     print(json.dumps({"passed": True, "env": args.env, "run_config": run_config, "metrics": metrics}, sort_keys=True))
 
 
@@ -219,6 +222,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--output", default="")
+    parser.add_argument("--artifact-dir", default="", help="Optional directory for normalized summary.json, turns.jsonl, and metrics.csv artifacts.")
     parser.add_argument("--coela-cwah-path", default="")
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")
