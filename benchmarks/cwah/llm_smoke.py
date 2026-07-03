@@ -33,9 +33,20 @@ def main() -> None:
     )
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
     episode = adapter.reset(episode_id=args.episode_id, seed=args.seed)
-    events = [{"event": "episode_started", "episode": episode.__dict__}]
+    max_policy_steps = args.max_steps if args.full_episode else args.max_policy_steps
+    run_config = {
+        "env": args.env,
+        "episode_id": args.episode_id,
+        "seed": args.seed,
+        "task_id": args.task_id,
+        "max_steps": args.max_steps,
+        "max_policy_steps": max_policy_steps,
+        "full_episode": args.full_episode,
+        "model": args.model,
+    }
+    events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
 
-    for step in range(args.max_policy_steps):
+    for step in range(max_policy_steps):
         if adapter.is_terminal():
             break
         for agent_id in adapter.agent_ids():
@@ -49,7 +60,7 @@ def main() -> None:
                 max_tokens=args.max_tokens,
                 context=context,
             )
-            action = action_from_decision(agent_id, decision)
+            action = action_from_decision(agent_id, decision, context.legal_actions)
             if action.action_type == "send_message":
                 result = adapter.execute_information_action(agent_id, action)
             else:
@@ -67,8 +78,8 @@ def main() -> None:
     if args.output:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({"events": events, "metrics": metrics}, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"passed": True, "env": args.env, "metrics": metrics}, sort_keys=True))
+        output.write_text(json.dumps({"run_config": run_config, "events": events, "metrics": metrics}, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"passed": True, "env": args.env, "run_config": run_config, "metrics": metrics}, sort_keys=True))
 
 
 def _json_default(value):
@@ -89,9 +100,9 @@ def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_token
             for action in context.legal_actions
         ],
         "instruction": (
-            "Choose one action. Prefer send_message when communication is available. "
-            "Return compact JSON only: {\"action_type\": \"send_message\", \"message\": \"...\"} "
-            "or {\"action_type\": \"wait\"}."
+            "Choose exactly one legal action by action_id. Use send_message when coordination is useful, "
+            "otherwise choose a physical action or wait. Return compact JSON only: "
+            "{\"action_id\": \"...\", \"message\": \"...\"}. The message field is only used for send_message."
         ),
     }
     response = client.chat.completions.create(
@@ -112,7 +123,19 @@ def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_token
     return decision
 
 
-def action_from_decision(agent_id: str, decision: dict) -> ActionSpec:
+def action_from_decision(agent_id: str, decision: dict, legal_actions: tuple[ActionSpec, ...]) -> ActionSpec:
+    action_by_id = {action.action_id: action for action in legal_actions}
+    selected = action_by_id.get(str(decision.get("action_id", "")))
+    if selected is not None:
+        if selected.action_type == "send_message":
+            return InformationActionSpec(
+                action_id=selected.action_id,
+                action_type="send_message",
+                parameters={"message": str(decision.get("message", "I am checking my local observation."))},
+                information_subtype="send_message",
+            )
+        return selected
+
     action_type = str(decision.get("action_type", "send_message"))
     if action_type == "send_message":
         return InformationActionSpec(
@@ -132,6 +155,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-id", type=int, default=0)
     parser.add_argument("--max-steps", type=int, default=250)
     parser.add_argument("--max-policy-steps", type=int, default=2)
+    parser.add_argument("--full-episode", action="store_true", help="Run until terminal or max_steps instead of the smoke-step cap.")
     parser.add_argument("--base-url", default=os.environ.get("CWAH_LLM_BASE_URL", "http://ollama.arc.upiscium.dev/v1"))
     parser.add_argument("--api-key", default=os.environ.get("CWAH_LLM_API_KEY", "ollama"))
     parser.add_argument("--model", default=os.environ.get("CWAH_LLM_MODEL", "gemma4:e4b"))
