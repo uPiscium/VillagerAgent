@@ -12,6 +12,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class MatrixRun:
+    index: int
     task_id: int
     seed: int
 
@@ -41,7 +42,16 @@ def parse_int_list(value: str) -> tuple[int, ...]:
 
 
 def build_matrix(tasks: tuple[int, ...], seeds: tuple[int, ...]) -> tuple[MatrixRun, ...]:
-    return tuple(MatrixRun(task_id=task_id, seed=seed) for task_id in tasks for seed in seeds)
+    return tuple(
+        MatrixRun(index=index, task_id=task_id, seed=seed)
+        for index, (task_id, seed) in enumerate((task_id, seed) for task_id in tasks for seed in seeds)
+    )
+
+
+def matrix_port(*, base_port: int, run: MatrixRun, port_stride: int) -> int:
+    if port_stride < 1:
+        raise ValueError("port_stride must be >= 1")
+    return base_port + (run.index * port_stride)
 
 
 def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRun) -> dict[str, Any]:
@@ -86,13 +96,17 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
         command.extend(["--dataset-path", args.dataset_path])
     if args.executable_file:
         command.extend(["--executable-file", args.executable_file])
+    assigned_port = None
     if args.base_port:
-        command.extend(["--base-port", str(args.base_port + run.seed + run.task_id)])
+        assigned_port = matrix_port(base_port=args.base_port, run=run, port_stride=args.port_stride)
+        command.extend(["--base-port", str(assigned_port)])
 
     completed = subprocess.run(command, cwd=Path.cwd(), text=True, capture_output=True, check=False)
     result = {
         "task_id": run.task_id,
         "seed": run.seed,
+        "matrix_index": run.index,
+        "base_port": assigned_port,
         "run_name": run_name,
         "returncode": completed.returncode,
         "passed": completed.returncode == 0,
@@ -127,14 +141,16 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
     summary = {"aggregate": aggregate_results(results), "runs": results}
     (output_dir / "matrix_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     with (output_dir / "matrix_metrics.csv").open("w", newline="", encoding="utf-8") as f:
-        fieldnames = ["task_id", "seed", "passed", "task_success", "normalized_progress", "episode_steps"]
+        fieldnames = ["matrix_index", "task_id", "seed", "base_port", "passed", "task_success", "normalized_progress", "episode_steps"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
             metrics = result.get("metrics", {})
             writer.writerow({
                 "task_id": result.get("task_id"),
+                "matrix_index": result.get("matrix_index"),
                 "seed": result.get("seed"),
+                "base_port": result.get("base_port"),
                 "passed": result.get("passed"),
                 "task_success": metrics.get("task_success"),
                 "normalized_progress": metrics.get("normalized_progress"),
@@ -159,6 +175,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")
     parser.add_argument("--base-port", type=int, default=6314)
+    parser.add_argument("--port-stride", type=int, default=1, help="Port increment between matrix entries. Ports are assigned as base_port + matrix_index * port_stride.")
     return parser.parse_args()
 
 
