@@ -18,11 +18,27 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
     policy_events = [event for event in events if event.get("event") == "policy_step"]
     action_counts: dict[str, int] = {}
     override_count = 0
+    override_reason_counts: dict[str, int] = {}
+    failed_action_counts: dict[str, int] = {}
+    failed_action_record_count = 0
+    result_failure_count = 0
     for event in policy_events:
         action_type = _action_type_from_event(event)
         action_counts[action_type] = action_counts.get(action_type, 0) + 1
-        if event.get("decision", {}).get("policy_override"):
+        decision = event.get("decision", {}) if isinstance(event.get("decision"), dict) else {}
+        policy_override = decision.get("policy_override") if isinstance(decision.get("policy_override"), dict) else {}
+        if policy_override:
             override_count += 1
+            reason = str(policy_override.get("reason", "unknown"))
+            override_reason_counts[reason] = override_reason_counts.get(reason, 0) + 1
+        failed_record = decision.get("failed_action_recorded") if isinstance(decision.get("failed_action_recorded"), dict) else {}
+        if failed_record:
+            failed_action_record_count += 1
+            failed_action_type = _action_type_from_id(str(failed_record.get("action_id", "")))
+            failed_action_counts[failed_action_type] = failed_action_counts.get(failed_action_type, 0) + 1
+        result = event.get("result", {}) if isinstance(event.get("result"), dict) else {}
+        if result.get("succeeded") is False or result.get("error"):
+            result_failure_count += 1
     return {
         "schema_version": 1,
         "benchmark": "cwah",
@@ -34,6 +50,12 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
             "policy_overrides": override_count,
         },
         "action_counts": action_counts,
+        "diagnostics": {
+            "policy_override_reason_counts": dict(sorted(override_reason_counts.items())),
+            "failed_action_record_count": failed_action_record_count,
+            "failed_action_counts": dict(sorted(failed_action_counts.items())),
+            "result_failure_count": result_failure_count,
+        },
     }
 
 
@@ -49,6 +71,12 @@ def _action_type_from_event(event: dict[str, Any]) -> str:
     if result_metrics.get("communication_count"):
         return "send_message"
     return "unknown"
+
+
+def _action_type_from_id(action_id: str) -> str:
+    if ":" in action_id:
+        return action_id.split(":", 1)[0]
+    return action_id or "unknown"
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -73,6 +101,9 @@ def _write_metrics(path: Path, summary: dict[str, Any]) -> None:
         "episode_steps": summary["metrics"].get("episode_steps"),
         "policy_steps": summary["event_counts"].get("policy_steps"),
         "policy_overrides": summary["event_counts"].get("policy_overrides"),
+        "policy_override_rate": _rate(summary["event_counts"].get("policy_overrides"), summary["event_counts"].get("policy_steps")),
+        "failed_action_records": summary.get("diagnostics", {}).get("failed_action_record_count", 0),
+        "result_failures": summary.get("diagnostics", {}).get("result_failure_count", 0),
         "physical_actions": _physical_action_count(summary["action_counts"]),
         "communication_actions": summary["action_counts"].get("send_message", 0),
     }
@@ -84,6 +115,16 @@ def _write_metrics(path: Path, summary: dict[str, Any]) -> None:
 
 def _physical_action_count(action_counts: dict[str, int]) -> int:
     return sum(count for action_type, count in action_counts.items() if action_type not in {"send_message", "wait", "unknown"})
+
+
+def _rate(numerator: Any, denominator: Any) -> float:
+    try:
+        denominator_value = float(denominator or 0)
+        if denominator_value == 0:
+            return 0.0
+        return float(numerator or 0) / denominator_value
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _json_default(value: Any) -> Any:

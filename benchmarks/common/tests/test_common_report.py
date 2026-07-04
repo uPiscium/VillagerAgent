@@ -24,6 +24,13 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
                     "passed": True,
                     "metrics": {"task_success": True, "normalized_progress": 1.0, "episode_steps": 2},
                     "action_counts": {"walktowards": 2, "send_message": 1},
+                    "event_counts": {"policy_steps": 2, "policy_overrides": 1},
+                    "diagnostics": {
+                        "failed_action_record_count": 1,
+                        "result_failure_count": 1,
+                        "failed_action_counts": {"walktowards": 1},
+                        "policy_override_reason_counts": {"prefer_physical_after_steps": 1},
+                    },
                 },
                 {
                     "run_name": "task_1_seed_1",
@@ -51,6 +58,11 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
     assert aggregate["physical_action_count"] == 3
     assert aggregate["communication_action_count"] == 1
     assert aggregate["action_counts"] == {"open": 1, "send_message": 1, "walktowards": 2}
+    assert aggregate["policy_override_count"] == 1
+    assert aggregate["failed_action_record_count"] == 1
+    assert aggregate["result_failure_count"] == 1
+    assert aggregate["failed_action_counts"] == {"walktowards": 1}
+    assert aggregate["policy_override_reason_counts"] == {"prefer_physical_after_steps": 1}
 
     csv_path = tmp_path / "common.csv"
     json_path = tmp_path / "common.json"
@@ -61,6 +73,8 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
         csv_rows = list(csv.DictReader(f))
     assert csv_rows[0]["benchmark"] == "cwah"
     assert csv_rows[0]["action_counts"] == '{"send_message": 1, "walktowards": 2}'
+    assert csv_rows[0]["policy_override_count"] == "1"
+    assert csv_rows[0]["failed_action_counts"] == '{"walktowards": 1}'
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["aggregate"]["runs"] == 2
     assert payload["aggregate"]["failed_runs"] == 1
@@ -98,6 +112,12 @@ def test_summarizes_cwah_normalized_summary(tmp_path):
             "physical_action_count": 2,
             "communication_action_count": 0,
             "action_counts": '{"wait": 1, "walktowards": 2}',
+            "policy_override_count": 0,
+            "policy_override_rate": 0.0,
+            "failed_action_record_count": 0,
+            "result_failure_count": 0,
+            "failed_action_counts": "{}",
+            "policy_override_reason_counts": "{}",
             "error_type": "",
             "error_message": "",
         }
@@ -136,6 +156,7 @@ def test_summarizes_existing_craft_run_without_changing_craft_schema(tmp_path):
     assert rows[0]["mean_progress"] == 0.75
     assert rows[0]["physical_action_count"] == 3
     assert rows[0]["communication_action_count"] == 1
+    assert rows[0]["failed_action_counts"] == "{}"
 
 
 def _write_json(path, payload):

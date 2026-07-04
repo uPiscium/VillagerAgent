@@ -50,12 +50,21 @@ def test_aggregate_results_counts_passes_and_progress():
 def test_write_matrix_summary(tmp_path):
     write_matrix_summary(
         output_dir=tmp_path,
-        results=[{"task_id": 0, "seed": 1, "matrix_index": 0, "base_port": 6314, "passed": True, "metrics": {"task_success": False, "normalized_progress": 0.5, "episode_steps": 2}}],
+        results=[{
+            "task_id": 0,
+            "seed": 1,
+            "matrix_index": 0,
+            "base_port": 6314,
+            "passed": True,
+            "metrics": {"task_success": False, "normalized_progress": 0.5, "episode_steps": 2},
+            "event_counts": {"policy_overrides": 1},
+            "diagnostics": {"failed_action_record_count": 2, "result_failure_count": 3},
+        }],
     )
 
     summary = json.loads((tmp_path / "matrix_summary.json").read_text(encoding="utf-8"))
     metrics_csv = (tmp_path / "matrix_metrics.csv").read_text(encoding="utf-8")
 
     assert summary["aggregate"]["passed_runs"] == 1
-    assert "matrix_index,task_id,seed,base_port,passed,task_success,normalized_progress,episode_steps" in metrics_csv
-    assert "0,0,1,6314,True,False,0.5,2" in metrics_csv
+    assert "matrix_index,task_id,seed,base_port,passed,task_success,normalized_progress,episode_steps,policy_overrides,failed_action_records,result_failures" in metrics_csv
+    assert "0,0,1,6314,True,False,0.5,2,1,2,3" in metrics_csv

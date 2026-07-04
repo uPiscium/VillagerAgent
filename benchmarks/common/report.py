@@ -22,6 +22,12 @@ REPORT_FIELDS = [
     "physical_action_count",
     "communication_action_count",
     "action_counts",
+    "policy_override_count",
+    "policy_override_rate",
+    "failed_action_record_count",
+    "result_failure_count",
+    "failed_action_counts",
+    "policy_override_reason_counts",
     "error_type",
     "error_message",
 ]
@@ -68,6 +74,10 @@ def summarize_cwah_matrix(path: Path) -> list[dict[str, Any]]:
         row = _base_row(benchmark="cwah", run_name=str(run.get("run_name") or ""))
         metrics = run.get("metrics", {}) if isinstance(run.get("metrics"), dict) else {}
         action_counts = run.get("action_counts", {}) if isinstance(run.get("action_counts"), dict) else {}
+        event_counts = run.get("event_counts", {}) if isinstance(run.get("event_counts"), dict) else {}
+        diagnostics = run.get("diagnostics", {}) if isinstance(run.get("diagnostics"), dict) else {}
+        policy_steps = int(event_counts.get("policy_steps") or 0)
+        policy_overrides = int(event_counts.get("policy_overrides") or 0)
         row.update({
             "status": "completed" if run.get("passed") else "failed",
             "task_id": run.get("task_id", ""),
@@ -81,6 +91,12 @@ def summarize_cwah_matrix(path: Path) -> list[dict[str, Any]]:
             "physical_action_count": _physical_action_count(action_counts),
             "communication_action_count": int(action_counts.get("send_message", 0) or 0),
             "action_counts": _json_counts(action_counts),
+            "policy_override_count": policy_overrides,
+            "policy_override_rate": policy_overrides / policy_steps if policy_steps else 0.0,
+            "failed_action_record_count": int(diagnostics.get("failed_action_record_count") or 0),
+            "result_failure_count": int(diagnostics.get("result_failure_count") or 0),
+            "failed_action_counts": _json_counts(diagnostics.get("failed_action_counts", {}) if isinstance(diagnostics.get("failed_action_counts"), dict) else {}),
+            "policy_override_reason_counts": _json_counts(diagnostics.get("policy_override_reason_counts", {}) if isinstance(diagnostics.get("policy_override_reason_counts"), dict) else {}),
         })
         rows.append(row)
     return rows
@@ -91,6 +107,10 @@ def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None)
     run_config = summary.get("run_config", {}) if isinstance(summary.get("run_config"), dict) else {}
     metrics = summary.get("metrics", {}) if isinstance(summary.get("metrics"), dict) else {}
     action_counts = summary.get("action_counts", {}) if isinstance(summary.get("action_counts"), dict) else {}
+    event_counts = summary.get("event_counts", {}) if isinstance(summary.get("event_counts"), dict) else {}
+    diagnostics = summary.get("diagnostics", {}) if isinstance(summary.get("diagnostics"), dict) else {}
+    policy_steps = int(event_counts.get("policy_steps") or 0)
+    policy_overrides = int(event_counts.get("policy_overrides") or 0)
     run_name = run_config.get("episode_id") or path.parent.parent.name or path.parent.name
     success = bool(metrics.get("task_success"))
     row = _base_row(benchmark="cwah", run_name=str(run_name))
@@ -106,6 +126,12 @@ def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None)
         "physical_action_count": _physical_action_count(action_counts),
         "communication_action_count": int(action_counts.get("send_message", 0) or 0),
         "action_counts": _json_counts(action_counts),
+        "policy_override_count": policy_overrides,
+        "policy_override_rate": policy_overrides / policy_steps if policy_steps else 0.0,
+        "failed_action_record_count": int(diagnostics.get("failed_action_record_count") or 0),
+        "result_failure_count": int(diagnostics.get("result_failure_count") or 0),
+        "failed_action_counts": _json_counts(diagnostics.get("failed_action_counts", {}) if isinstance(diagnostics.get("failed_action_counts"), dict) else {}),
+        "policy_override_reason_counts": _json_counts(diagnostics.get("policy_override_reason_counts", {}) if isinstance(diagnostics.get("policy_override_reason_counts"), dict) else {}),
     })
     return row
 
@@ -139,6 +165,12 @@ def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
         "physical_action_count": int(row.get("physical_action_count") or 0),
         "communication_action_count": int(row.get("clarify_count") or 0),
         "action_counts": _json_counts(action_counts),
+        "policy_override_count": 0,
+        "policy_override_rate": 0.0,
+        "failed_action_record_count": 0,
+        "result_failure_count": 0,
+        "failed_action_counts": _json_counts({}),
+        "policy_override_reason_counts": _json_counts({}),
         "error_type": row.get("error_type", ""),
         "error_message": row.get("error_message", ""),
     })
@@ -151,6 +183,8 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     progress_values = [_as_float(row.get("mean_progress")) for row in rows]
     step_values = [_as_float(row.get("mean_steps")) for row in rows]
     action_counts = _aggregate_action_counts(rows)
+    failed_action_counts = _aggregate_json_count_field(rows, "failed_action_counts")
+    policy_override_reason_counts = _aggregate_json_count_field(rows, "policy_override_reason_counts")
     return {
         "runs": len(rows),
         "episodes": episodes,
@@ -162,6 +196,11 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "physical_action_count": sum(int(row.get("physical_action_count") or 0) for row in rows),
         "communication_action_count": sum(int(row.get("communication_action_count") or 0) for row in rows),
         "action_counts": action_counts,
+        "policy_override_count": sum(int(row.get("policy_override_count") or 0) for row in rows),
+        "failed_action_record_count": sum(int(row.get("failed_action_record_count") or 0) for row in rows),
+        "result_failure_count": sum(int(row.get("result_failure_count") or 0) for row in rows),
+        "failed_action_counts": failed_action_counts,
+        "policy_override_reason_counts": policy_override_reason_counts,
     }
 
 
@@ -236,9 +275,13 @@ def _json_counts(counts: dict[str, Any]) -> str:
 
 
 def _aggregate_action_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return _aggregate_json_count_field(rows, "action_counts")
+
+
+def _aggregate_json_count_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
     totals: dict[str, int] = {}
     for row in rows:
-        raw_counts = row.get("action_counts")
+        raw_counts = row.get(field)
         if not raw_counts:
             continue
         try:

@@ -16,8 +16,11 @@ def test_build_summary_counts_actions_and_overrides():
             },
             {
                 "event": "policy_step",
-                "decision": {"policy_override": {"action_id": "walktowards:agent_0:20"}},
-                "result": {"metrics": {"communication_count": 0}},
+                "decision": {
+                    "policy_override": {"reason": "prefer_physical_after_steps", "action_id": "walktowards:agent_0:20"},
+                    "failed_action_recorded": {"action_id": "walktowards:agent_0:20", "error": "execution_failed"},
+                },
+                "result": {"succeeded": False, "metrics": {"communication_count": 0}},
             },
             {"event": "episode_completed"},
         ],
@@ -26,6 +29,12 @@ def test_build_summary_counts_actions_and_overrides():
 
     assert summary["event_counts"] == {"total_events": 4, "policy_steps": 2, "policy_overrides": 1}
     assert summary["action_counts"] == {"send_message": 1, "walktowards": 1}
+    assert summary["diagnostics"] == {
+        "policy_override_reason_counts": {"prefer_physical_after_steps": 1},
+        "failed_action_record_count": 1,
+        "failed_action_counts": {"walktowards": 1},
+        "result_failure_count": 1,
+    }
 
 
 def test_write_normalized_artifacts(tmp_path):
@@ -50,3 +59,6 @@ def test_write_normalized_artifacts(tmp_path):
     assert len(turns) == 3
     assert metrics_rows[0]["physical_actions"] == "1"
     assert metrics_rows[0]["communication_actions"] == "0"
+    assert metrics_rows[0]["policy_override_rate"] == "0.0"
+    assert metrics_rows[0]["failed_action_records"] == "0"
+    assert metrics_rows[0]["result_failures"] == "0"

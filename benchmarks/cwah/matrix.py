@@ -121,6 +121,7 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
         result["metrics"] = summary.get("metrics", {})
         result["action_counts"] = summary.get("action_counts", {})
         result["event_counts"] = summary.get("event_counts", {})
+        result["diagnostics"] = summary.get("diagnostics", {})
     return result
 
 
@@ -141,11 +142,25 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
     summary = {"aggregate": aggregate_results(results), "runs": results}
     (output_dir / "matrix_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     with (output_dir / "matrix_metrics.csv").open("w", newline="", encoding="utf-8") as f:
-        fieldnames = ["matrix_index", "task_id", "seed", "base_port", "passed", "task_success", "normalized_progress", "episode_steps"]
+        fieldnames = [
+            "matrix_index",
+            "task_id",
+            "seed",
+            "base_port",
+            "passed",
+            "task_success",
+            "normalized_progress",
+            "episode_steps",
+            "policy_overrides",
+            "failed_action_records",
+            "result_failures",
+        ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
             metrics = result.get("metrics", {})
+            event_counts = result.get("event_counts", {})
+            diagnostics = result.get("diagnostics", {})
             writer.writerow({
                 "task_id": result.get("task_id"),
                 "matrix_index": result.get("matrix_index"),
@@ -155,6 +170,9 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
                 "task_success": metrics.get("task_success"),
                 "normalized_progress": metrics.get("normalized_progress"),
                 "episode_steps": metrics.get("episode_steps"),
+                "policy_overrides": event_counts.get("policy_overrides"),
+                "failed_action_records": diagnostics.get("failed_action_record_count"),
+                "result_failures": diagnostics.get("result_failure_count"),
             })
 
 
