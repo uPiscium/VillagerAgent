@@ -150,6 +150,7 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     successes = sum(int(row.get("successes") or 0) for row in rows)
     progress_values = [_as_float(row.get("mean_progress")) for row in rows]
     step_values = [_as_float(row.get("mean_steps")) for row in rows]
+    action_counts = _aggregate_action_counts(rows)
     return {
         "runs": len(rows),
         "episodes": episodes,
@@ -158,6 +159,9 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_progress": sum(progress_values) / len(progress_values) if progress_values else 0.0,
         "mean_steps": sum(step_values) / len(step_values) if step_values else 0.0,
         "failed_runs": sum(int(row.get("failed_runs") or 0) for row in rows),
+        "physical_action_count": sum(int(row.get("physical_action_count") or 0) for row in rows),
+        "communication_action_count": sum(int(row.get("communication_action_count") or 0) for row in rows),
+        "action_counts": action_counts,
     }
 
 
@@ -229,6 +233,26 @@ def _physical_action_count(action_counts: dict[str, Any]) -> int:
 
 def _json_counts(counts: dict[str, Any]) -> str:
     return json.dumps({str(key): int(value or 0) for key, value in counts.items()}, sort_keys=True)
+
+
+def _aggregate_action_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for row in rows:
+        raw_counts = row.get("action_counts")
+        if not raw_counts:
+            continue
+        try:
+            counts = json.loads(raw_counts) if isinstance(raw_counts, str) else raw_counts
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(counts, dict):
+            continue
+        for action_type, count in counts.items():
+            try:
+                totals[str(action_type)] = totals.get(str(action_type), 0) + int(count or 0)
+            except (TypeError, ValueError):
+                continue
+    return dict(sorted(totals.items()))
 
 
 if __name__ == "__main__":
