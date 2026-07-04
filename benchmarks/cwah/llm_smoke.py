@@ -47,6 +47,7 @@ def main() -> None:
         "prefer_physical_after_steps": args.prefer_physical_after_steps,
     }
     events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
+    blocked_action_ids: set[str] = set()
 
     for step in range(max_policy_steps):
         if adapter.is_terminal():
@@ -61,13 +62,23 @@ def main() -> None:
                 temperature=args.temperature,
                 max_tokens=args.max_tokens,
                 context=context,
+                blocked_action_ids=tuple(sorted(blocked_action_ids)),
             )
             prefer_physical = args.prefer_physical_after_steps >= 0 and context.step >= args.prefer_physical_after_steps
-            action = action_from_decision(agent_id, decision, context.legal_actions, prefer_physical=prefer_physical)
+            action = action_from_decision(
+                agent_id,
+                decision,
+                context.legal_actions,
+                prefer_physical=prefer_physical,
+                blocked_action_ids=blocked_action_ids,
+            )
             if action.action_type == "send_message":
                 result = adapter.execute_information_action(agent_id, action)
             else:
                 result = adapter.execute_action(agent_id, action)
+            if not result.succeeded or result.error:
+                blocked_action_ids.add(action.action_id)
+                decision["failed_action_recorded"] = {"action_id": action.action_id, "error": result.error or "execution_failed"}
             events.append({
                 "event": "policy_step",
                 "step": step,
@@ -95,20 +106,25 @@ def _json_default(value):
     return str(value)
 
 
-def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_tokens: int, context) -> dict:
+def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_tokens: int, context, blocked_action_ids: tuple[str, ...] = ()) -> dict:
     prompt = {
         "agent_id": context.actor_id,
         "step": context.step,
         "observation_summary": summarize_observations(context.visible_epistemic_nodes),
+        "candidate_action_intents": summarize_action_intents(context.legal_actions),
+        "recent_failed_action_ids": list(blocked_action_ids)[-10:],
         "legal_actions": [
             {"action_id": action.action_id, "action_type": action.action_type, "parameters": action.parameters}
             for action in context.legal_actions
         ],
         "instruction": (
-            "Choose exactly one legal action by action_id. Prefer physical actions that move toward, grab, "
-            "or place visible task objects. Use send_message only to share useful new information. "
+            "Choose exactly one legal action by action_id. Prefer useful physical sequences: walktowards a "
+            "goal object or receptacle, grab grabbable objects, open closed containers, then putin or putback "
+            "held objects into visible containers or onto visible surfaces. Use send_message only to share "
+            "useful new information. Do not choose recent_failed_action_ids unless no alternative exists. "
             "Return compact JSON only: "
-            "{\"action_id\": \"...\", \"message\": \"...\"}. The message field is only used for send_message."
+            "{\"action_id\": \"...\", \"rationale\": \"...\", \"message\": \"...\"}. "
+            "The message field is only used for send_message."
         ),
     }
     response = client.chat.completions.create(
@@ -134,6 +150,7 @@ def summarize_observations(visible_epistemic_nodes: tuple[dict, ...]) -> dict:
     rooms = []
     relations = []
     messages = []
+    nodes_by_id = {}
     for record in visible_epistemic_nodes:
         source_kind = record.get("source_kind")
         proposition = record.get("proposition", {})
@@ -143,20 +160,59 @@ def summarize_observations(visible_epistemic_nodes: tuple[dict, ...]) -> dict:
             continue
         node = grounding.get("node") if isinstance(grounding, dict) else None
         if isinstance(node, dict):
-            item = {"id": node.get("id"), "class_name": node.get("class_name"), "category": node.get("category")}
+            item = {
+                "id": node.get("id"),
+                "class_name": node.get("class_name"),
+                "category": node.get("category"),
+                "properties": (node.get("properties") or [])[:8],
+                "states": (node.get("states") or [])[:8],
+            }
+            nodes_by_id[node.get("id")] = item
             if node.get("category") == "Rooms":
                 rooms.append(item)
             else:
                 objects.append(item)
             continue
-        if proposition:
+        edge = grounding.get("edge") if isinstance(grounding, dict) else None
+        if isinstance(edge, dict):
+            relations.append({
+                "from_id": edge.get("from_id"),
+                "from_name": nodes_by_id.get(edge.get("from_id"), {}).get("class_name"),
+                "relation_type": edge.get("relation_type"),
+                "to_id": edge.get("to_id"),
+                "to_name": nodes_by_id.get(edge.get("to_id"), {}).get("class_name"),
+            })
+        elif proposition:
             relations.append(proposition)
     return {
         "visible_objects": objects[:25],
         "visible_rooms": rooms[:10],
         "relations": relations[:25],
+        "held_objects": [relation for relation in relations if "hold" in str(relation.get("relation_type", relation.get("predicate", ""))).lower()][:10],
+        "receptacles_or_surfaces": [
+            obj for obj in objects if set(str(value).upper() for value in [*(obj.get("properties") or []), *(obj.get("states") or [])]) & {"CONTAINERS", "SURFACES", "RECIPIENT", "PLACEABLE", "OPEN", "CLOSED"}
+        ][:15],
         "recent_messages": [message for message in messages if message][:10],
     }
+
+
+def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict]:
+    intents = []
+    for action in legal_actions:
+        params = action.parameters
+        intent = "communicate" if action.action_type == "send_message" else action.action_type
+        if action.action_type == "walktowards":
+            intent = f"move near {params.get('object_name', 'object')}"
+        elif action.action_type == "grab":
+            intent = f"pick up {params.get('object_name', 'object')}"
+        elif action.action_type in {"putin", "putback"}:
+            intent = f"place {params.get('object_name', 'object')} at {params.get('target_name', 'target')}"
+        elif action.action_type == "open":
+            intent = f"open {params.get('object_name', 'object')}"
+        elif action.action_type == "close":
+            intent = f"close {params.get('object_name', 'object')}"
+        intents.append({"action_id": action.action_id, "action_type": action.action_type, "intent": intent})
+    return intents[:40]
 
 
 def action_from_decision(
@@ -165,15 +221,20 @@ def action_from_decision(
     legal_actions: tuple[ActionSpec, ...],
     *,
     prefer_physical: bool = False,
+    blocked_action_ids: set[str] | frozenset[str] | None = None,
 ) -> ActionSpec:
+    blocked_action_ids = blocked_action_ids or set()
     action_by_id = {action.action_id: action for action in legal_actions}
     selected = action_by_id.get(str(decision.get("action_id", "")))
-    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"}):
-        physical = first_physical_action(legal_actions)
+    selected_is_blocked = selected is not None and selected.action_id in blocked_action_ids
+    if selected_is_blocked:
+        decision["policy_override"] = {"reason": "avoid_repeated_failed_action", "blocked_action_id": selected.action_id}
+    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked):
+        physical = preferred_physical_action(legal_actions, blocked_action_ids=blocked_action_ids)
         if physical is not None:
-            decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id}
+            decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
             return physical
-    if selected is not None:
+    if selected is not None and not selected_is_blocked:
         if selected.action_type == "send_message":
             return InformationActionSpec(
                 action_id=selected.action_id,
@@ -186,9 +247,9 @@ def action_from_decision(
     action_type = str(decision.get("action_type", "send_message"))
     if action_type == "send_message":
         if prefer_physical:
-            physical = first_physical_action(legal_actions)
+            physical = preferred_physical_action(legal_actions, blocked_action_ids=blocked_action_ids)
             if physical is not None:
-                decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id}
+                decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
                 return physical
         return InformationActionSpec(
             action_id=f"send_message:{agent_id}",
@@ -204,6 +265,13 @@ def first_physical_action(legal_actions: tuple[ActionSpec, ...]) -> ActionSpec |
         if action.action_type not in {"send_message", "wait"}:
             return action
     return None
+
+
+def preferred_physical_action(legal_actions: tuple[ActionSpec, ...], *, blocked_action_ids: set[str] | frozenset[str] | None = None) -> ActionSpec | None:
+    blocked_action_ids = blocked_action_ids or set()
+    priority = {"grab": 0, "putin": 1, "putback": 2, "open": 3, "close": 4, "walktowards": 5}
+    physical = [action for action in legal_actions if action.action_type not in {"send_message", "wait"} and action.action_id not in blocked_action_ids]
+    return min(physical, key=lambda action: priority.get(action.action_type, 99), default=None)
 
 
 def parse_args() -> argparse.Namespace:
