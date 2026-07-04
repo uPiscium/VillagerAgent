@@ -53,13 +53,20 @@ def test_cwah_decision_context_is_agent_facing_and_candidate_backed():
     assert any(candidate["action_type"] == "send_message" for candidate in context.visible_candidates)
     assert any(action.action_type == "walktowards" for action in context.legal_actions)
     assert any(
-        action.action_type == "walktowards" and action.parameters == {"object_id": 20, "object_name": "plate"}
+        action.action_type == "walktowards"
+        and action.parameters["object_id"] == 20
+        and action.parameters["object_name"] == "plate"
+        and action.parameters["goal_object_match"] is True
         for action in context.legal_actions
     )
     assert any(
-        action.action_type == "grab" and action.parameters == {"object_id": 20, "object_name": "plate"}
+        action.action_type == "grab"
+        and action.parameters["object_id"] == 20
+        and action.parameters["object_name"] == "plate"
+        and action.parameters["goal_object_match"] is True
         for action in context.legal_actions
     )
+    assert any(record["source_kind"] == "task_goal" for record in context.visible_epistemic_nodes)
     assert context.remaining_budget.remaining_steps == 250
 
 
@@ -78,6 +85,10 @@ def test_cwah_adapter_exposes_held_object_placement_actions():
 
     assert any(action.action_id == "putin:agent_0:20:30" for action in actions)
     assert any(action.action_id == "putback:agent_0:20:30" for action in actions)
+    putin = next(action for action in actions if action.action_id == "putin:agent_0:20:30")
+    assert putin.parameters["goal_object_match"] is True
+    assert putin.parameters["goal_target_match"] is True
+    assert putin.parameters["goal_relation_matches"] == ("inside",)
 
 
 def test_cwah_adapter_tracks_progress_and_final_metrics():

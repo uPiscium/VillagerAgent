@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -37,6 +38,7 @@ class CWAHSymbolicAdapter:
         self._last_info: dict[str, Any] = {}
         self._terminal = False
         self._progress: float | None = None
+        self._task_goal_hints: dict[int, tuple[dict[str, Any], ...]] = {}
 
     def reset(self, *, episode_id: str, seed: int) -> EpisodeContext:
         self.episode_id = episode_id
@@ -51,6 +53,7 @@ class CWAHSymbolicAdapter:
             seed_fn(seed)
         observations = self.env.reset(task_id=self.config.task_id)
         self._last_observations = _normalize_observation_dict(observations, self.agent_ids())
+        self._task_goal_hints = _task_goal_hints(self.env)
         return EpisodeContext(
             benchmark=self.benchmark_name,
             episode_id=episode_id,
@@ -75,6 +78,8 @@ class CWAHSymbolicAdapter:
         obs = self._last_observations.get(agent_id, {})
         records = [_record_from_node(agent_id, self.episode_id, self.step_index, node) for node in obs.get("nodes", [])]
         records += [_record_from_edge(agent_id, self.episode_id, self.step_index, edge) for edge in obs.get("edges", [])]
+        agent_goal_hints = self._task_goal_hints.get(_agent_index(agent_id), ())
+        records += [_record_from_goal_hint(agent_id, self.episode_id, self.step_index, index, hint) for index, hint in enumerate(agent_goal_hints)]
         for sender_index, message in enumerate(obs.get("messages", []) or []):
             if message is None:
                 continue
@@ -117,16 +122,21 @@ class CWAHSymbolicAdapter:
         visible_object_ids = action_space.get(agent_index, []) if isinstance(action_space, dict) else []
         observation = self._last_observations.get(agent_id, {})
         object_names = _visible_object_names(observation)
+        agent_goal_hints = self._task_goal_hints.get(agent_index, ())
         actions = [ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})]
         actions.extend(
             ActionSpec(
                 action_id=f"walktowards:{agent_id}:{object_id}",
                 action_type="walktowards",
-                parameters={"object_id": object_id, "object_name": object_names.get(object_id, "object")},
+                parameters={
+                    "object_id": object_id,
+                    "object_name": object_names.get(object_id, "object"),
+                    **_goal_relevance_for_object(object_id, object_names.get(object_id, "object"), agent_goal_hints),
+                },
             )
             for object_id in visible_object_ids
         )
-        actions.extend(_object_interaction_actions(agent_id, observation, visible_object_ids, object_names))
+        actions.extend(_object_interaction_actions(agent_id, observation, visible_object_ids, object_names, agent_goal_hints))
         actions.append(InformationActionSpec(
             action_id=f"send_message:{agent_id}",
             action_type="send_message",
@@ -241,6 +251,21 @@ def _record_from_edge(agent_id: str, episode_id: str, step: int, edge: dict[str,
     )
 
 
+def _record_from_goal_hint(agent_id: str, episode_id: str, step: int, index: int, hint: dict[str, Any]) -> ObservationRecord:
+    return ObservationRecord(
+        observation_id=f"cwah:{episode_id}:{step}:{agent_id}:task_goal:{index}",
+        benchmark="cwah",
+        episode_id=episode_id,
+        step=step,
+        observer_id=agent_id,
+        visibility=Visibility(visible_to=frozenset([agent_id])),
+        source_kind="task_goal",
+        proposition={"predicate": "task_goal", **hint},
+        confidence=1.0,
+        grounding={"task_goal_hint": hint},
+    )
+
+
 def _candidate_from_action(action: ActionSpec) -> dict[str, Any]:
     return {
         "candidate_id": action.action_id,
@@ -264,6 +289,7 @@ def _object_interaction_actions(
     observation: dict[str, Any],
     visible_object_ids: list[Any],
     object_names: dict[Any, str],
+    task_goal_hints: tuple[dict[str, Any], ...] = (),
 ) -> list[ActionSpec]:
     visible_ids = set(visible_object_ids)
     nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
@@ -279,23 +305,24 @@ def _object_interaction_actions(
         if object_id not in visible_ids or node.get("category") in {"Rooms", "Characters"}:
             continue
         object_name = object_names.get(object_id, "object")
+        goal_relevance = _goal_relevance_for_object(object_id, object_name, task_goal_hints)
         if _has_any_token(node, {"GRABBABLE"}) and object_id not in held_ids:
             actions.append(ActionSpec(
                 action_id=f"grab:{agent_id}:{object_id}",
                 action_type="grab",
-                parameters={"object_id": object_id, "object_name": object_name},
+                parameters={"object_id": object_id, "object_name": object_name, **goal_relevance},
             ))
         if _has_any_token(node, {"CAN_OPEN", "OPENABLE", "CLOSED"}):
             actions.append(ActionSpec(
                 action_id=f"open:{agent_id}:{object_id}",
                 action_type="open",
-                parameters={"object_id": object_id, "object_name": object_name},
+                parameters={"object_id": object_id, "object_name": object_name, **goal_relevance},
             ))
         if _has_any_token(node, {"OPEN"}):
             actions.append(ActionSpec(
                 action_id=f"close:{agent_id}:{object_id}",
                 action_type="close",
-                parameters={"object_id": object_id, "object_name": object_name},
+                parameters={"object_id": object_id, "object_name": object_name, **goal_relevance},
             ))
     for held_id in held_ids:
         if held_id not in visible_ids:
@@ -305,17 +332,100 @@ def _object_interaction_actions(
                 continue
             held_name = object_names.get(held_id, "object")
             target_name = object_names.get(target_id, "object")
+            placement_relevance = _goal_relevance_for_placement(held_id, held_name, target_id, target_name, task_goal_hints)
             actions.append(ActionSpec(
                 action_id=f"putin:{agent_id}:{held_id}:{target_id}",
                 action_type="putin",
-                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name},
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **placement_relevance},
             ))
             actions.append(ActionSpec(
                 action_id=f"putback:{agent_id}:{held_id}:{target_id}",
                 action_type="putback",
-                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name},
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **placement_relevance},
             ))
     return actions
+
+
+def _task_goal_hints(env: Any) -> dict[int, tuple[dict[str, Any], ...]]:
+    goal_spec = getattr(env, "goal_spec", None)
+    task_goal = getattr(env, "task_goal", None)
+    raw_goals_by_agent: dict[int, list[tuple[str, Any]]] = {}
+    if isinstance(goal_spec, dict):
+        for agent_id, agent_goal in goal_spec.items():
+            if isinstance(agent_goal, dict):
+                raw_goals_by_agent[int(agent_id)] = [(str(predicate), value) for predicate, value in agent_goal.items()]
+    if not raw_goals_by_agent and isinstance(task_goal, dict):
+        for agent_id, agent_goal in task_goal.items():
+            if isinstance(agent_goal, dict):
+                raw_goals_by_agent[int(agent_id)] = [(str(predicate), value) for predicate, value in agent_goal.items()]
+    hints_by_agent: dict[int, tuple[dict[str, Any], ...]] = {}
+    for agent_id, raw_goals in raw_goals_by_agent.items():
+        hints_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for predicate, value in raw_goals:
+            hint = _parse_goal_predicate(predicate, value)
+            if hint is None:
+                continue
+            key = (str(hint.get("relation", "")), str(hint.get("object_class", "")), str(hint.get("target_id", "")))
+            hints_by_key[key] = hint
+        hints_by_agent[agent_id] = tuple(hints_by_key[key] for key in sorted(hints_by_key))
+    return hints_by_agent
+
+
+def _parse_goal_predicate(predicate: str, value: Any) -> dict[str, Any] | None:
+    parts = predicate.split("_", 2)
+    if len(parts) < 3:
+        return None
+    relation, object_class, target_part = parts
+    if relation not in {"on", "inside"}:
+        return None
+    count = value[0] if isinstance(value, list | tuple) and value else value
+    target_id_match = re.search(r"\((\d+)\)$", target_part) or re.search(r"(\d+)$", target_part)
+    target_name_match = re.search(r"<([^>]+)>", target_part)
+    target_id = int(target_id_match.group(1)) if target_id_match else None
+    target_class = target_name_match.group(1) if target_name_match else re.sub(r"\s*\(\d+\)$", "", target_part)
+    return {
+        "relation": relation,
+        "object_class": object_class,
+        "target_id": target_id,
+        "target_class": target_class,
+        "count": int(count or 0),
+    }
+
+
+def _goal_relevance_for_object(object_id: Any, object_name: str, task_goal_hints: tuple[dict[str, Any], ...]) -> dict[str, Any]:
+    normalized_name = _normalize_name(object_name)
+    goal_object = any(_normalize_name(str(hint.get("object_class", ""))) == normalized_name for hint in task_goal_hints)
+    goal_target = any(hint.get("target_id") == object_id or _normalize_name(str(hint.get("target_class", ""))) == normalized_name for hint in task_goal_hints)
+    return {
+        "goal_object_match": goal_object,
+        "goal_target_match": goal_target,
+    }
+
+
+def _goal_relevance_for_placement(
+    object_id: Any,
+    object_name: str,
+    target_id: Any,
+    target_name: str,
+    task_goal_hints: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    object_norm = _normalize_name(object_name)
+    target_norm = _normalize_name(target_name)
+    matched_relations = [
+        str(hint.get("relation"))
+        for hint in task_goal_hints
+        if _normalize_name(str(hint.get("object_class", ""))) == object_norm
+        and (hint.get("target_id") == target_id or _normalize_name(str(hint.get("target_class", ""))) == target_norm)
+    ]
+    return {
+        "goal_object_match": any(_normalize_name(str(hint.get("object_class", ""))) == object_norm for hint in task_goal_hints),
+        "goal_target_match": any(hint.get("target_id") == target_id or _normalize_name(str(hint.get("target_class", ""))) == target_norm for hint in task_goal_hints),
+        "goal_relation_matches": tuple(sorted(set(matched_relations))),
+    }
+
+
+def _normalize_name(value: str) -> str:
+    return value.replace("_", "").replace(" ", "").lower()
 
 
 def _held_object_ids(observation: dict[str, Any]) -> set[Any]:

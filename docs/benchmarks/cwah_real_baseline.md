@@ -81,3 +81,5 @@ Per-task progress was `0.6153846153846154` for tasks `0` and `1`, and `0.5454545
 ## Interpretation
 
 Use this baseline to compare future policy changes against the same task/seed/step budget. Do not report it as benchmark performance unless the run set, policy, runtime assets, and failure analysis are all documented and reviewed.
+
+The first goal-aware policy comparison is recorded in `docs/benchmarks/cwah_goal_policy.md`.

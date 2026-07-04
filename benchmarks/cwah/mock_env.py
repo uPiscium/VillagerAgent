@@ -6,6 +6,8 @@ class MockCWAHEnvironment:
         self.steps = 0
         self.messages = [None, None]
         self.finished = False
+        self.task_goal = {0: {"inside_plate_30": 1}, 1: {"inside_cupcake_30": 1}}
+        self.goal_spec = {0: {"inside_plate_<dishwasher> (30)": [1, True, 2]}, 1: {"inside_cupcake_<dishwasher> (30)": [1, True, 2]}}
         self._observations = {
             0: {
                 "nodes": [
