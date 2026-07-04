@@ -46,7 +46,11 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
     assert rows[0]["communication_action_count"] == 1
     assert rows[1]["status"] == "failed"
     assert rows[1]["failed_runs"] == 1
-    assert aggregate_rows(rows)["success_rate"] == 0.5
+    aggregate = aggregate_rows(rows)
+    assert aggregate["success_rate"] == 0.5
+    assert aggregate["physical_action_count"] == 3
+    assert aggregate["communication_action_count"] == 1
+    assert aggregate["action_counts"] == {"open": 1, "send_message": 1, "walktowards": 2}
 
     csv_path = tmp_path / "common.csv"
     json_path = tmp_path / "common.json"
@@ -60,6 +64,7 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["aggregate"]["runs"] == 2
     assert payload["aggregate"]["failed_runs"] == 1
+    assert payload["aggregate"]["action_counts"] == {"open": 1, "send_message": 1, "walktowards": 2}
 
 
 def test_summarizes_cwah_normalized_summary(tmp_path):

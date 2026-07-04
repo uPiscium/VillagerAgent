@@ -25,7 +25,7 @@ nix develop --command python -m benchmarks.cwah.llm_smoke \
   --output /tmp/opencode/cwah-full-coela-task0-seed0.json
 ```
 
-Use a smaller `--max-steps` value for bounded validation runs. With `--full-episode`, the runner stops when CoELA reports terminal or when the configured step budget is exhausted.
+Use a smaller `--max-steps` value for bounded validation runs. With `--full-episode`, the runner stops when CoELA reports terminal or when the configured step budget is exhausted. For multi-task baseline runs that also produce common reports, use `docs/benchmarks/cwah_real_baseline.md`.
 
 ## Artifact Fields
 
