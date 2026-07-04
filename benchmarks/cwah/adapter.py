@@ -115,7 +115,8 @@ class CWAHSymbolicAdapter:
         action_space = self.env.get_action_space() if hasattr(self.env, "get_action_space") else {}
         agent_index = _agent_index(agent_id)
         visible_object_ids = action_space.get(agent_index, []) if isinstance(action_space, dict) else []
-        object_names = _visible_object_names(self._last_observations.get(agent_id, {}))
+        observation = self._last_observations.get(agent_id, {})
+        object_names = _visible_object_names(observation)
         actions = [ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})]
         actions.extend(
             ActionSpec(
@@ -125,6 +126,7 @@ class CWAHSymbolicAdapter:
             )
             for object_id in visible_object_ids
         )
+        actions.extend(_object_interaction_actions(agent_id, observation, visible_object_ids, object_names))
         actions.append(InformationActionSpec(
             action_id=f"send_message:{agent_id}",
             action_type="send_message",
@@ -257,6 +259,92 @@ def _visible_object_names(observation: dict[str, Any]) -> dict[Any, str]:
     }
 
 
+def _object_interaction_actions(
+    agent_id: str,
+    observation: dict[str, Any],
+    visible_object_ids: list[Any],
+    object_names: dict[Any, str],
+) -> list[ActionSpec]:
+    visible_ids = set(visible_object_ids)
+    nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
+    held_ids = _held_object_ids(observation)
+    receptacle_ids = {
+        node.get("id")
+        for node in nodes
+        if node.get("id") in visible_ids and _has_any_token(node, {"CONTAINERS", "SURFACES", "RECIPIENT", "PLACEABLE"})
+    }
+    actions: list[ActionSpec] = []
+    for node in nodes:
+        object_id = node.get("id")
+        if object_id not in visible_ids or node.get("category") in {"Rooms", "Characters"}:
+            continue
+        object_name = object_names.get(object_id, "object")
+        if _has_any_token(node, {"GRABBABLE"}) and object_id not in held_ids:
+            actions.append(ActionSpec(
+                action_id=f"grab:{agent_id}:{object_id}",
+                action_type="grab",
+                parameters={"object_id": object_id, "object_name": object_name},
+            ))
+        if _has_any_token(node, {"CAN_OPEN", "OPENABLE", "CLOSED"}):
+            actions.append(ActionSpec(
+                action_id=f"open:{agent_id}:{object_id}",
+                action_type="open",
+                parameters={"object_id": object_id, "object_name": object_name},
+            ))
+        if _has_any_token(node, {"OPEN"}):
+            actions.append(ActionSpec(
+                action_id=f"close:{agent_id}:{object_id}",
+                action_type="close",
+                parameters={"object_id": object_id, "object_name": object_name},
+            ))
+    for held_id in held_ids:
+        if held_id not in visible_ids:
+            continue
+        for target_id in receptacle_ids:
+            if target_id == held_id:
+                continue
+            held_name = object_names.get(held_id, "object")
+            target_name = object_names.get(target_id, "object")
+            actions.append(ActionSpec(
+                action_id=f"putin:{agent_id}:{held_id}:{target_id}",
+                action_type="putin",
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name},
+            ))
+            actions.append(ActionSpec(
+                action_id=f"putback:{agent_id}:{held_id}:{target_id}",
+                action_type="putback",
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name},
+            ))
+    return actions
+
+
+def _held_object_ids(observation: dict[str, Any]) -> set[Any]:
+    character_ids = {
+        node.get("id")
+        for node in observation.get("nodes", [])
+        if isinstance(node, dict) and node.get("category") == "Characters"
+    }
+    held_ids: set[Any] = set()
+    for edge in observation.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        relation = str(edge.get("relation_type", "")).upper()
+        if "HOLD" not in relation:
+            continue
+        from_id = edge.get("from_id")
+        to_id = edge.get("to_id")
+        if from_id in character_ids and to_id is not None:
+            held_ids.add(to_id)
+        elif to_id in character_ids and from_id is not None:
+            held_ids.add(from_id)
+    return held_ids
+
+
+def _has_any_token(node: dict[str, Any], tokens: set[str]) -> bool:
+    values = [*(node.get("properties") or []), *(node.get("states") or [])]
+    return any(str(value).upper() in tokens for value in values)
+
+
 def _action_to_cwah_string(action: ActionSpec) -> str:
     if action.action_type == "wait":
         return "[wait]"
@@ -264,6 +352,10 @@ def _action_to_cwah_string(action: ActionSpec) -> str:
     object_name = action.parameters.get("object_name", "object")
     if object_id is None:
         return f"[{action.action_type}]"
+    target_id = action.parameters.get("target_id")
+    if target_id is not None:
+        target_name = action.parameters.get("target_name", "object")
+        return f"[{action.action_type}] <{object_name}> ({object_id}) <{target_name}> ({target_id})"
     return f"[{action.action_type}] <{object_name}> ({object_id})"
 
 

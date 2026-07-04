@@ -56,7 +56,28 @@ def test_cwah_decision_context_is_agent_facing_and_candidate_backed():
         action.action_type == "walktowards" and action.parameters == {"object_id": 20, "object_name": "plate"}
         for action in context.legal_actions
     )
+    assert any(
+        action.action_type == "grab" and action.parameters == {"object_id": 20, "object_name": "plate"}
+        for action in context.legal_actions
+    )
     assert context.remaining_budget.remaining_steps == 250
+
+
+def test_cwah_adapter_exposes_held_object_placement_actions():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["nodes"].append({"id": 30, "class_name": "dishwasher", "category": "Objects", "states": ["OPEN"], "properties": ["CONTAINERS"]})
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 20, 30], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    actions = adapter.get_legal_actions("agent_0")
+
+    assert any(action.action_id == "putin:agent_0:20:30" for action in actions)
+    assert any(action.action_id == "putback:agent_0:20:30" for action in actions)
 
 
 def test_cwah_adapter_tracks_progress_and_final_metrics():
