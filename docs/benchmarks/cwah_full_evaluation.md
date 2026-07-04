@@ -35,4 +35,6 @@ The output JSON contains:
 - `events`: episode start, per-agent policy decisions, step results, and completion event.
 - `metrics`: `task_success`, `normalized_progress`, and `episode_steps`.
 
+Matrix runs also write `matrix_summary.json` and `matrix_metrics.csv`. Use `python -m benchmarks.common.report <matrix-output-dir> --output <report.csv> --json-output <report.json>` to convert them into the shared benchmark report schema documented in `docs/benchmarks/common_reporting.md`.
+
 The policy used by `benchmarks.cwah.llm_smoke` is intentionally simple and intended for integration validation. It does not claim task-solving performance.
