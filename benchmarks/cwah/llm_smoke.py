@@ -150,11 +150,19 @@ def summarize_observations(visible_epistemic_nodes: tuple[dict, ...]) -> dict:
     rooms = []
     relations = []
     messages = []
+    task_goals = []
     nodes_by_id = {}
     for record in visible_epistemic_nodes:
         source_kind = record.get("source_kind")
         proposition = record.get("proposition", {})
         grounding = record.get("grounding", {})
+        if source_kind == "task_goal":
+            goal_hint = grounding.get("task_goal_hint") if isinstance(grounding, dict) else None
+            if isinstance(goal_hint, dict):
+                task_goals.append(goal_hint)
+            elif proposition:
+                task_goals.append(proposition)
+            continue
         if source_kind == "agent_message":
             messages.append(proposition.get("object"))
             continue
@@ -188,6 +196,7 @@ def summarize_observations(visible_epistemic_nodes: tuple[dict, ...]) -> dict:
         "visible_objects": objects[:25],
         "visible_rooms": rooms[:10],
         "relations": relations[:25],
+        "task_goals": task_goals[:20],
         "held_objects": [relation for relation in relations if "hold" in str(relation.get("relation_type", relation.get("predicate", ""))).lower()][:10],
         "receptacles_or_surfaces": [
             obj for obj in objects if set(str(value).upper() for value in [*(obj.get("properties") or []), *(obj.get("states") or [])]) & {"CONTAINERS", "SURFACES", "RECIPIENT", "PLACEABLE", "OPEN", "CLOSED"}
@@ -211,7 +220,14 @@ def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict
             intent = f"open {params.get('object_name', 'object')}"
         elif action.action_type == "close":
             intent = f"close {params.get('object_name', 'object')}"
-        intents.append({"action_id": action.action_id, "action_type": action.action_type, "intent": intent})
+        intents.append({
+            "action_id": action.action_id,
+            "action_type": action.action_type,
+            "intent": intent,
+            "goal_object_match": bool(params.get("goal_object_match")),
+            "goal_target_match": bool(params.get("goal_target_match")),
+            "goal_relation_matches": list(params.get("goal_relation_matches", ())),
+        })
     return intents[:40]
 
 
@@ -269,9 +285,31 @@ def first_physical_action(legal_actions: tuple[ActionSpec, ...]) -> ActionSpec |
 
 def preferred_physical_action(legal_actions: tuple[ActionSpec, ...], *, blocked_action_ids: set[str] | frozenset[str] | None = None) -> ActionSpec | None:
     blocked_action_ids = blocked_action_ids or set()
-    priority = {"grab": 0, "putin": 1, "putback": 2, "open": 3, "close": 4, "walktowards": 5}
     physical = [action for action in legal_actions if action.action_type not in {"send_message", "wait"} and action.action_id not in blocked_action_ids]
-    return min(physical, key=lambda action: priority.get(action.action_type, 99), default=None)
+    return min(physical, key=physical_action_rank, default=None)
+
+
+def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
+    params = action.parameters
+    goal_object = bool(params.get("goal_object_match"))
+    goal_target = bool(params.get("goal_target_match"))
+    goal_relations = set(params.get("goal_relation_matches", ()))
+    if action.action_type == "putback" and "on" in goal_relations:
+        return (0, 0, action.action_id)
+    if action.action_type == "putin" and "inside" in goal_relations:
+        return (0, 1, action.action_id)
+    if action.action_type in {"putback", "putin"} and goal_object and goal_target:
+        return (1, 0, action.action_id)
+    if action.action_type == "grab" and goal_object:
+        return (2, 0, action.action_id)
+    if action.action_type == "walktowards" and goal_object:
+        return (3, 0, action.action_id)
+    if action.action_type == "walktowards" and goal_target:
+        return (4, 0, action.action_id)
+    if action.action_type == "open" and goal_target:
+        return (5, 0, action.action_id)
+    fallback_priority = {"grab": 6, "putin": 7, "putback": 8, "open": 9, "close": 10, "walktowards": 11}
+    return (fallback_priority.get(action.action_type, 99), 0, action.action_id)
 
 
 def parse_args() -> argparse.Namespace:

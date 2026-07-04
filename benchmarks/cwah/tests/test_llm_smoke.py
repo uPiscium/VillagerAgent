@@ -1,5 +1,5 @@
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
-from benchmarks.cwah.llm_smoke import action_from_decision, summarize_action_intents, summarize_observations
+from benchmarks.cwah.llm_smoke import action_from_decision, physical_action_rank, summarize_action_intents, summarize_observations
 
 
 def test_action_from_decision_uses_selected_legal_action_id():
@@ -110,21 +110,38 @@ def test_summarize_observations_extracts_visible_objects_rooms_and_messages():
             "proposition": {"predicate": "reported_message", "subject": "agent_1", "object": "I found a cupcake."},
             "grounding": {"message": "I found a cupcake."},
         },
+        {
+            "source_kind": "task_goal",
+            "proposition": {"predicate": "task_goal", "relation": "inside", "object_class": "plate", "target_id": 30, "target_class": "dishwasher", "count": 1},
+            "grounding": {"task_goal_hint": {"relation": "inside", "object_class": "plate", "target_id": 30, "target_class": "dishwasher", "count": 1}},
+        },
     ))
 
     assert summary["visible_objects"] == [{"id": 20, "class_name": "plate", "category": "Objects", "properties": ["GRABBABLE"], "states": []}]
     assert summary["visible_rooms"] == [{"id": 10, "class_name": "kitchen", "category": "Rooms", "properties": [], "states": []}]
+    assert summary["task_goals"] == [{"relation": "inside", "object_class": "plate", "target_id": 30, "target_class": "dishwasher", "count": 1}]
     assert summary["held_objects"] == [{"from_id": 1, "from_name": None, "relation_type": "HOLDS_RH", "to_id": 20, "to_name": "plate"}]
     assert summary["recent_messages"] == ["I found a cupcake."]
 
 
 def test_summarize_action_intents_describes_task_sequence_actions():
     intents = summarize_action_intents((
-        ActionSpec(action_id="grab:agent_0:20", action_type="grab", parameters={"object_name": "plate"}),
-        ActionSpec(action_id="putin:agent_0:20:30", action_type="putin", parameters={"object_name": "plate", "target_name": "dishwasher"}),
+        ActionSpec(action_id="grab:agent_0:20", action_type="grab", parameters={"object_name": "plate", "goal_object_match": True}),
+        ActionSpec(action_id="putin:agent_0:20:30", action_type="putin", parameters={"object_name": "plate", "target_name": "dishwasher", "goal_object_match": True, "goal_target_match": True, "goal_relation_matches": ("inside",)}),
     ))
 
     assert intents == [
-        {"action_id": "grab:agent_0:20", "action_type": "grab", "intent": "pick up plate"},
-        {"action_id": "putin:agent_0:20:30", "action_type": "putin", "intent": "place plate at dishwasher"},
+        {"action_id": "grab:agent_0:20", "action_type": "grab", "intent": "pick up plate", "goal_object_match": True, "goal_target_match": False, "goal_relation_matches": []},
+        {"action_id": "putin:agent_0:20:30", "action_type": "putin", "intent": "place plate at dishwasher", "goal_object_match": True, "goal_target_match": True, "goal_relation_matches": ["inside"]},
     ]
+
+
+def test_physical_action_rank_prioritizes_goal_sequence():
+    actions = (
+        ActionSpec(action_id="grab:agent_0:chair", action_type="grab", parameters={"object_name": "chair"}),
+        ActionSpec(action_id="walktowards:agent_0:plate", action_type="walktowards", parameters={"object_name": "plate", "goal_object_match": True}),
+        ActionSpec(action_id="grab:agent_0:plate", action_type="grab", parameters={"object_name": "plate", "goal_object_match": True}),
+        ActionSpec(action_id="putin:agent_0:plate:dishwasher", action_type="putin", parameters={"object_name": "plate", "target_name": "dishwasher", "goal_object_match": True, "goal_target_match": True, "goal_relation_matches": ("inside",)}),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "putin:agent_0:plate:dishwasher"
