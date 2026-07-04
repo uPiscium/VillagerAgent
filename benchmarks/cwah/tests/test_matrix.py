@@ -1,16 +1,35 @@
 import json
 
-from benchmarks.cwah.matrix import MatrixRun, aggregate_results, build_matrix, parse_int_list, write_matrix_summary
+import pytest
+
+from benchmarks.cwah.matrix import MatrixRun, aggregate_results, build_matrix, matrix_port, parse_int_list, write_matrix_summary
 
 
 def test_parse_int_list_and_build_matrix():
     assert parse_int_list("0, 2,3") == (0, 2, 3)
     assert build_matrix((0, 1), (3, 4)) == (
-        MatrixRun(task_id=0, seed=3),
-        MatrixRun(task_id=0, seed=4),
-        MatrixRun(task_id=1, seed=3),
-        MatrixRun(task_id=1, seed=4),
+        MatrixRun(index=0, task_id=0, seed=3),
+        MatrixRun(index=1, task_id=0, seed=4),
+        MatrixRun(index=2, task_id=1, seed=3),
+        MatrixRun(index=3, task_id=1, seed=4),
     )
+
+
+def test_matrix_ports_are_unique_for_task_seed_collision_case():
+    runs = build_matrix((0, 1), (0, 1))
+
+    ports = [matrix_port(base_port=6314, run=run, port_stride=1) for run in runs]
+
+    assert ports == [6314, 6315, 6316, 6317]
+    assert len(ports) == len(set(ports))
+
+
+def test_matrix_port_supports_stride_and_rejects_invalid_stride():
+    run = MatrixRun(index=2, task_id=10, seed=20)
+
+    assert matrix_port(base_port=7000, run=run, port_stride=10) == 7020
+    with pytest.raises(ValueError, match="port_stride"):
+        matrix_port(base_port=7000, run=run, port_stride=0)
 
 
 def test_aggregate_results_counts_passes_and_progress():
@@ -31,12 +50,12 @@ def test_aggregate_results_counts_passes_and_progress():
 def test_write_matrix_summary(tmp_path):
     write_matrix_summary(
         output_dir=tmp_path,
-        results=[{"task_id": 0, "seed": 1, "passed": True, "metrics": {"task_success": False, "normalized_progress": 0.5, "episode_steps": 2}}],
+        results=[{"task_id": 0, "seed": 1, "matrix_index": 0, "base_port": 6314, "passed": True, "metrics": {"task_success": False, "normalized_progress": 0.5, "episode_steps": 2}}],
     )
 
     summary = json.loads((tmp_path / "matrix_summary.json").read_text(encoding="utf-8"))
     metrics_csv = (tmp_path / "matrix_metrics.csv").read_text(encoding="utf-8")
 
     assert summary["aggregate"]["passed_runs"] == 1
-    assert "task_id,seed,passed,task_success,normalized_progress,episode_steps" in metrics_csv
-    assert "0,1,True,False,0.5,2" in metrics_csv
+    assert "matrix_index,task_id,seed,base_port,passed,task_success,normalized_progress,episode_steps" in metrics_csv
+    assert "0,0,1,6314,True,False,0.5,2" in metrics_csv
