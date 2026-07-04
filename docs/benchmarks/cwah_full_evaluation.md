@@ -9,6 +9,8 @@ This note records the reproducible command shape for running the C-WAH symbolic 
 - The CoELA-provided executable is available as `external/CoELA/executable/linux_exec.v2.3.0.x86_64` and is executable.
 - Runtime assets remain local-only and ignored by git.
 
+See `docs/benchmarks/coela_runtime_setup.md` for license constraints and setup commands.
+
 ## Command
 
 Run from the repository root:

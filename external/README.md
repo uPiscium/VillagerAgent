@@ -36,7 +36,7 @@ External benchmark repositories are managed as git submodules and pinned by comm
   - CoELA-provided VirtualHome executable `linux_exec.v2.3.0.x86_64`.
 - Reproduction:
   - `git submodule update --init --recursive external/CoELA`
-  - Follow `external/CoELA/cwah/README.md` for VirtualHome and executable setup.
+  - Follow `docs/benchmarks/coela_runtime_setup.md` for license review, VirtualHome, executable setup, and smoke commands.
 - Verification status:
   - Mock C-WAH adapter with real LLM call: `python -m benchmarks.cwah.llm_smoke --env mock --max-policy-steps 2 --output /tmp/opencode/cwah-llm-smoke-mock.json` succeeded with `task_success=true` and `normalized_progress=1.0`.
   - CoELA dataset present: `external/CoELA/cwah/dataset/test_env_set_help.pik`.
