@@ -121,7 +121,9 @@ def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_token
             "Choose exactly one legal action by action_id. Prefer useful physical sequences: walktowards a "
             "goal object or receptacle, grab grabbable objects, open closed containers, then putin or putback "
             "held objects into visible containers or onto visible surfaces. Use send_message only to share "
-            "useful new information. Do not choose recent_failed_action_ids unless no alternative exists. "
+            "useful new information. Prefer candidate actions with precondition_status executable_now. "
+            "If a goal action is setup_required, choose its setup_action_id first when that setup action is legal. "
+            "Do not choose recent_failed_action_ids unless no alternative exists. "
             "Return compact JSON only: "
             "{\"action_id\": \"...\", \"rationale\": \"...\", \"message\": \"...\"}. "
             "The message field is only used for send_message."
@@ -224,6 +226,9 @@ def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict
             "action_id": action.action_id,
             "action_type": action.action_type,
             "intent": intent,
+            "precondition_status": params.get("precondition_status", "unknown"),
+            "precondition_reason": params.get("precondition_reason", ""),
+            "setup_action_id": params.get("setup_action_id", ""),
             "goal_object_match": bool(params.get("goal_object_match")),
             "goal_target_match": bool(params.get("goal_target_match")),
             "goal_relation_matches": list(params.get("goal_relation_matches", ())),
@@ -243,11 +248,18 @@ def action_from_decision(
     action_by_id = {action.action_id: action for action in legal_actions}
     selected = action_by_id.get(str(decision.get("action_id", "")))
     selected_is_blocked = selected is not None and selected.action_id in blocked_action_ids
+    selected_needs_setup = selected is not None and selected.parameters.get("precondition_status") == "setup_required"
     if selected_is_blocked:
         decision["policy_override"] = {"reason": "avoid_repeated_failed_action", "blocked_action_id": selected.action_id}
-    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked):
+    if selected_needs_setup:
+        decision["policy_override"] = {
+            "reason": "precondition_setup_required",
+            "blocked_action_id": selected.action_id,
+            "setup_action_id": selected.parameters.get("setup_action_id", ""),
+        }
+    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked or selected_needs_setup):
         physical = preferred_physical_action(legal_actions, blocked_action_ids=blocked_action_ids)
-        if physical is not None:
+        if physical is not None and (selected is None or physical.action_id != selected.action_id):
             decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
             return physical
     if selected is not None and not selected_is_blocked:
@@ -294,6 +306,11 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     goal_object = bool(params.get("goal_object_match"))
     goal_target = bool(params.get("goal_target_match"))
     goal_relations = set(params.get("goal_relation_matches", ()))
+    precondition_status = str(params.get("precondition_status", "unknown"))
+    if precondition_status == "setup_required":
+        return (20, 0, action.action_id)
+    if precondition_status == "blocked":
+        return (30, 0, action.action_id)
     if action.action_type == "putback" and "on" in goal_relations:
         return (0, 0, action.action_id)
     if action.action_type == "putin" and "inside" in goal_relations:
@@ -303,9 +320,9 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     if action.action_type == "grab" and goal_object:
         return (2, 0, action.action_id)
     if action.action_type == "walktowards" and goal_object:
-        return (3, 0, action.action_id)
+        return (2, 1, action.action_id)
     if action.action_type == "walktowards" and goal_target:
-        return (4, 0, action.action_id)
+        return (2, 2, action.action_id)
     if action.action_type == "open" and goal_target:
         return (5, 0, action.action_id)
     fallback_priority = {"grab": 6, "putin": 7, "putback": 8, "open": 9, "close": 10, "walktowards": 11}

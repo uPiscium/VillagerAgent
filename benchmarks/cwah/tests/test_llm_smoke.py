@@ -88,6 +88,36 @@ def test_action_from_decision_skips_blocked_failed_actions():
     }
 
 
+def test_action_from_decision_overrides_setup_required_selection():
+    legal_actions = (
+        ActionSpec(
+            action_id="walktowards:agent_0:20",
+            action_type="walktowards",
+            parameters={"object_id": 20, "goal_object_match": True, "precondition_status": "executable_now"},
+        ),
+        ActionSpec(
+            action_id="grab:agent_0:20",
+            action_type="grab",
+            parameters={
+                "object_id": 20,
+                "goal_object_match": True,
+                "precondition_status": "setup_required",
+                "setup_action_id": "walktowards:agent_0:20",
+            },
+        ),
+    )
+    decision = {"action_id": "grab:agent_0:20"}
+
+    action = action_from_decision("agent_0", decision, legal_actions, prefer_physical=True)
+
+    assert action.action_id == "walktowards:agent_0:20"
+    assert decision["policy_override"] == {
+        "reason": "prefer_physical_after_steps",
+        "action_id": "walktowards:agent_0:20",
+        "action_type": "walktowards",
+    }
+
+
 def test_summarize_observations_extracts_visible_objects_rooms_and_messages():
     summary = summarize_observations((
         {
@@ -131,8 +161,28 @@ def test_summarize_action_intents_describes_task_sequence_actions():
     ))
 
     assert intents == [
-        {"action_id": "grab:agent_0:20", "action_type": "grab", "intent": "pick up plate", "goal_object_match": True, "goal_target_match": False, "goal_relation_matches": []},
-        {"action_id": "putin:agent_0:20:30", "action_type": "putin", "intent": "place plate at dishwasher", "goal_object_match": True, "goal_target_match": True, "goal_relation_matches": ["inside"]},
+        {
+            "action_id": "grab:agent_0:20",
+            "action_type": "grab",
+            "intent": "pick up plate",
+            "precondition_status": "unknown",
+            "precondition_reason": "",
+            "setup_action_id": "",
+            "goal_object_match": True,
+            "goal_target_match": False,
+            "goal_relation_matches": [],
+        },
+        {
+            "action_id": "putin:agent_0:20:30",
+            "action_type": "putin",
+            "intent": "place plate at dishwasher",
+            "precondition_status": "unknown",
+            "precondition_reason": "",
+            "setup_action_id": "",
+            "goal_object_match": True,
+            "goal_target_match": True,
+            "goal_relation_matches": ["inside"],
+        },
     ]
 
 
@@ -145,3 +195,25 @@ def test_physical_action_rank_prioritizes_goal_sequence():
     )
 
     assert min(actions, key=physical_action_rank).action_id == "putin:agent_0:plate:dishwasher"
+
+
+def test_physical_action_rank_prefers_setup_navigation_before_blocked_goal_action():
+    actions = (
+        ActionSpec(
+            action_id="grab:agent_0:20",
+            action_type="grab",
+            parameters={
+                "object_name": "plate",
+                "goal_object_match": True,
+                "precondition_status": "setup_required",
+                "setup_action_id": "walktowards:agent_0:20",
+            },
+        ),
+        ActionSpec(
+            action_id="walktowards:agent_0:20",
+            action_type="walktowards",
+            parameters={"object_name": "plate", "goal_object_match": True, "precondition_status": "executable_now"},
+        ),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:20"

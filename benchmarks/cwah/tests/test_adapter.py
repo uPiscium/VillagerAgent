@@ -64,6 +64,8 @@ def test_cwah_decision_context_is_agent_facing_and_candidate_backed():
         and action.parameters["object_id"] == 20
         and action.parameters["object_name"] == "plate"
         and action.parameters["goal_object_match"] is True
+        and action.parameters["precondition_status"] == "setup_required"
+        and action.parameters["setup_action_id"] == "walktowards:agent_0:20"
         for action in context.legal_actions
     )
     assert any(record["source_kind"] == "task_goal" for record in context.visible_epistemic_nodes)
@@ -89,6 +91,23 @@ def test_cwah_adapter_exposes_held_object_placement_actions():
     assert putin.parameters["goal_object_match"] is True
     assert putin.parameters["goal_target_match"] is True
     assert putin.parameters["goal_relation_matches"] == ("inside",)
+    assert putin.parameters["precondition_status"] == "setup_required"
+    assert putin.parameters["setup_action_id"] == "walktowards:agent_0:30"
+
+
+def test_cwah_adapter_marks_close_interactions_executable_now():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "CLOSE"})
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    grab = next(action for action in adapter.get_legal_actions("agent_0") if action.action_id == "grab:agent_0:20")
+
+    assert grab.parameters["precondition_status"] == "executable_now"
+    assert grab.parameters["precondition_reason"] == "actor_close_to_object"
 
 
 def test_cwah_adapter_tracks_progress_and_final_metrics():
