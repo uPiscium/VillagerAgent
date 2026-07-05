@@ -131,6 +131,8 @@ class CWAHSymbolicAdapter:
                 parameters={
                     "object_id": object_id,
                     "object_name": object_names.get(object_id, "object"),
+                    "precondition_status": "executable_now",
+                    "precondition_reason": "navigation_action",
                     **_goal_relevance_for_object(object_id, object_names.get(object_id, "object"), agent_goal_hints),
                 },
             )
@@ -294,6 +296,7 @@ def _object_interaction_actions(
     visible_ids = set(visible_object_ids)
     nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
     held_ids = _held_object_ids(observation)
+    close_ids = _close_object_ids(observation)
     receptacle_ids = {
         node.get("id")
         for node in nodes
@@ -307,22 +310,25 @@ def _object_interaction_actions(
         object_name = object_names.get(object_id, "object")
         goal_relevance = _goal_relevance_for_object(object_id, object_name, task_goal_hints)
         if _has_any_token(node, {"GRABBABLE"}) and object_id not in held_ids:
+            preconditions = _interaction_preconditions(agent_id, object_id, close_ids)
             actions.append(ActionSpec(
                 action_id=f"grab:{agent_id}:{object_id}",
                 action_type="grab",
-                parameters={"object_id": object_id, "object_name": object_name, **goal_relevance},
+                parameters={"object_id": object_id, "object_name": object_name, **preconditions, **goal_relevance},
             ))
         if _has_any_token(node, {"CAN_OPEN", "OPENABLE", "CLOSED"}):
+            preconditions = _interaction_preconditions(agent_id, object_id, close_ids)
             actions.append(ActionSpec(
                 action_id=f"open:{agent_id}:{object_id}",
                 action_type="open",
-                parameters={"object_id": object_id, "object_name": object_name, **goal_relevance},
+                parameters={"object_id": object_id, "object_name": object_name, **preconditions, **goal_relevance},
             ))
         if _has_any_token(node, {"OPEN"}):
+            preconditions = _interaction_preconditions(agent_id, object_id, close_ids)
             actions.append(ActionSpec(
                 action_id=f"close:{agent_id}:{object_id}",
                 action_type="close",
-                parameters={"object_id": object_id, "object_name": object_name, **goal_relevance},
+                parameters={"object_id": object_id, "object_name": object_name, **preconditions, **goal_relevance},
             ))
     for held_id in held_ids:
         if held_id not in visible_ids:
@@ -333,17 +339,38 @@ def _object_interaction_actions(
             held_name = object_names.get(held_id, "object")
             target_name = object_names.get(target_id, "object")
             placement_relevance = _goal_relevance_for_placement(held_id, held_name, target_id, target_name, task_goal_hints)
+            preconditions = _placement_preconditions(agent_id, target_id, close_ids)
             actions.append(ActionSpec(
                 action_id=f"putin:{agent_id}:{held_id}:{target_id}",
                 action_type="putin",
-                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **placement_relevance},
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **preconditions, **placement_relevance},
             ))
             actions.append(ActionSpec(
                 action_id=f"putback:{agent_id}:{held_id}:{target_id}",
                 action_type="putback",
-                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **placement_relevance},
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **preconditions, **placement_relevance},
             ))
     return actions
+
+
+def _interaction_preconditions(agent_id: str, object_id: Any, close_ids: set[Any]) -> dict[str, Any]:
+    if object_id in close_ids:
+        return {"precondition_status": "executable_now", "precondition_reason": "actor_close_to_object"}
+    return {
+        "precondition_status": "setup_required",
+        "precondition_reason": "needs_walktowards_object",
+        "setup_action_id": f"walktowards:{agent_id}:{object_id}",
+    }
+
+
+def _placement_preconditions(agent_id: str, target_id: Any, close_ids: set[Any]) -> dict[str, Any]:
+    if target_id in close_ids:
+        return {"precondition_status": "executable_now", "precondition_reason": "actor_close_to_target"}
+    return {
+        "precondition_status": "setup_required",
+        "precondition_reason": "needs_walktowards_target",
+        "setup_action_id": f"walktowards:{agent_id}:{target_id}",
+    }
 
 
 def _task_goal_hints(env: Any) -> dict[int, tuple[dict[str, Any], ...]]:
@@ -448,6 +475,27 @@ def _held_object_ids(observation: dict[str, Any]) -> set[Any]:
         elif to_id in character_ids and from_id is not None:
             held_ids.add(from_id)
     return held_ids
+
+
+def _close_object_ids(observation: dict[str, Any]) -> set[Any]:
+    character_ids = {
+        node.get("id")
+        for node in observation.get("nodes", [])
+        if isinstance(node, dict) and node.get("category") == "Characters"
+    }
+    close_ids: set[Any] = set()
+    for edge in observation.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        if str(edge.get("relation_type", "")).upper() != "CLOSE":
+            continue
+        from_id = edge.get("from_id")
+        to_id = edge.get("to_id")
+        if from_id in character_ids and to_id is not None:
+            close_ids.add(to_id)
+        elif to_id in character_ids and from_id is not None:
+            close_ids.add(from_id)
+    return close_ids
 
 
 def _has_any_token(node: dict[str, Any], tokens: set[str]) -> bool:
