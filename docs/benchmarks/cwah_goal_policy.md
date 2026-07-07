@@ -45,6 +45,23 @@ Current rules are intentionally conservative:
 
 These hints do not use evaluator progress, full graph state, simulator debug state, or private observations from other agents.
 
+## Held-Object Scheduling
+
+The policy also carries hand-state metadata on physical actions:
+
+- `hand_state`: `empty` or `holding`
+- `held_object_id` and `held_object_name`
+- `held_objects`: compact list of locally observed held objects
+
+Held-object scheduling rules:
+
+- If the actor is already holding an object, unrelated `grab` actions are marked `blocked` with `blocked_by_holding_object`.
+- Placement actions for the held object remain available and are prioritized when they match the goal object/target/relation.
+- If a placement target is not locally close, placement points to `walktowards:<target>` as setup.
+- If a placement target is close but closed/openable, placement points to `open:<target>` as setup.
+
+This is still agent-local: held state is inferred from local `HOLDS_*` relations, and target readiness is inferred from local object states/properties and local `CLOSE` relations.
+
 ## 2026-07-04 Comparison
 
 Comparison artifact directory: `/tmp/opencode/cwah-goal-policy-real-20260704`.
@@ -98,3 +115,31 @@ Observed common-report aggregate:
 - Failed action mix: `grab=34`, `putin=28`, `putback=1`, `open=1`
 
 This run confirms that local precondition hints shift behavior toward setup/navigation before some interactions, but task success and normalized progress did not improve. The remaining failures indicate that `CLOSE`-based local preconditions are not sufficient; future work should model hand occupancy, target capacity/surface affordances, and whether VirtualHome requires additional navigation/alignment before placement.
+
+## 2026-07-05 Held-Object Scheduling Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-held-state-real-20260705-open-fix`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `grab=33`, `open=10`, `putback=42`, `putin=4`, `walktowards=61`
+- Failed action records: `29`
+- Failed action mix: `open=7`, `putback=17`, `putin=4`, `walktowards=1`
+
+Held-object scheduling reduced repeated extra grabs while carrying an object and restored the bounded real matrix to zero runtime failures after separating `putin` targets from `putback` targets and suppressing `open` actions for already-open objects. It still does not improve task success; remaining failed actions show that target suitability and VirtualHome placement constraints need more precise modeling.

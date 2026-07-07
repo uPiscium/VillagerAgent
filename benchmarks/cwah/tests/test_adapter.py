@@ -76,8 +76,9 @@ def test_cwah_adapter_exposes_held_object_placement_actions():
     def env_factory(_config):
         env = mock_cwah_env_factory(_config)
         env._observations[0]["nodes"].append({"id": 30, "class_name": "dishwasher", "category": "Objects", "states": ["OPEN"], "properties": ["CONTAINERS"]})
+        env._observations[0]["nodes"].append({"id": 31, "class_name": "table", "category": "Objects", "states": [], "properties": ["SURFACES"]})
         env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"})
-        env.get_action_space = lambda: {0: [10, 20, 30], 1: [11, 21]}
+        env.get_action_space = lambda: {0: [10, 20, 30, 31], 1: [11, 21]}
         return env
 
     adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
@@ -86,13 +87,57 @@ def test_cwah_adapter_exposes_held_object_placement_actions():
     actions = adapter.get_legal_actions("agent_0")
 
     assert any(action.action_id == "putin:agent_0:20:30" for action in actions)
-    assert any(action.action_id == "putback:agent_0:20:30" for action in actions)
+    assert any(action.action_id == "putback:agent_0:20:31" for action in actions)
     putin = next(action for action in actions if action.action_id == "putin:agent_0:20:30")
     assert putin.parameters["goal_object_match"] is True
     assert putin.parameters["goal_target_match"] is True
     assert putin.parameters["goal_relation_matches"] == ("inside",)
     assert putin.parameters["precondition_status"] == "setup_required"
     assert putin.parameters["setup_action_id"] == "walktowards:agent_0:30"
+    assert putin.parameters["hand_state"] == "holding"
+    assert putin.parameters["held_object_id"] == 20
+    assert putin.parameters["held_object_name"] == "plate"
+
+
+def test_cwah_adapter_blocks_extra_grabs_while_holding_object():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["nodes"].append({"id": 22, "class_name": "apple", "category": "Objects", "states": [], "properties": ["GRABBABLE"]})
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 20, 22], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    apple_grab = next(action for action in adapter.get_legal_actions("agent_0") if action.action_id == "grab:agent_0:22")
+
+    assert apple_grab.parameters["precondition_status"] == "blocked"
+    assert apple_grab.parameters["precondition_reason"] == "blocked_by_holding_object"
+    assert apple_grab.parameters["hand_state"] == "holding"
+
+
+def test_cwah_adapter_prefers_open_setup_for_closed_close_target():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["nodes"].append({"id": 30, "class_name": "dishwasher", "category": "Objects", "states": ["CLOSED"], "properties": ["CONTAINERS", "CAN_OPEN"]})
+        env._observations[0]["edges"].extend([
+            {"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"},
+            {"from_id": 1, "to_id": 30, "relation_type": "CLOSE"},
+        ])
+        env.get_action_space = lambda: {0: [10, 20, 30], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    actions = adapter.get_legal_actions("agent_0")
+    putin = next(action for action in actions if action.action_id == "putin:agent_0:20:30")
+
+    assert any(action.action_id == "open:agent_0:30" for action in actions)
+    assert putin.parameters["precondition_status"] == "setup_required"
+    assert putin.parameters["precondition_reason"] == "needs_open_target"
+    assert putin.parameters["setup_action_id"] == "open:agent_0:30"
 
 
 def test_cwah_adapter_marks_close_interactions_executable_now():
@@ -108,6 +153,22 @@ def test_cwah_adapter_marks_close_interactions_executable_now():
 
     assert grab.parameters["precondition_status"] == "executable_now"
     assert grab.parameters["precondition_reason"] == "actor_close_to_object"
+
+
+def test_cwah_adapter_does_not_offer_open_for_already_open_object():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["nodes"].append({"id": 30, "class_name": "dishwasher", "category": "Objects", "states": ["OPEN"], "properties": ["CONTAINERS", "CAN_OPEN"]})
+        env.get_action_space = lambda: {0: [10, 20, 30], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    action_ids = {action.action_id for action in adapter.get_legal_actions("agent_0")}
+
+    assert "open:agent_0:30" not in action_ids
+    assert "close:agent_0:30" in action_ids
 
 
 def test_cwah_adapter_tracks_progress_and_final_metrics():
