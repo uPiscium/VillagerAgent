@@ -168,6 +168,9 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "precondition_status": "unknown",
             "precondition_reason": "",
             "setup_action_id": "",
+            "hand_state": "unknown",
+            "held_object_id": None,
+            "held_object_name": "",
             "goal_object_match": True,
             "goal_target_match": False,
             "goal_relation_matches": [],
@@ -179,6 +182,9 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "precondition_status": "unknown",
             "precondition_reason": "",
             "setup_action_id": "",
+            "hand_state": "unknown",
+            "held_object_id": None,
+            "held_object_name": "",
             "goal_object_match": True,
             "goal_target_match": True,
             "goal_relation_matches": ["inside"],
@@ -217,3 +223,53 @@ def test_physical_action_rank_prefers_setup_navigation_before_blocked_goal_actio
     )
 
     assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:20"
+
+
+def test_physical_action_rank_blocks_extra_grab_while_holding():
+    actions = (
+        ActionSpec(
+            action_id="grab:agent_0:apple",
+            action_type="grab",
+            parameters={"object_name": "apple", "precondition_status": "blocked", "precondition_reason": "blocked_by_holding_object"},
+        ),
+        ActionSpec(
+            action_id="putin:agent_0:plate:dishwasher",
+            action_type="putin",
+            parameters={
+                "object_name": "plate",
+                "target_name": "dishwasher",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "goal_relation_matches": ("inside",),
+                "precondition_status": "executable_now",
+            },
+        ),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "putin:agent_0:plate:dishwasher"
+
+
+def test_physical_action_rank_prefers_open_setup_for_closed_target():
+    actions = (
+        ActionSpec(
+            action_id="putin:agent_0:plate:dishwasher",
+            action_type="putin",
+            parameters={
+                "object_name": "plate",
+                "target_name": "dishwasher",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "goal_relation_matches": ("inside",),
+                "precondition_status": "setup_required",
+                "precondition_reason": "needs_open_target",
+                "setup_action_id": "open:agent_0:dishwasher",
+            },
+        ),
+        ActionSpec(
+            action_id="open:agent_0:dishwasher",
+            action_type="open",
+            parameters={"object_name": "dishwasher", "goal_target_match": True, "precondition_status": "executable_now"},
+        ),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "open:agent_0:dishwasher"
