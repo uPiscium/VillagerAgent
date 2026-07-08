@@ -48,6 +48,7 @@ def main() -> None:
     }
     events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
     blocked_action_ids: set[str] = set()
+    blocked_action_signatures: set[str] = set()
 
     for step in range(max_policy_steps):
         if adapter.is_terminal():
@@ -63,6 +64,7 @@ def main() -> None:
                 max_tokens=args.max_tokens,
                 context=context,
                 blocked_action_ids=tuple(sorted(blocked_action_ids)),
+                blocked_action_signatures=tuple(sorted(blocked_action_signatures)),
             )
             prefer_physical = args.prefer_physical_after_steps >= 0 and context.step >= args.prefer_physical_after_steps
             action = action_from_decision(
@@ -71,6 +73,7 @@ def main() -> None:
                 context.legal_actions,
                 prefer_physical=prefer_physical,
                 blocked_action_ids=blocked_action_ids,
+                blocked_action_signatures=blocked_action_signatures,
             )
             if action.action_type == "send_message":
                 result = adapter.execute_information_action(agent_id, action)
@@ -78,7 +81,14 @@ def main() -> None:
                 result = adapter.execute_action(agent_id, action)
             if not result.succeeded or result.error:
                 blocked_action_ids.add(action.action_id)
-                decision["failed_action_recorded"] = {"action_id": action.action_id, "error": result.error or "execution_failed"}
+                signature = action_failure_signature(action)
+                if signature:
+                    blocked_action_signatures.add(signature)
+                decision["failed_action_recorded"] = {
+                    "action_id": action.action_id,
+                    "action_signature": signature,
+                    "error": result.error or "execution_failed",
+                }
             events.append({
                 "event": "policy_step",
                 "step": step,
@@ -106,13 +116,23 @@ def _json_default(value):
     return str(value)
 
 
-def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_tokens: int, context, blocked_action_ids: tuple[str, ...] = ()) -> dict:
+def decide_with_llm(
+    *,
+    client: OpenAI,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    context,
+    blocked_action_ids: tuple[str, ...] = (),
+    blocked_action_signatures: tuple[str, ...] = (),
+) -> dict:
     prompt = {
         "agent_id": context.actor_id,
         "step": context.step,
         "observation_summary": summarize_observations(context.visible_epistemic_nodes),
         "candidate_action_intents": summarize_action_intents(context.legal_actions),
         "recent_failed_action_ids": list(blocked_action_ids)[-10:],
+        "recent_failed_action_signatures": list(blocked_action_signatures)[-10:],
         "legal_actions": [
             {"action_id": action.action_id, "action_type": action.action_type, "parameters": action.parameters}
             for action in context.legal_actions
@@ -123,7 +143,7 @@ def decide_with_llm(*, client: OpenAI, model: str, temperature: float, max_token
             "held objects into visible containers or onto visible surfaces. Use send_message only to share "
             "useful new information. Prefer candidate actions with precondition_status executable_now. "
             "If a goal action is setup_required, choose its setup_action_id first when that setup action is legal. "
-            "Do not choose recent_failed_action_ids unless no alternative exists. "
+            "Do not choose recent_failed_action_ids or recent_failed_action_signatures unless no alternative exists. "
             "Return compact JSON only: "
             "{\"action_id\": \"...\", \"rationale\": \"...\", \"message\": \"...\"}. "
             "The message field is only used for send_message."
@@ -246,14 +266,21 @@ def action_from_decision(
     *,
     prefer_physical: bool = False,
     blocked_action_ids: set[str] | frozenset[str] | None = None,
+    blocked_action_signatures: set[str] | frozenset[str] | None = None,
 ) -> ActionSpec:
     blocked_action_ids = blocked_action_ids or set()
+    blocked_action_signatures = blocked_action_signatures or set()
     action_by_id = {action.action_id: action for action in legal_actions}
     selected = action_by_id.get(str(decision.get("action_id", "")))
-    selected_is_blocked = selected is not None and selected.action_id in blocked_action_ids
+    selected_signature = action_failure_signature(selected) if selected is not None else ""
+    selected_is_blocked = selected is not None and (selected.action_id in blocked_action_ids or selected_signature in blocked_action_signatures)
     selected_needs_setup = selected is not None and selected.parameters.get("precondition_status") == "setup_required"
     if selected_is_blocked:
-        decision["policy_override"] = {"reason": "avoid_repeated_failed_action", "blocked_action_id": selected.action_id}
+        decision["policy_override"] = {
+            "reason": "avoid_repeated_failed_action",
+            "blocked_action_id": selected.action_id,
+            "blocked_action_signature": selected_signature,
+        }
     if selected_needs_setup:
         decision["policy_override"] = {
             "reason": "precondition_setup_required",
@@ -261,7 +288,11 @@ def action_from_decision(
             "setup_action_id": selected.parameters.get("setup_action_id", ""),
         }
     if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked or selected_needs_setup):
-        physical = preferred_physical_action(legal_actions, blocked_action_ids=blocked_action_ids)
+        physical = preferred_physical_action(
+            legal_actions,
+            blocked_action_ids=blocked_action_ids,
+            blocked_action_signatures=blocked_action_signatures,
+        )
         if physical is not None and (selected is None or physical.action_id != selected.action_id):
             decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
             return physical
@@ -278,7 +309,11 @@ def action_from_decision(
     action_type = str(decision.get("action_type", "send_message"))
     if action_type == "send_message":
         if prefer_physical:
-            physical = preferred_physical_action(legal_actions, blocked_action_ids=blocked_action_ids)
+            physical = preferred_physical_action(
+                legal_actions,
+                blocked_action_ids=blocked_action_ids,
+                blocked_action_signatures=blocked_action_signatures,
+            )
             if physical is not None:
                 decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
                 return physical
@@ -298,10 +333,31 @@ def first_physical_action(legal_actions: tuple[ActionSpec, ...]) -> ActionSpec |
     return None
 
 
-def preferred_physical_action(legal_actions: tuple[ActionSpec, ...], *, blocked_action_ids: set[str] | frozenset[str] | None = None) -> ActionSpec | None:
+def preferred_physical_action(
+    legal_actions: tuple[ActionSpec, ...],
+    *,
+    blocked_action_ids: set[str] | frozenset[str] | None = None,
+    blocked_action_signatures: set[str] | frozenset[str] | None = None,
+) -> ActionSpec | None:
     blocked_action_ids = blocked_action_ids or set()
-    physical = [action for action in legal_actions if action.action_type not in {"send_message", "wait"} and action.action_id not in blocked_action_ids]
+    blocked_action_signatures = blocked_action_signatures or set()
+    physical = [
+        action
+        for action in legal_actions
+        if action.action_type not in {"send_message", "wait"}
+        and action.action_id not in blocked_action_ids
+        and action_failure_signature(action) not in blocked_action_signatures
+    ]
     return min(physical, key=physical_action_rank, default=None)
+
+
+def action_failure_signature(action: ActionSpec | None) -> str:
+    if action is None or action.action_type in {"send_message", "wait"}:
+        return ""
+    params = action.parameters
+    object_id = params.get("object_id", "")
+    target_id = params.get("target_id", "")
+    return f"{action.action_type}:{object_id}:{target_id}"
 
 
 def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:

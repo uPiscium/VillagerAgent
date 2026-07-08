@@ -1,5 +1,12 @@
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
-from benchmarks.cwah.llm_smoke import action_from_decision, physical_action_rank, summarize_action_intents, summarize_observations
+from benchmarks.cwah.llm_smoke import (
+    action_failure_signature,
+    action_from_decision,
+    physical_action_rank,
+    preferred_physical_action,
+    summarize_action_intents,
+    summarize_observations,
+)
 
 
 def test_action_from_decision_uses_selected_legal_action_id():
@@ -86,6 +93,58 @@ def test_action_from_decision_skips_blocked_failed_actions():
         "action_id": "grab:agent_0:21",
         "action_type": "grab",
     }
+
+
+def test_action_from_decision_skips_blocked_failed_action_signatures():
+    legal_actions = (
+        ActionSpec(action_id="wait:agent_0", action_type="wait", parameters={}),
+        ActionSpec(action_id="putback:agent_0:20:30", action_type="putback", parameters={"object_id": 20, "target_id": 30}),
+        ActionSpec(action_id="walktowards:agent_0:31", action_type="walktowards", parameters={"object_id": 31}),
+    )
+    decision = {"action_id": "putback:agent_0:20:30"}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        legal_actions,
+        prefer_physical=True,
+        blocked_action_signatures={"putback:20:30"},
+    )
+
+    assert action.action_id == "walktowards:agent_0:31"
+    assert decision["policy_override"] == {
+        "reason": "prefer_physical_after_steps",
+        "action_id": "walktowards:agent_0:31",
+        "action_type": "walktowards",
+    }
+
+
+def test_preferred_physical_action_filters_failed_signatures():
+    legal_actions = (
+        ActionSpec(
+            action_id="putin:agent_0:20:30",
+            action_type="putin",
+            parameters={
+                "object_id": 20,
+                "target_id": 30,
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "goal_relation_matches": ("inside",),
+            },
+        ),
+        ActionSpec(action_id="grab:agent_0:21", action_type="grab", parameters={"object_id": 21}),
+    )
+
+    action = preferred_physical_action(legal_actions, blocked_action_signatures={"putin:20:30"})
+
+    assert action is not None
+    assert action.action_id == "grab:agent_0:21"
+
+
+def test_action_failure_signature_uses_local_action_parameters():
+    action = ActionSpec(action_id="putback:agent_0:20:30", action_type="putback", parameters={"object_id": 20, "target_id": 30})
+
+    assert action_failure_signature(action) == "putback:20:30"
 
 
 def test_action_from_decision_overrides_setup_required_selection():
