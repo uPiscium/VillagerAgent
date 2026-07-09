@@ -13,6 +13,7 @@ def test_build_matrix_command_forwards_baseline_options(tmp_path):
         max_steps=25,
         max_policy_steps=2,
         prefer_physical_after_steps=0,
+        navigation_loop_threshold=12,
         base_url="http://example.test/v1",
         api_key="key",
         model="model",
@@ -31,6 +32,7 @@ def test_build_matrix_command_forwards_baseline_options(tmp_path):
     assert command[command.index("--tasks") + 1] == "0,1"
     assert command[command.index("--base-port") + 1] == "6414"
     assert command[command.index("--port-stride") + 1] == "10"
+    assert command[command.index("--navigation-loop-threshold") + 1] == "12"
     assert command[command.index("--coela-cwah-path") + 1] == "/tmp/coela/cwah"
 
 
@@ -43,6 +45,7 @@ def test_build_manifest_marks_mock_as_validation_not_performance_claim(tmp_path)
         max_policy_steps=2,
         full_episode=True,
         prefer_physical_after_steps=0,
+        navigation_loop_threshold=12,
         model="model",
         base_port=6314,
         port_stride=1,

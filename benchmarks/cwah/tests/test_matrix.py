@@ -58,7 +58,7 @@ def test_write_matrix_summary(tmp_path):
             "passed": True,
             "metrics": {"task_success": False, "normalized_progress": 0.5, "episode_steps": 2},
             "event_counts": {"policy_overrides": 1},
-            "diagnostics": {"failed_action_record_count": 2, "result_failure_count": 3},
+            "diagnostics": {"failed_action_record_count": 2, "navigation_loop_count": 1, "result_failure_count": 3},
         }],
     )
 
@@ -66,5 +66,5 @@ def test_write_matrix_summary(tmp_path):
     metrics_csv = (tmp_path / "matrix_metrics.csv").read_text(encoding="utf-8")
 
     assert summary["aggregate"]["passed_runs"] == 1
-    assert "matrix_index,task_id,seed,base_port,passed,task_success,normalized_progress,episode_steps,policy_overrides,failed_action_records,result_failures" in metrics_csv
-    assert "0,0,1,6314,True,False,0.5,2,1,2,3" in metrics_csv
+    assert "matrix_index,task_id,seed,base_port,passed,task_success,normalized_progress,episode_steps,policy_overrides,failed_action_records,navigation_loop_count,result_failures" in metrics_csv
+    assert "0,0,1,6314,True,False,0.5,2,1,2,1,3" in metrics_csv

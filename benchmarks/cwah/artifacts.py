@@ -21,6 +21,7 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
     override_reason_counts: dict[str, int] = {}
     failed_action_counts: dict[str, int] = {}
     failed_action_record_count = 0
+    navigation_loop_count = 0
     result_failure_count = 0
     for event in policy_events:
         action_type = _action_type_from_event(event)
@@ -36,6 +37,9 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
             failed_action_record_count += 1
             failed_action_type = _action_type_from_id(str(failed_record.get("action_id", "")))
             failed_action_counts[failed_action_type] = failed_action_counts.get(failed_action_type, 0) + 1
+        navigation_loop = decision.get("navigation_loop_recorded") if isinstance(decision.get("navigation_loop_recorded"), dict) else {}
+        if navigation_loop:
+            navigation_loop_count += 1
         result = event.get("result", {}) if isinstance(event.get("result"), dict) else {}
         if result.get("succeeded") is False or result.get("error"):
             result_failure_count += 1
@@ -54,6 +58,7 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
             "policy_override_reason_counts": dict(sorted(override_reason_counts.items())),
             "failed_action_record_count": failed_action_record_count,
             "failed_action_counts": dict(sorted(failed_action_counts.items())),
+            "navigation_loop_count": navigation_loop_count,
             "result_failure_count": result_failure_count,
         },
     }
@@ -103,6 +108,7 @@ def _write_metrics(path: Path, summary: dict[str, Any]) -> None:
         "policy_overrides": summary["event_counts"].get("policy_overrides"),
         "policy_override_rate": _rate(summary["event_counts"].get("policy_overrides"), summary["event_counts"].get("policy_steps")),
         "failed_action_records": summary.get("diagnostics", {}).get("failed_action_record_count", 0),
+        "navigation_loop_count": summary.get("diagnostics", {}).get("navigation_loop_count", 0),
         "result_failures": summary.get("diagnostics", {}).get("result_failure_count", 0),
         "physical_actions": _physical_action_count(summary["action_counts"]),
         "communication_actions": summary["action_counts"].get("send_message", 0),

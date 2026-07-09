@@ -71,6 +71,12 @@ The runner also keeps episode-local failed action history for physical actions:
 
 When the fallback scheduler chooses a physical action, it filters actions matching either the failed id or failed signature. The LLM prompt also receives compact recent failed ids and signatures. This history is not persisted across runs and does not use evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
+## Navigation-Loop Suppression
+
+The runner also tracks episode-local navigation signatures for `walktowards` actions. A navigation signature is derived from agent-facing action parameters as `walktowards:object_id:`. After the same signature is selected at least `navigation_loop_threshold` times, the fallback scheduler suppresses that signature for the rest of the episode.
+
+The default threshold is conservative (`12`) to avoid replacing navigation loops with excessive invalid interactions. Suppressed navigation counts are written to normalized diagnostics and common reports as `navigation_loop_count`. This remains agent-local and does not use evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
+
 ## 2026-07-04 Comparison
 
 Comparison artifact directory: `/tmp/opencode/cwah-goal-policy-real-20260704`.
@@ -180,3 +186,32 @@ Observed common-report aggregate:
 - Failed action mix: `grab=3`, `open=6`, `putback=9`, `putin=3`
 
 Failure-aware scheduling reduced repeated invalid placement/open attempts relative to the held-object comparison, but it did not change task success or normalized progress. The action mix shifted toward navigation after failed interactions were suppressed, which indicates the next improvement should focus on search/path-loop handling and target suitability rather than claiming benchmark gains from this change.
+
+## 2026-07-09 Navigation-Loop Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-navigation-loop-real-20260709-final`.
+
+Configuration matched the previous bounded comparisons, with `navigation_loop_threshold=12`:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `grab=25`, `open=9`, `putback=37`, `putin=4`, `walktowards=75`
+- Failed action records: `31`
+- Navigation loop suppressions: `3`
+- Failed action mix: `open=6`, `putback=18`, `putin=4`, `walktowards=3`
+
+Navigation-loop suppression modestly reduced repeated navigation relative to the failure-aware comparison (`walktowards=83` to `75`) while preserving zero runtime failures, but it did not improve success or normalized progress and increased failed action records. The result should be treated as diagnostic hardening rather than a behavioral improvement claim; the next policy step should improve target suitability before replacing repeated navigation with placement/open attempts.

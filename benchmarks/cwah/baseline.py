@@ -63,6 +63,8 @@ def build_matrix_command(*, args: argparse.Namespace, output_dir: Path) -> list[
         str(args.max_policy_steps),
         "--prefer-physical-after-steps",
         str(args.prefer_physical_after_steps),
+        "--navigation-loop-threshold",
+        str(args.navigation_loop_threshold),
         "--base-url",
         args.base_url,
         "--api-key",
@@ -110,6 +112,7 @@ def build_manifest(
             "max_policy_steps": args.max_policy_steps,
             "full_episode": args.full_episode,
             "prefer_physical_after_steps": args.prefer_physical_after_steps,
+            "navigation_loop_threshold": args.navigation_loop_threshold,
             "model": args.model,
             "base_port": args.base_port,
             "port_stride": args.port_stride,
@@ -141,6 +144,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-policy-steps", type=int, default=2)
     parser.add_argument("--full-episode", action="store_true")
     parser.add_argument("--prefer-physical-after-steps", type=int, default=0)
+    parser.add_argument("--navigation-loop-threshold", type=int, default=12)
     parser.add_argument("--base-url", default="http://ollama.arc.upiscium.dev/v1")
     parser.add_argument("--api-key", default="ollama")
     parser.add_argument("--model", default="gemma4:e4b")
