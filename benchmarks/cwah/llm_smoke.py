@@ -45,10 +45,13 @@ def main() -> None:
         "full_episode": args.full_episode,
         "model": args.model,
         "prefer_physical_after_steps": args.prefer_physical_after_steps,
+        "navigation_loop_threshold": args.navigation_loop_threshold,
     }
     events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
     blocked_action_ids: set[str] = set()
-    blocked_action_signatures: set[str] = set()
+    failed_action_signatures: set[str] = set()
+    suppressed_action_signatures: set[str] = set()
+    navigation_signature_counts: dict[str, int] = {}
 
     for step in range(max_policy_steps):
         if adapter.is_terminal():
@@ -64,9 +67,11 @@ def main() -> None:
                 max_tokens=args.max_tokens,
                 context=context,
                 blocked_action_ids=tuple(sorted(blocked_action_ids)),
-                blocked_action_signatures=tuple(sorted(blocked_action_signatures)),
+                failed_action_signatures=tuple(sorted(failed_action_signatures)),
+                suppressed_action_signatures=tuple(sorted(suppressed_action_signatures)),
             )
             prefer_physical = args.prefer_physical_after_steps >= 0 and context.step >= args.prefer_physical_after_steps
+            blocked_action_signatures = failed_action_signatures | suppressed_action_signatures
             action = action_from_decision(
                 agent_id,
                 decision,
@@ -83,12 +88,22 @@ def main() -> None:
                 blocked_action_ids.add(action.action_id)
                 signature = action_failure_signature(action)
                 if signature:
-                    blocked_action_signatures.add(signature)
+                    failed_action_signatures.add(signature)
                 decision["failed_action_recorded"] = {
                     "action_id": action.action_id,
                     "action_signature": signature,
                     "error": result.error or "execution_failed",
                 }
+            navigation_signature = action_navigation_signature(action)
+            if navigation_signature and args.navigation_loop_threshold > 0:
+                navigation_signature_counts[navigation_signature] = navigation_signature_counts.get(navigation_signature, 0) + 1
+                if navigation_signature_counts[navigation_signature] >= args.navigation_loop_threshold:
+                    suppressed_action_signatures.add(navigation_signature)
+                    decision["navigation_loop_recorded"] = {
+                        "action_signature": navigation_signature,
+                        "count": navigation_signature_counts[navigation_signature],
+                        "threshold": args.navigation_loop_threshold,
+                    }
             events.append({
                 "event": "policy_step",
                 "step": step,
@@ -124,7 +139,8 @@ def decide_with_llm(
     max_tokens: int,
     context,
     blocked_action_ids: tuple[str, ...] = (),
-    blocked_action_signatures: tuple[str, ...] = (),
+    failed_action_signatures: tuple[str, ...] = (),
+    suppressed_action_signatures: tuple[str, ...] = (),
 ) -> dict:
     prompt = {
         "agent_id": context.actor_id,
@@ -132,7 +148,8 @@ def decide_with_llm(
         "observation_summary": summarize_observations(context.visible_epistemic_nodes),
         "candidate_action_intents": summarize_action_intents(context.legal_actions),
         "recent_failed_action_ids": list(blocked_action_ids)[-10:],
-        "recent_failed_action_signatures": list(blocked_action_signatures)[-10:],
+        "recent_failed_action_signatures": list(failed_action_signatures)[-10:],
+        "recent_suppressed_action_signatures": list(suppressed_action_signatures)[-10:],
         "legal_actions": [
             {"action_id": action.action_id, "action_type": action.action_type, "parameters": action.parameters}
             for action in context.legal_actions
@@ -143,7 +160,8 @@ def decide_with_llm(
             "held objects into visible containers or onto visible surfaces. Use send_message only to share "
             "useful new information. Prefer candidate actions with precondition_status executable_now. "
             "If a goal action is setup_required, choose its setup_action_id first when that setup action is legal. "
-            "Do not choose recent_failed_action_ids or recent_failed_action_signatures unless no alternative exists. "
+            "Do not choose recent_failed_action_ids, recent_failed_action_signatures, or "
+            "recent_suppressed_action_signatures unless no alternative exists. "
             "Return compact JSON only: "
             "{\"action_id\": \"...\", \"rationale\": \"...\", \"message\": \"...\"}. "
             "The message field is only used for send_message."
@@ -360,6 +378,12 @@ def action_failure_signature(action: ActionSpec | None) -> str:
     return f"{action.action_type}:{object_id}:{target_id}"
 
 
+def action_navigation_signature(action: ActionSpec | None) -> str:
+    if action is None or action.action_type != "walktowards":
+        return ""
+    return action_failure_signature(action)
+
+
 def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     params = action.parameters
     goal_object = bool(params.get("goal_object_match"))
@@ -398,6 +422,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-policy-steps", type=int, default=2)
     parser.add_argument("--full-episode", action="store_true", help="Run until terminal or max_steps instead of the smoke-step cap.")
     parser.add_argument("--prefer-physical-after-steps", type=int, default=2, help="Prefer physical actions after this environment step; use -1 to disable.")
+    parser.add_argument("--navigation-loop-threshold", type=int, default=12, help="Suppress repeated walktowards signatures after this many episode-local selections; use 0 to disable.")
     parser.add_argument("--base-url", default=os.environ.get("CWAH_LLM_BASE_URL", "http://ollama.arc.upiscium.dev/v1"))
     parser.add_argument("--api-key", default=os.environ.get("CWAH_LLM_API_KEY", "ollama"))
     parser.add_argument("--model", default=os.environ.get("CWAH_LLM_MODEL", "gemma4:e4b"))

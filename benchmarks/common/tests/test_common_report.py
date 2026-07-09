@@ -27,6 +27,7 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
                     "event_counts": {"policy_steps": 2, "policy_overrides": 1},
                     "diagnostics": {
                         "failed_action_record_count": 1,
+                        "navigation_loop_count": 1,
                         "result_failure_count": 1,
                         "failed_action_counts": {"walktowards": 1},
                         "policy_override_reason_counts": {"prefer_physical_after_steps": 1},
@@ -60,6 +61,7 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
     assert aggregate["action_counts"] == {"open": 1, "send_message": 1, "walktowards": 2}
     assert aggregate["policy_override_count"] == 1
     assert aggregate["failed_action_record_count"] == 1
+    assert aggregate["navigation_loop_count"] == 1
     assert aggregate["result_failure_count"] == 1
     assert aggregate["failed_action_counts"] == {"walktowards": 1}
     assert aggregate["policy_override_reason_counts"] == {"prefer_physical_after_steps": 1}
@@ -115,6 +117,7 @@ def test_summarizes_cwah_normalized_summary(tmp_path):
             "policy_override_count": 0,
             "policy_override_rate": 0.0,
             "failed_action_record_count": 0,
+            "navigation_loop_count": 0,
             "result_failure_count": 0,
             "failed_action_counts": "{}",
             "policy_override_reason_counts": "{}",

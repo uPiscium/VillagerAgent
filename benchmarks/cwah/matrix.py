@@ -77,6 +77,8 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
         str(args.max_policy_steps),
         "--prefer-physical-after-steps",
         str(args.prefer_physical_after_steps),
+        "--navigation-loop-threshold",
+        str(args.navigation_loop_threshold),
         "--base-url",
         args.base_url,
         "--api-key",
@@ -153,6 +155,7 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
             "episode_steps",
             "policy_overrides",
             "failed_action_records",
+            "navigation_loop_count",
             "result_failures",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -172,6 +175,7 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
                 "episode_steps": metrics.get("episode_steps"),
                 "policy_overrides": event_counts.get("policy_overrides"),
                 "failed_action_records": diagnostics.get("failed_action_record_count"),
+                "navigation_loop_count": diagnostics.get("navigation_loop_count"),
                 "result_failures": diagnostics.get("result_failure_count"),
             })
 
@@ -186,6 +190,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-policy-steps", type=int, default=2)
     parser.add_argument("--full-episode", action="store_true")
     parser.add_argument("--prefer-physical-after-steps", type=int, default=2)
+    parser.add_argument("--navigation-loop-threshold", type=int, default=12, help="Suppress repeated walktowards signatures after this many episode-local selections; use 0 to disable.")
     parser.add_argument("--base-url", default="http://ollama.arc.upiscium.dev/v1")
     parser.add_argument("--api-key", default="ollama")
     parser.add_argument("--model", default="gemma4:e4b")

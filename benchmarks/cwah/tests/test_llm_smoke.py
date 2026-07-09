@@ -1,6 +1,7 @@
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
 from benchmarks.cwah.llm_smoke import (
     action_failure_signature,
+    action_navigation_signature,
     action_from_decision,
     physical_action_rank,
     preferred_physical_action,
@@ -141,10 +142,53 @@ def test_preferred_physical_action_filters_failed_signatures():
     assert action.action_id == "grab:agent_0:21"
 
 
+def test_preferred_physical_action_filters_suppressed_navigation_signatures():
+    legal_actions = (
+        ActionSpec(action_id="walktowards:agent_0:20", action_type="walktowards", parameters={"object_id": 20, "goal_object_match": True}),
+        ActionSpec(action_id="walktowards:agent_0:21", action_type="walktowards", parameters={"object_id": 21}),
+    )
+
+    action = preferred_physical_action(legal_actions, blocked_action_signatures={"walktowards:20:"})
+
+    assert action is not None
+    assert action.action_id == "walktowards:agent_0:21"
+
+
+def test_action_from_decision_avoids_suppressed_navigation_selection():
+    legal_actions = (
+        ActionSpec(action_id="walktowards:agent_0:20", action_type="walktowards", parameters={"object_id": 20, "goal_object_match": True}),
+        ActionSpec(action_id="grab:agent_0:21", action_type="grab", parameters={"object_id": 21}),
+    )
+    decision = {"action_id": "walktowards:agent_0:20"}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        legal_actions,
+        prefer_physical=True,
+        blocked_action_signatures={"walktowards:20:"},
+    )
+
+    assert action.action_id == "grab:agent_0:21"
+    assert decision["policy_override"] == {
+        "reason": "prefer_physical_after_steps",
+        "action_id": "grab:agent_0:21",
+        "action_type": "grab",
+    }
+
+
 def test_action_failure_signature_uses_local_action_parameters():
     action = ActionSpec(action_id="putback:agent_0:20:30", action_type="putback", parameters={"object_id": 20, "target_id": 30})
 
     assert action_failure_signature(action) == "putback:20:30"
+
+
+def test_action_navigation_signature_only_tracks_walktowards():
+    walk = ActionSpec(action_id="walktowards:agent_0:20", action_type="walktowards", parameters={"object_id": 20})
+    grab = ActionSpec(action_id="grab:agent_0:20", action_type="grab", parameters={"object_id": 20})
+
+    assert action_navigation_signature(walk) == "walktowards:20:"
+    assert action_navigation_signature(grab) == ""
 
 
 def test_action_from_decision_overrides_setup_required_selection():
