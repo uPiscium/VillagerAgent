@@ -99,11 +99,12 @@ The default threshold is conservative (`12`) to avoid replacing navigation loops
 Placement actions now carry agent-facing suitability metadata derived from local target properties and goal-relation matches:
 
 - `placement_relation`: `inside` for `putin`, `on` for `putback`
+- `placement_relation_compatibility`: `goal_relation_match`, `goal_relation_mismatch`, or `goal_relation_unknown`
 - `target_affordance`: `container`, `surface`, `recipient`, `placeable`, or `unknown`
 - `placement_suitability`: `goal_relation_match`, `compatible_container`, `compatible_surface`, or `fallback_receptacle`
 - `container_suitability`: `container_open`, `container_closed_needs_open`, `container_unknown`, or `container_likely_unsuitable` for `putin` targets
 
-The fallback scheduler de-prioritizes `fallback_receptacle` placements when better physical alternatives exist. For `putin`, it also de-prioritizes containers that locally look unsuitable, including an `on` goal relation for the same object/target. This is intentionally conservative: it uses only visible object properties/states and sanitized goal hints, and it does not inspect evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
+The fallback scheduler de-prioritizes `fallback_receptacle` placements when better physical alternatives exist. It also prefers placements whose action relation matches the goal relation (`putback` for `on`, `putin` for `inside`) and de-prioritizes opposite-relation placements. For `putin`, it also de-prioritizes containers that locally look unsuitable, including an `on` goal relation for the same object/target. This is intentionally conservative: it uses only visible object properties/states and sanitized goal hints, and it does not inspect evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
 ## 2026-07-04 Comparison
 
@@ -368,3 +369,36 @@ Observed common-report aggregate:
 - Open failure reason counts: `execution_failed=16`
 
 Repeated-open suppression adds explicit tracking and report diagnostics for failed open targets, but this bounded run did not improve task success, normalized progress, or failed-action counts relative to container suitability. Treat this as observability and suppression plumbing only; the higher open failure count suggests the next policy iteration should improve open-target readiness before making benchmark-performance claims.
+
+## 2026-07-10 Relation-Aware Placement Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-relation-aware-real-20260710`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+- Navigation-loop threshold: `12`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `close=1`, `grab=33`, `open=20`, `putback=29`, `putin=13`, `walktowards=54`
+- Failed action records: `42`
+- Open failure records: `16`
+- Navigation loop suppressions: `2`
+- Failed action mix: `grab=1`, `open=16`, `putback=7`, `putin=11`, `walktowards=7`
+- Failure reason counts: `script_impossible=37`, `not_found_object=5`
+- Open failure reason counts: `execution_failed=16`
+
+Relation-aware placement adds explicit action-goal relation compatibility metadata and ranking for `on` versus `inside` placement choices. This bounded run did not improve task success, normalized progress, or failed-action count, so it remains policy hardening rather than a benchmark-performance claim. The next policy work should address object discovery/search and open-target readiness.

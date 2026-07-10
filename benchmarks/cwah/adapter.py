@@ -385,8 +385,18 @@ def _placement_target_metadata(relation: str, target_node: dict[str, Any], place
         "placement_relation": relation,
         "target_affordance": target_affordance,
         "placement_suitability": suitability,
+        "placement_relation_compatibility": _placement_relation_compatibility(relation, relation_matches),
         "container_suitability": _container_suitability(relation, target_node, target_affordance, relation_matches),
     }
+
+
+def _placement_relation_compatibility(relation: str, relation_matches: set[str]) -> str:
+    if relation in relation_matches:
+        return "goal_relation_match"
+    opposite = {"inside": "on", "on": "inside"}.get(relation, "")
+    if opposite and opposite in relation_matches:
+        return "goal_relation_mismatch"
+    return "goal_relation_unknown"
 
 
 def _target_affordance(target_node: dict[str, Any]) -> str:
