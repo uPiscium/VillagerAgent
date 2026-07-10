@@ -290,6 +290,10 @@ def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict
             "target_affordance": params.get("target_affordance", ""),
             "placement_suitability": params.get("placement_suitability", ""),
             "container_suitability": params.get("container_suitability", ""),
+            "search_priority": params.get("search_priority", ""),
+            "search_reason": params.get("search_reason", ""),
+            "missing_goal_object": bool(params.get("missing_goal_object")),
+            "missing_goal_target": bool(params.get("missing_goal_target")),
             "goal_object_match": bool(params.get("goal_object_match")),
             "goal_target_match": bool(params.get("goal_target_match")),
             "goal_relation_matches": list(params.get("goal_relation_matches", ())),
@@ -433,6 +437,7 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     placement_suitability = str(params.get("placement_suitability", ""))
     placement_relation_compatibility = str(params.get("placement_relation_compatibility", ""))
     container_suitability = str(params.get("container_suitability", ""))
+    search_priority = str(params.get("search_priority", ""))
     if precondition_status == "setup_required":
         return (20, 0, action.action_id)
     if precondition_status == "blocked":
@@ -457,6 +462,10 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
         return (2, 1, action.action_id)
     if action.action_type == "walktowards" and goal_target:
         return (2, 2, action.action_id)
+    if action.action_type == "walktowards" and search_priority in {"search_goal_object_room", "search_goal_target_room"}:
+        return (3, 0, action.action_id)
+    if action.action_type == "walktowards" and search_priority in {"search_goal_object_receptacle", "search_goal_target_receptacle"}:
+        return (3, 1, action.action_id)
     if action.action_type == "open" and goal_target:
         return (5, 0, action.action_id)
     fallback_priority = {"grab": 6, "putin": 7, "putback": 8, "open": 9, "close": 10, "walktowards": 11}

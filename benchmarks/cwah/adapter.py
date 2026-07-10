@@ -122,6 +122,8 @@ class CWAHSymbolicAdapter:
         visible_object_ids = action_space.get(agent_index, []) if isinstance(action_space, dict) else []
         observation = self._last_observations.get(agent_id, {})
         object_names = _visible_object_names(observation)
+        nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
+        nodes_by_id = {node.get("id"): node for node in nodes}
         agent_goal_hints = self._task_goal_hints.get(agent_index, ())
         actions = [ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})]
         actions.extend(
@@ -134,6 +136,7 @@ class CWAHSymbolicAdapter:
                     "precondition_status": "executable_now",
                     "precondition_reason": "navigation_action",
                     **_goal_relevance_for_object(object_id, object_names.get(object_id, "object"), agent_goal_hints),
+                    **_navigation_search_metadata(object_id, object_names, nodes_by_id, agent_goal_hints),
                 },
             )
             for object_id in visible_object_ids
@@ -527,6 +530,44 @@ def _goal_relevance_for_object(object_id: Any, object_name: str, task_goal_hints
     return {
         "goal_object_match": goal_object,
         "goal_target_match": goal_target,
+    }
+
+
+def _navigation_search_metadata(
+    object_id: Any,
+    object_names: dict[Any, str],
+    nodes_by_id: dict[Any, dict[str, Any]],
+    task_goal_hints: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    visible_names = {_normalize_name(name) for name in object_names.values()}
+    missing_goal_object = any(_normalize_name(str(hint.get("object_class", ""))) not in visible_names for hint in task_goal_hints)
+    missing_goal_target = any(
+        hint.get("target_id") not in object_names
+        and _normalize_name(str(hint.get("target_class", ""))) not in visible_names
+        for hint in task_goal_hints
+    )
+    node = nodes_by_id.get(object_id, {})
+    target_affordance = _target_affordance(node)
+    is_room = node.get("category") == "Rooms"
+    search_priority = "none"
+    search_reason = ""
+    if missing_goal_object and is_room:
+        search_priority = "search_goal_object_room"
+        search_reason = "goal_object_not_visible"
+    elif missing_goal_object and target_affordance in {"container", "surface", "recipient", "placeable"}:
+        search_priority = "search_goal_object_receptacle"
+        search_reason = "goal_object_not_visible"
+    elif missing_goal_target and is_room:
+        search_priority = "search_goal_target_room"
+        search_reason = "goal_target_not_visible"
+    elif missing_goal_target and target_affordance in {"container", "surface", "recipient", "placeable"}:
+        search_priority = "search_goal_target_receptacle"
+        search_reason = "goal_target_not_visible"
+    return {
+        "search_priority": search_priority,
+        "search_reason": search_reason,
+        "missing_goal_object": missing_goal_object,
+        "missing_goal_target": missing_goal_target,
     }
 
 

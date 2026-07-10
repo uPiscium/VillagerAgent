@@ -94,6 +94,17 @@ The runner also tracks episode-local navigation signatures for `walktowards` act
 
 The default threshold is conservative (`12`) to avoid replacing navigation loops with excessive invalid interactions. Suppressed navigation counts are written to normalized diagnostics and common reports as `navigation_loop_count`. This remains agent-local and does not use evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
+## Search And Object Discovery
+
+Navigation actions carry agent-facing search metadata derived from local symbolic observations and sanitized task goals:
+
+- `missing_goal_object`: whether a goal object class is not currently visible to the acting agent
+- `missing_goal_target`: whether a goal target id/class is not currently visible to the acting agent
+- `search_priority`: `search_goal_object_room`, `search_goal_object_receptacle`, `search_goal_target_room`, `search_goal_target_receptacle`, or `none`
+- `search_reason`: currently `goal_object_not_visible`, `goal_target_not_visible`, or empty
+
+The fallback scheduler prefers room search targets before receptacle/surface search targets, and both before irrelevant visible-object interactions. This remains symbolic and agent-local: it uses only visible rooms/objects/properties and sanitized task hints, not evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
+
 ## Placement Target Suitability
 
 Placement actions now carry agent-facing suitability metadata derived from local target properties and goal-relation matches:
@@ -402,3 +413,34 @@ Observed common-report aggregate:
 - Open failure reason counts: `execution_failed=16`
 
 Relation-aware placement adds explicit action-goal relation compatibility metadata and ranking for `on` versus `inside` placement choices. This bounded run did not improve task success, normalized progress, or failed-action count, so it remains policy hardening rather than a benchmark-performance claim. The next policy work should address object discovery/search and open-target readiness.
+
+## 2026-07-10 Search-Discovery Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-search-discovery-real-20260710`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+- Navigation-loop threshold: `12`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `grab=6`, `walktowards=144`
+- Failed action records: `0`
+- Open failure records: `0`
+- Navigation loop suppressions: `8`
+- Failure reason counts: none
+
+Search-discovery ranking removed bounded-run execution failures by preferring exploration/navigation when goal objects or targets were not visible, but it did not improve task success or normalized progress. It also over-shifted behavior toward navigation, so this remains policy hardening and diagnostics signal rather than a benchmark-performance claim. Future work should convert successful search/navigation into concrete object interactions instead of continuing to navigate.

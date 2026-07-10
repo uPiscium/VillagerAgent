@@ -314,6 +314,10 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "target_affordance": "",
             "placement_suitability": "",
             "container_suitability": "",
+            "search_priority": "",
+            "search_reason": "",
+            "missing_goal_object": False,
+            "missing_goal_target": False,
             "goal_object_match": True,
             "goal_target_match": False,
             "goal_relation_matches": [],
@@ -333,6 +337,10 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "target_affordance": "",
             "placement_suitability": "",
             "container_suitability": "",
+            "search_priority": "",
+            "search_reason": "",
+            "missing_goal_object": False,
+            "missing_goal_target": False,
             "goal_object_match": True,
             "goal_target_match": True,
             "goal_relation_matches": ["inside"],
@@ -527,6 +535,36 @@ def test_physical_action_rank_prefers_matching_inside_relation_placement():
     )
 
     assert min(actions, key=physical_action_rank).action_id == "putin:agent_0:plate:dishwasher"
+
+
+def test_physical_action_rank_prefers_search_room_over_irrelevant_object():
+    actions = (
+        ActionSpec(action_id="grab:agent_0:chair", action_type="grab", parameters={"object_name": "chair", "precondition_status": "executable_now"}),
+        ActionSpec(
+            action_id="walktowards:agent_0:kitchen",
+            action_type="walktowards",
+            parameters={"object_name": "kitchen", "search_priority": "search_goal_object_room", "precondition_status": "executable_now"},
+        ),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:kitchen"
+
+
+def test_physical_action_rank_prefers_search_room_over_search_receptacle():
+    actions = (
+        ActionSpec(
+            action_id="walktowards:agent_0:cabinet",
+            action_type="walktowards",
+            parameters={"object_name": "cabinet", "search_priority": "search_goal_object_receptacle", "precondition_status": "executable_now"},
+        ),
+        ActionSpec(
+            action_id="walktowards:agent_0:kitchen",
+            action_type="walktowards",
+            parameters={"object_name": "kitchen", "search_priority": "search_goal_object_room", "precondition_status": "executable_now"},
+        ),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:kitchen"
 
 
 def test_physical_action_rank_deprioritizes_unsuitable_putin_container():
