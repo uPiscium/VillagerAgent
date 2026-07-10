@@ -4,10 +4,24 @@ import subprocess
 from benchmarks.craft.config import load_config
 from benchmarks.craft.craft_env_adapter import CraftEnvAdapter
 from benchmarks.craft.result_converter import normalize_results
+from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
+
+
+def load_config_with_minimal_dataset(tmp_path, path, *, overrides=None):
+    dataset_path = write_minimal_structures_dataset(tmp_path / "structures_dataset_20.json")
+    merged_overrides = {
+        **(overrides or {}),
+        "craft": {
+            "dataset_path": str(dataset_path),
+            **((overrides or {}).get("craft") or {}),
+        },
+    }
+    return load_config(path, overrides=merged_overrides)
 
 
 def test_official_baseline_generates_comparable_turn_artifacts(tmp_path):
-    config = load_config(
+    config = load_config_with_minimal_dataset(
+        tmp_path,
         "configs/craft/official_baseline.yaml",
         overrides={"structures": [0]},
     )
@@ -33,7 +47,8 @@ def test_official_baseline_generates_comparable_turn_artifacts(tmp_path):
 
 
 def test_official_baseline_runs_all_requested_structures(tmp_path):
-    config = load_config(
+    config = load_config_with_minimal_dataset(
+        tmp_path,
         "configs/craft/official_baseline.yaml",
         overrides={"structures": [0, 1], "turns": 2},
     )
@@ -47,7 +62,8 @@ def test_official_baseline_runs_all_requested_structures(tmp_path):
 
 
 def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monkeypatch):
-    config = load_config(
+    config = load_config_with_minimal_dataset(
+        tmp_path,
         "configs/craft/official_baseline_full.yaml",
         overrides={"structures": [0], "turns": 2, "seed": 7},
     )

@@ -4,10 +4,14 @@ from benchmarks.craft.config import load_config
 from benchmarks.craft.validate_comparison_configs import compare_configs, main
 
 
+def load_config_without_runtime_assets(path):
+    return load_config(path, validate_runtime_assets=False)
+
+
 def test_gemma4_v_and_dual_dag_configs_pass_parity_validation():
     report = compare_configs(
-        load_config("configs/craft/eval_gemma4_12b_ollama.yaml"),
-        load_config("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml"),
+        load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama.yaml"),
+        load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml"),
     )
 
     assert report["passed"] is True
@@ -19,8 +23,8 @@ def test_gemma4_v_and_dual_dag_configs_pass_parity_validation():
 
 
 def test_parity_validation_fails_on_oracle_n_mismatch():
-    baseline = load_config("configs/craft/eval_gemma4_12b_ollama.yaml")
-    treatment = load_config("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml")
+    baseline = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama.yaml")
+    treatment = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml")
     treatment = copy.deepcopy(treatment)
     treatment["craft"]["oracle_n"] = 5
 
@@ -33,8 +37,8 @@ def test_parity_validation_fails_on_oracle_n_mismatch():
 
 
 def test_parity_validation_fails_on_turn_mismatch():
-    baseline = load_config("configs/craft/eval_gemma4_12b_ollama.yaml")
-    treatment = load_config("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml")
+    baseline = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama.yaml")
+    treatment = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml")
     treatment = copy.deepcopy(treatment)
     treatment["run"]["turns"] = 20
 
@@ -52,6 +56,7 @@ def test_parity_validation_cli_writes_json_and_returns_nonzero(tmp_path):
         "configs/craft/eval_gemma4_12b_ollama.yaml",
         "--treatment",
         "configs/craft/official_baseline_gemma4_12b_ollama.yaml",
+        "--skip-runtime-asset-validation",
         "--json-output",
         str(output),
     ]) == 1

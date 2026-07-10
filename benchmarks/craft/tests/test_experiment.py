@@ -14,6 +14,7 @@ from benchmarks.craft.experiment import (
     load_experiment,
     run_experiment,
 )
+from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
 
 
 def test_load_experiment_manifest():
@@ -246,6 +247,7 @@ def test_expand_run_specs_merges_nested_run_overrides():
 
 def test_run_experiment_dry_run_creates_run_output(tmp_path):
     root = repo_root()
+    dataset_path = write_minimal_structures_dataset(tmp_path / "structures_dataset_20.json")
     config_path = tmp_path / "official.yaml"
     config_path.write_text(
         yaml.safe_dump({
@@ -258,7 +260,7 @@ def test_run_experiment_dry_run_creates_run_output(tmp_path):
             },
             "craft": {
                 "repo_path": str(root / "external/CRAFT"),
-                "dataset_path": str(root / "external/CRAFT/data/structures_dataset_20.json"),
+                "dataset_path": str(dataset_path),
                 "use_oracle": True,
                 "oracle_n": 1,
                 "builder_tool_use": False,
@@ -312,6 +314,7 @@ def test_run_experiment_dry_run_creates_run_output(tmp_path):
 
 def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkeypatch):
     root = repo_root()
+    dataset_path = write_minimal_structures_dataset(tmp_path / "structures_dataset_20.json")
     config_path = tmp_path / "ollama.yaml"
     config_path.write_text(
         yaml.safe_dump({
@@ -324,7 +327,7 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
             },
             "craft": {
                 "repo_path": str(root / "external/CRAFT"),
-                "dataset_path": str(root / "external/CRAFT/data/structures_dataset_20.json"),
+                "dataset_path": str(dataset_path),
                 "use_oracle": True,
                 "oracle_n": 1,
                 "builder_tool_use": False,
