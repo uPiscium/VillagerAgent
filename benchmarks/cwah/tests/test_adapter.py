@@ -97,6 +97,30 @@ def test_cwah_adapter_exposes_held_object_placement_actions():
     assert putin.parameters["hand_state"] == "holding"
     assert putin.parameters["held_object_id"] == 20
     assert putin.parameters["held_object_name"] == "plate"
+    assert putin.parameters["placement_relation"] == "inside"
+    assert putin.parameters["target_affordance"] == "container"
+    assert putin.parameters["placement_suitability"] == "goal_relation_match"
+    putback = next(action for action in actions if action.action_id == "putback:agent_0:20:31")
+    assert putback.parameters["placement_relation"] == "on"
+    assert putback.parameters["target_affordance"] == "surface"
+    assert putback.parameters["placement_suitability"] == "compatible_surface"
+
+
+def test_cwah_adapter_marks_recipient_placement_as_fallback():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["nodes"].append({"id": 32, "class_name": "bowl", "category": "Objects", "states": [], "properties": ["RECIPIENT"]})
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 20, 32], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    putback = next(action for action in adapter.get_legal_actions("agent_0") if action.action_id == "putback:agent_0:20:32")
+
+    assert putback.parameters["target_affordance"] == "recipient"
+    assert putback.parameters["placement_suitability"] == "fallback_receptacle"
 
 
 def test_cwah_adapter_blocks_extra_grabs_while_holding_object():

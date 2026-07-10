@@ -347,11 +347,12 @@ def _object_interaction_actions(
             held_name = object_names.get(held_id, "object")
             target_name = object_names.get(target_id, "object")
             placement_relevance = _goal_relevance_for_placement(held_id, held_name, target_id, target_name, task_goal_hints)
+            target_metadata = _placement_target_metadata("inside", nodes_by_id.get(target_id, {}), placement_relevance)
             preconditions = _placement_preconditions(agent_id, target_id, close_ids, nodes_by_id.get(target_id, {}))
             actions.append(ActionSpec(
                 action_id=f"putin:{agent_id}:{held_id}:{target_id}",
                 action_type="putin",
-                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **hand_state, **preconditions, **placement_relevance},
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **hand_state, **preconditions, **placement_relevance, **target_metadata},
             ))
         for target_id in surface_ids:
             if target_id == held_id:
@@ -359,13 +360,44 @@ def _object_interaction_actions(
             held_name = object_names.get(held_id, "object")
             target_name = object_names.get(target_id, "object")
             placement_relevance = _goal_relevance_for_placement(held_id, held_name, target_id, target_name, task_goal_hints)
+            target_metadata = _placement_target_metadata("on", nodes_by_id.get(target_id, {}), placement_relevance)
             preconditions = _placement_preconditions(agent_id, target_id, close_ids, nodes_by_id.get(target_id, {}))
             actions.append(ActionSpec(
                 action_id=f"putback:{agent_id}:{held_id}:{target_id}",
                 action_type="putback",
-                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **hand_state, **preconditions, **placement_relevance},
+                parameters={"object_id": held_id, "object_name": held_name, "target_id": target_id, "target_name": target_name, **hand_state, **preconditions, **placement_relevance, **target_metadata},
             ))
     return actions
+
+
+def _placement_target_metadata(relation: str, target_node: dict[str, Any], placement_relevance: dict[str, Any]) -> dict[str, Any]:
+    target_affordance = _target_affordance(target_node)
+    relation_matches = set(placement_relevance.get("goal_relation_matches", ()))
+    if relation in relation_matches:
+        suitability = "goal_relation_match"
+    elif relation == "inside" and target_affordance == "container":
+        suitability = "compatible_container"
+    elif relation == "on" and target_affordance == "surface":
+        suitability = "compatible_surface"
+    else:
+        suitability = "fallback_receptacle"
+    return {
+        "placement_relation": relation,
+        "target_affordance": target_affordance,
+        "placement_suitability": suitability,
+    }
+
+
+def _target_affordance(target_node: dict[str, Any]) -> str:
+    if _has_any_token(target_node, {"CONTAINERS"}):
+        return "container"
+    if _has_any_token(target_node, {"SURFACES"}):
+        return "surface"
+    if _has_any_token(target_node, {"RECIPIENT"}):
+        return "recipient"
+    if _has_any_token(target_node, {"PLACEABLE"}):
+        return "placeable"
+    return "unknown"
 
 
 def _hand_state_metadata(held_object_names: dict[Any, str]) -> dict[str, Any]:

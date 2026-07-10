@@ -274,6 +274,9 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "hand_state": "unknown",
             "held_object_id": None,
             "held_object_name": "",
+            "placement_relation": "",
+            "target_affordance": "",
+            "placement_suitability": "",
             "goal_object_match": True,
             "goal_target_match": False,
             "goal_relation_matches": [],
@@ -288,6 +291,9 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "hand_state": "unknown",
             "held_object_id": None,
             "held_object_name": "",
+            "placement_relation": "",
+            "target_affordance": "",
+            "placement_suitability": "",
             "goal_object_match": True,
             "goal_target_match": True,
             "goal_relation_matches": ["inside"],
@@ -326,6 +332,19 @@ def test_physical_action_rank_prefers_setup_navigation_before_blocked_goal_actio
     )
 
     assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:20"
+
+
+def test_physical_action_rank_deprioritizes_fallback_receptacle_placement():
+    actions = (
+        ActionSpec(
+            action_id="putback:agent_0:plate:bowl",
+            action_type="putback",
+            parameters={"object_name": "plate", "target_name": "bowl", "placement_suitability": "fallback_receptacle", "precondition_status": "executable_now"},
+        ),
+        ActionSpec(action_id="walktowards:agent_0:table", action_type="walktowards", parameters={"object_name": "table", "precondition_status": "executable_now"}),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:table"
 
 
 def test_physical_action_rank_blocks_extra_grab_while_holding():

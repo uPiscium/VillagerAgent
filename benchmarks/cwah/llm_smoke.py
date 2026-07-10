@@ -270,6 +270,9 @@ def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict
             "hand_state": params.get("hand_state", "unknown"),
             "held_object_id": params.get("held_object_id"),
             "held_object_name": params.get("held_object_name", ""),
+            "placement_relation": params.get("placement_relation", ""),
+            "target_affordance": params.get("target_affordance", ""),
+            "placement_suitability": params.get("placement_suitability", ""),
             "goal_object_match": bool(params.get("goal_object_match")),
             "goal_target_match": bool(params.get("goal_target_match")),
             "goal_relation_matches": list(params.get("goal_relation_matches", ())),
@@ -390,6 +393,7 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     goal_target = bool(params.get("goal_target_match"))
     goal_relations = set(params.get("goal_relation_matches", ()))
     precondition_status = str(params.get("precondition_status", "unknown"))
+    placement_suitability = str(params.get("placement_suitability", ""))
     if precondition_status == "setup_required":
         return (20, 0, action.action_id)
     if precondition_status == "blocked":
@@ -400,6 +404,8 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
         return (0, 1, action.action_id)
     if action.action_type in {"putback", "putin"} and goal_object and goal_target:
         return (1, 0, action.action_id)
+    if placement_suitability == "fallback_receptacle":
+        return (12, 0, action.action_id)
     if action.action_type == "grab" and goal_object:
         return (2, 0, action.action_id)
     if action.action_type == "walktowards" and goal_object:
