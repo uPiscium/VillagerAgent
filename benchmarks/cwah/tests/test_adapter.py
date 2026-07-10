@@ -100,11 +100,13 @@ def test_cwah_adapter_exposes_held_object_placement_actions():
     assert putin.parameters["placement_relation"] == "inside"
     assert putin.parameters["target_affordance"] == "container"
     assert putin.parameters["placement_suitability"] == "goal_relation_match"
+    assert putin.parameters["placement_relation_compatibility"] == "goal_relation_match"
     assert putin.parameters["container_suitability"] == "container_open"
     putback = next(action for action in actions if action.action_id == "putback:agent_0:20:31")
     assert putback.parameters["placement_relation"] == "on"
     assert putback.parameters["target_affordance"] == "surface"
     assert putback.parameters["placement_suitability"] == "compatible_surface"
+    assert putback.parameters["placement_relation_compatibility"] == "goal_relation_unknown"
 
 
 def test_cwah_adapter_marks_recipient_placement_as_fallback():
@@ -181,7 +183,26 @@ def test_cwah_adapter_marks_on_goal_putin_container_as_likely_unsuitable():
     putin = next(action for action in adapter.get_legal_actions("agent_0") if action.action_id == "putin:agent_0:20:30")
 
     assert putin.parameters["goal_relation_matches"] == ("on",)
+    assert putin.parameters["placement_relation_compatibility"] == "goal_relation_mismatch"
     assert putin.parameters["container_suitability"] == "container_likely_unsuitable"
+
+
+def test_cwah_adapter_marks_on_goal_putback_relation_match():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env.goal_spec = {0: {"on_plate_<table> (31)": [1, True, 2]}}
+        env._observations[0]["nodes"].append({"id": 31, "class_name": "table", "category": "Objects", "states": [], "properties": ["SURFACES"]})
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 20, 31], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    putback = next(action for action in adapter.get_legal_actions("agent_0") if action.action_id == "putback:agent_0:20:31")
+
+    assert putback.parameters["goal_relation_matches"] == ("on",)
+    assert putback.parameters["placement_relation_compatibility"] == "goal_relation_match"
 
 
 def test_cwah_adapter_marks_unstated_container_suitability_as_unknown():

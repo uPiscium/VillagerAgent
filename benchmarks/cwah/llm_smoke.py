@@ -286,6 +286,7 @@ def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict
             "held_object_id": params.get("held_object_id"),
             "held_object_name": params.get("held_object_name", ""),
             "placement_relation": params.get("placement_relation", ""),
+            "placement_relation_compatibility": params.get("placement_relation_compatibility", ""),
             "target_affordance": params.get("target_affordance", ""),
             "placement_suitability": params.get("placement_suitability", ""),
             "container_suitability": params.get("container_suitability", ""),
@@ -430,15 +431,18 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     goal_relations = set(params.get("goal_relation_matches", ()))
     precondition_status = str(params.get("precondition_status", "unknown"))
     placement_suitability = str(params.get("placement_suitability", ""))
+    placement_relation_compatibility = str(params.get("placement_relation_compatibility", ""))
     container_suitability = str(params.get("container_suitability", ""))
     if precondition_status == "setup_required":
         return (20, 0, action.action_id)
     if precondition_status == "blocked":
         return (30, 0, action.action_id)
-    if action.action_type == "putin" and ("on" in goal_relations and "inside" not in goal_relations):
+    if action.action_type in {"putin", "putback"} and placement_relation_compatibility == "goal_relation_mismatch":
         return (13, 0, action.action_id)
-    if action.action_type == "putin" and container_suitability == "container_likely_unsuitable":
+    if action.action_type == "putin" and ("on" in goal_relations and "inside" not in goal_relations):
         return (13, 1, action.action_id)
+    if action.action_type == "putin" and container_suitability == "container_likely_unsuitable":
+        return (13, 2, action.action_id)
     if action.action_type == "putback" and "on" in goal_relations:
         return (0, 0, action.action_id)
     if action.action_type == "putin" and "inside" in goal_relations:
