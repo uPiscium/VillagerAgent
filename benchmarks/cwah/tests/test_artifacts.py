@@ -19,6 +19,7 @@ def test_build_summary_counts_actions_and_overrides():
                 "decision": {
                     "policy_override": {"reason": "prefer_physical_after_steps", "action_id": "walktowards:agent_0:20"},
                     "failed_action_recorded": {"action_id": "walktowards:agent_0:20", "error": "EXECUTION_GENERAL: Script is impossible to execute"},
+                    "open_failure_recorded": {"action_id": "open:agent_0:30", "target_id": "30", "error": "AssertionError: Error: Object already open"},
                     "navigation_loop_recorded": {"action_signature": "walktowards:20:", "count": 12, "threshold": 12},
                 },
                 "result": {"succeeded": False, "metrics": {"communication_count": 0}},
@@ -35,6 +36,8 @@ def test_build_summary_counts_actions_and_overrides():
         "failed_action_record_count": 1,
         "failed_action_counts": {"walktowards": 1},
         "failure_reason_counts": {"script_impossible": 1},
+        "open_failure_record_count": 1,
+        "open_failure_reason_counts": {"already_open": 1},
         "navigation_loop_count": 1,
         "result_failure_count": 1,
     }
@@ -64,5 +67,6 @@ def test_write_normalized_artifacts(tmp_path):
     assert metrics_rows[0]["communication_actions"] == "0"
     assert metrics_rows[0]["policy_override_rate"] == "0.0"
     assert metrics_rows[0]["failed_action_records"] == "0"
+    assert metrics_rows[0]["open_failure_records"] == "0"
     assert metrics_rows[0]["navigation_loop_count"] == "0"
     assert metrics_rows[0]["result_failures"] == "0"

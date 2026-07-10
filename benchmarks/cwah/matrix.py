@@ -168,9 +168,11 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
             "episode_steps",
             "policy_overrides",
             "failed_action_records",
+            "open_failure_records",
             "navigation_loop_count",
             "result_failures",
             "failure_reason_counts",
+            "open_failure_reason_counts",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -189,9 +191,11 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
                 "episode_steps": metrics.get("episode_steps"),
                 "policy_overrides": event_counts.get("policy_overrides"),
                 "failed_action_records": diagnostics.get("failed_action_record_count"),
+                "open_failure_records": diagnostics.get("open_failure_record_count"),
                 "navigation_loop_count": diagnostics.get("navigation_loop_count"),
                 "result_failures": diagnostics.get("result_failure_count"),
                 "failure_reason_counts": json.dumps(diagnostics.get("failure_reason_counts", {}), sort_keys=True),
+                "open_failure_reason_counts": json.dumps(diagnostics.get("open_failure_reason_counts", {}), sort_keys=True),
             })
 
 

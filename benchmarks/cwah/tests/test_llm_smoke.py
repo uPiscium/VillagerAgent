@@ -154,6 +154,18 @@ def test_preferred_physical_action_filters_suppressed_navigation_signatures():
     assert action.action_id == "walktowards:agent_0:21"
 
 
+def test_preferred_physical_action_filters_failed_open_targets():
+    legal_actions = (
+        ActionSpec(action_id="open:agent_0:30", action_type="open", parameters={"object_id": 30, "precondition_status": "executable_now"}),
+        ActionSpec(action_id="walktowards:agent_0:20", action_type="walktowards", parameters={"object_id": 20, "goal_object_match": True}),
+    )
+
+    action = preferred_physical_action(legal_actions, blocked_open_target_ids={"30"})
+
+    assert action is not None
+    assert action.action_id == "walktowards:agent_0:20"
+
+
 def test_action_from_decision_avoids_suppressed_navigation_selection():
     legal_actions = (
         ActionSpec(action_id="walktowards:agent_0:20", action_type="walktowards", parameters={"object_id": 20, "goal_object_match": True}),
@@ -174,6 +186,29 @@ def test_action_from_decision_avoids_suppressed_navigation_selection():
         "reason": "prefer_physical_after_steps",
         "action_id": "grab:agent_0:21",
         "action_type": "grab",
+    }
+
+
+def test_action_from_decision_avoids_repeated_failed_open_selection():
+    legal_actions = (
+        ActionSpec(action_id="open:agent_0:30", action_type="open", parameters={"object_id": 30, "precondition_status": "executable_now"}),
+        ActionSpec(action_id="walktowards:agent_0:20", action_type="walktowards", parameters={"object_id": 20, "goal_object_match": True}),
+    )
+    decision = {"action_id": "open:agent_0:30"}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        legal_actions,
+        prefer_physical=True,
+        blocked_open_target_ids={"30"},
+    )
+
+    assert action.action_id == "walktowards:agent_0:20"
+    assert decision["policy_override"] == {
+        "reason": "prefer_physical_after_steps",
+        "action_id": "walktowards:agent_0:20",
+        "action_type": "walktowards",
     }
 
 

@@ -27,10 +27,12 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
                     "event_counts": {"policy_steps": 2, "policy_overrides": 1},
                     "diagnostics": {
                         "failed_action_record_count": 1,
+                        "open_failure_record_count": 1,
                         "navigation_loop_count": 1,
                         "result_failure_count": 1,
                         "failed_action_counts": {"walktowards": 1},
                         "failure_reason_counts": {"script_impossible": 1},
+                        "open_failure_reason_counts": {"already_open": 1},
                         "policy_override_reason_counts": {"prefer_physical_after_steps": 1},
                     },
                 },
@@ -62,10 +64,12 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
     assert aggregate["action_counts"] == {"open": 1, "send_message": 1, "walktowards": 2}
     assert aggregate["policy_override_count"] == 1
     assert aggregate["failed_action_record_count"] == 1
+    assert aggregate["open_failure_record_count"] == 1
     assert aggregate["navigation_loop_count"] == 1
     assert aggregate["result_failure_count"] == 1
     assert aggregate["failed_action_counts"] == {"walktowards": 1}
     assert aggregate["failure_reason_counts"] == {"script_impossible": 1}
+    assert aggregate["open_failure_reason_counts"] == {"already_open": 1}
     assert aggregate["policy_override_reason_counts"] == {"prefer_physical_after_steps": 1}
 
     csv_path = tmp_path / "common.csv"
@@ -80,6 +84,7 @@ def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
     assert csv_rows[0]["policy_override_count"] == "1"
     assert csv_rows[0]["failed_action_counts"] == '{"walktowards": 1}'
     assert csv_rows[0]["failure_reason_counts"] == '{"script_impossible": 1}'
+    assert csv_rows[0]["open_failure_reason_counts"] == '{"already_open": 1}'
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["aggregate"]["runs"] == 2
     assert payload["aggregate"]["failed_runs"] == 1
@@ -120,10 +125,12 @@ def test_summarizes_cwah_normalized_summary(tmp_path):
             "policy_override_count": 0,
             "policy_override_rate": 0.0,
             "failed_action_record_count": 0,
+            "open_failure_record_count": 0,
             "navigation_loop_count": 0,
             "result_failure_count": 0,
             "failed_action_counts": "{}",
             "failure_reason_counts": "{}",
+            "open_failure_reason_counts": "{}",
             "policy_override_reason_counts": "{}",
             "error_type": "",
             "error_message": "",
