@@ -77,6 +77,16 @@ The runner also tracks episode-local navigation signatures for `walktowards` act
 
 The default threshold is conservative (`12`) to avoid replacing navigation loops with excessive invalid interactions. Suppressed navigation counts are written to normalized diagnostics and common reports as `navigation_loop_count`. This remains agent-local and does not use evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
+## Placement Target Suitability
+
+Placement actions now carry agent-facing suitability metadata derived from local target properties and goal-relation matches:
+
+- `placement_relation`: `inside` for `putin`, `on` for `putback`
+- `target_affordance`: `container`, `surface`, `recipient`, `placeable`, or `unknown`
+- `placement_suitability`: `goal_relation_match`, `compatible_container`, `compatible_surface`, or `fallback_receptacle`
+
+The fallback scheduler de-prioritizes `fallback_receptacle` placements when better physical alternatives exist. This is intentionally conservative: it uses only visible object properties/states and sanitized goal hints, and it does not inspect evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
+
 ## 2026-07-04 Comparison
 
 Comparison artifact directory: `/tmp/opencode/cwah-goal-policy-real-20260704`.
@@ -215,3 +225,33 @@ Observed common-report aggregate:
 - Failed action mix: `open=6`, `putback=18`, `putin=4`, `walktowards=3`
 
 Navigation-loop suppression modestly reduced repeated navigation relative to the failure-aware comparison (`walktowards=83` to `75`) while preserving zero runtime failures, but it did not improve success or normalized progress and increased failed action records. The result should be treated as diagnostic hardening rather than a behavioral improvement claim; the next policy step should improve target suitability before replacing repeated navigation with placement/open attempts.
+
+## 2026-07-10 Placement Target Suitability Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-target-suitability-real-20260710`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+- Navigation-loop threshold: `12`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `grab=38`, `open=9`, `putback=39`, `putin=10`, `walktowards=54`
+- Failed action records: `27`
+- Navigation loop suppressions: `2`
+- Failed action mix: `grab=1`, `open=6`, `putback=9`, `putin=10`, `walktowards=1`
+
+Placement target suitability reduced failed action records relative to the navigation-loop comparison (`31` to `27`) and reduced repeated navigation (`walktowards=75` to `54`) while preserving zero runtime failures. It still did not improve task success or normalized progress, and `putin` failures increased, so this remains policy hardening rather than a benchmark-performance claim. The next step should distinguish container suitability more precisely rather than only de-prioritizing fallback surface/receptacle targets.
