@@ -273,6 +273,7 @@ def summarize_action_intents(legal_actions: tuple[ActionSpec, ...]) -> list[dict
             "placement_relation": params.get("placement_relation", ""),
             "target_affordance": params.get("target_affordance", ""),
             "placement_suitability": params.get("placement_suitability", ""),
+            "container_suitability": params.get("container_suitability", ""),
             "goal_object_match": bool(params.get("goal_object_match")),
             "goal_target_match": bool(params.get("goal_target_match")),
             "goal_relation_matches": list(params.get("goal_relation_matches", ())),
@@ -394,10 +395,15 @@ def physical_action_rank(action: ActionSpec) -> tuple[int, int, str]:
     goal_relations = set(params.get("goal_relation_matches", ()))
     precondition_status = str(params.get("precondition_status", "unknown"))
     placement_suitability = str(params.get("placement_suitability", ""))
+    container_suitability = str(params.get("container_suitability", ""))
     if precondition_status == "setup_required":
         return (20, 0, action.action_id)
     if precondition_status == "blocked":
         return (30, 0, action.action_id)
+    if action.action_type == "putin" and ("on" in goal_relations and "inside" not in goal_relations):
+        return (13, 0, action.action_id)
+    if action.action_type == "putin" and container_suitability == "container_likely_unsuitable":
+        return (13, 1, action.action_id)
     if action.action_type == "putback" and "on" in goal_relations:
         return (0, 0, action.action_id)
     if action.action_type == "putin" and "inside" in goal_relations:

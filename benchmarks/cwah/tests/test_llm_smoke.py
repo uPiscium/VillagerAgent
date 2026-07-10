@@ -277,6 +277,7 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "placement_relation": "",
             "target_affordance": "",
             "placement_suitability": "",
+            "container_suitability": "",
             "goal_object_match": True,
             "goal_target_match": False,
             "goal_relation_matches": [],
@@ -294,6 +295,7 @@ def test_summarize_action_intents_describes_task_sequence_actions():
             "placement_relation": "",
             "target_affordance": "",
             "placement_suitability": "",
+            "container_suitability": "",
             "goal_object_match": True,
             "goal_target_match": True,
             "goal_relation_matches": ["inside"],
@@ -395,3 +397,52 @@ def test_physical_action_rank_prefers_open_setup_for_closed_target():
     )
 
     assert min(actions, key=physical_action_rank).action_id == "open:agent_0:dishwasher"
+
+
+def test_physical_action_rank_deprioritizes_putin_for_on_goal():
+    actions = (
+        ActionSpec(
+            action_id="putin:agent_0:plate:dishwasher",
+            action_type="putin",
+            parameters={
+                "object_name": "plate",
+                "target_name": "dishwasher",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "goal_relation_matches": ("on",),
+                "container_suitability": "container_likely_unsuitable",
+                "precondition_status": "executable_now",
+            },
+        ),
+        ActionSpec(
+            action_id="putback:agent_0:plate:table",
+            action_type="putback",
+            parameters={
+                "object_name": "plate",
+                "target_name": "table",
+                "goal_object_match": True,
+                "goal_target_match": False,
+                "precondition_status": "executable_now",
+            },
+        ),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "putback:agent_0:plate:table"
+
+
+def test_physical_action_rank_deprioritizes_unsuitable_putin_container():
+    actions = (
+        ActionSpec(
+            action_id="putin:agent_0:plate:box",
+            action_type="putin",
+            parameters={
+                "object_name": "plate",
+                "target_name": "box",
+                "container_suitability": "container_likely_unsuitable",
+                "precondition_status": "executable_now",
+            },
+        ),
+        ActionSpec(action_id="walktowards:agent_0:plate", action_type="walktowards", parameters={"object_name": "plate", "goal_object_match": True, "precondition_status": "executable_now"}),
+    )
+
+    assert min(actions, key=physical_action_rank).action_id == "walktowards:agent_0:plate"
