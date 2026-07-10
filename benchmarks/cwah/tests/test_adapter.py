@@ -72,6 +72,27 @@ def test_cwah_decision_context_is_agent_facing_and_candidate_backed():
     assert context.remaining_budget.remaining_steps == 250
 
 
+def test_cwah_adapter_marks_room_navigation_as_search_when_goal_object_missing():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env.goal_spec = {0: {"inside_apple_<dishwasher> (30)": [1, True, 2]}}
+        env._observations[0]["nodes"].append({"id": 30, "class_name": "dishwasher", "category": "Objects", "states": ["OPEN"], "properties": ["CONTAINERS"]})
+        env.get_action_space = lambda: {0: [10, 20, 30], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    actions = adapter.get_legal_actions("agent_0")
+    room_walk = next(action for action in actions if action.action_id == "walktowards:agent_0:10")
+    container_walk = next(action for action in actions if action.action_id == "walktowards:agent_0:30")
+
+    assert room_walk.parameters["search_priority"] == "search_goal_object_room"
+    assert room_walk.parameters["search_reason"] == "goal_object_not_visible"
+    assert room_walk.parameters["missing_goal_object"] is True
+    assert container_walk.parameters["search_priority"] == "search_goal_object_receptacle"
+
+
 def test_cwah_adapter_exposes_held_object_placement_actions():
     def env_factory(_config):
         env = mock_cwah_env_factory(_config)
