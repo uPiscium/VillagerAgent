@@ -87,7 +87,13 @@ def _deep_update(target: dict, updates: dict) -> dict:
     return target
 
 
-def load_config(path: str, *, overrides: dict | None = None, require_api_keys: bool = False) -> dict:
+def load_config(
+    path: str,
+    *,
+    overrides: dict | None = None,
+    require_api_keys: bool = False,
+    validate_runtime_assets: bool = True,
+) -> dict:
     root = repo_root()
     config_path = Path(path)
     if not config_path.is_absolute():
@@ -121,11 +127,11 @@ def load_config(path: str, *, overrides: dict | None = None, require_api_keys: b
             else:
                 model_config["api_key_env"] = api_key_env
 
-    validate_config(config)
+    validate_config(config, validate_runtime_assets=validate_runtime_assets)
     return config
 
 
-def validate_config(config: dict) -> None:
+def validate_config(config: dict, *, validate_runtime_assets: bool = True) -> None:
     craft = config.get("craft", {})
     run = config.get("run", {})
     villageragent = config.get("villageragent", {})
@@ -134,9 +140,10 @@ def validate_config(config: dict) -> None:
     if not repo_path.exists():
         raise InvalidConfigError(f"craft.repo_path does not exist: {repo_path}")
 
-    dataset_path = Path(craft.get("dataset_path", ""))
-    if not dataset_path.exists():
-        raise InvalidConfigError(f"craft.dataset_path does not exist: {dataset_path}")
+    if validate_runtime_assets:
+        dataset_path = Path(craft.get("dataset_path", ""))
+        if not dataset_path.exists():
+            raise InvalidConfigError(f"craft.dataset_path does not exist: {dataset_path}")
 
     if run.get("turns", 0) <= 0:
         raise InvalidConfigError("run.turns must be greater than 0.")

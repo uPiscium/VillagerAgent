@@ -15,9 +15,9 @@ ALLOWED_PREFIXES = ("dual_dag",)
 IGNORED_PREFIXES = ("_meta",)
 
 
-def compare_config_files(baseline_path: str, treatment_path: str) -> dict:
-    baseline = load_config(baseline_path)
-    treatment = load_config(treatment_path)
+def compare_config_files(baseline_path: str, treatment_path: str, *, validate_runtime_assets: bool = True) -> dict:
+    baseline = load_config(baseline_path, validate_runtime_assets=validate_runtime_assets)
+    treatment = load_config(treatment_path, validate_runtime_assets=validate_runtime_assets)
     return compare_configs(baseline, treatment)
 
 
@@ -61,12 +61,17 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--baseline", required=True, help="Baseline V config path.")
     parser.add_argument("--treatment", required=True, help="Treatment D config path.")
     parser.add_argument("--json-output", default=None, help="Optional JSON report path.")
+    parser.add_argument("--skip-runtime-asset-validation", action="store_true", help="Validate config parity without requiring local unmanaged CRAFT runtime assets.")
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
-    report = compare_config_files(args.baseline, args.treatment)
+    report = compare_config_files(
+        args.baseline,
+        args.treatment,
+        validate_runtime_assets=not args.skip_runtime_asset_validation,
+    )
     if args.json_output:
         output = _resolve_path(args.json_output)
         output.parent.mkdir(parents=True, exist_ok=True)
