@@ -99,8 +99,9 @@ Placement actions now carry agent-facing suitability metadata derived from local
 - `placement_relation`: `inside` for `putin`, `on` for `putback`
 - `target_affordance`: `container`, `surface`, `recipient`, `placeable`, or `unknown`
 - `placement_suitability`: `goal_relation_match`, `compatible_container`, `compatible_surface`, or `fallback_receptacle`
+- `container_suitability`: `container_open`, `container_closed_needs_open`, `container_unknown`, or `container_likely_unsuitable` for `putin` targets
 
-The fallback scheduler de-prioritizes `fallback_receptacle` placements when better physical alternatives exist. This is intentionally conservative: it uses only visible object properties/states and sanitized goal hints, and it does not inspect evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
+The fallback scheduler de-prioritizes `fallback_receptacle` placements when better physical alternatives exist. For `putin`, it also de-prioritizes containers that locally look unsuitable, including an `on` goal relation for the same object/target. This is intentionally conservative: it uses only visible object properties/states and sanitized goal hints, and it does not inspect evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
 ## 2026-07-04 Comparison
 
@@ -301,3 +302,34 @@ Observed common-report aggregate:
 - Failure reason counts: `script_impossible=23`, `not_found_object=4`
 
 This run validates diagnostics propagation rather than a policy change. The new failure reason counts show most observed failures remain generic VirtualHome script impossibility, with a smaller number of missing-object failures. The next policy work should use these reason counts to target container suitability and repeated-open handling.
+
+## 2026-07-10 Container-Suitability Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-container-suitability-real-20260710`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+- Navigation-loop threshold: `12`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `close=1`, `grab=27`, `open=16`, `putback=18`, `putin=8`, `walktowards=80`
+- Failed action records: `18`
+- Navigation loop suppressions: `2`
+- Failed action mix: `grab=1`, `open=8`, `putback=3`, `putin=6`
+- Failure reason counts: `script_impossible=14`, `not_found_object=4`
+
+Container suitability reduced failed action records relative to the failure-diagnostics comparison (`27` to `18`) while preserving zero runtime failures. It did not improve task success or normalized progress, so this remains policy hardening rather than a benchmark-performance claim. The next policy work should focus on repeated-open suppression and relation-aware placement selection.

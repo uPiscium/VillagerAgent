@@ -385,6 +385,7 @@ def _placement_target_metadata(relation: str, target_node: dict[str, Any], place
         "placement_relation": relation,
         "target_affordance": target_affordance,
         "placement_suitability": suitability,
+        "container_suitability": _container_suitability(relation, target_node, target_affordance, relation_matches),
     }
 
 
@@ -398,6 +399,20 @@ def _target_affordance(target_node: dict[str, Any]) -> str:
     if _has_any_token(target_node, {"PLACEABLE"}):
         return "placeable"
     return "unknown"
+
+
+def _container_suitability(relation: str, target_node: dict[str, Any], target_affordance: str, relation_matches: set[str]) -> str:
+    if relation != "inside":
+        return ""
+    if "on" in relation_matches and "inside" not in relation_matches:
+        return "container_likely_unsuitable"
+    if target_affordance != "container":
+        return "container_likely_unsuitable"
+    if _has_any_token(target_node, {"OPEN"}):
+        return "container_open"
+    if _has_any_token(target_node, {"CLOSED"}) or _has_any_token(target_node, {"CAN_OPEN", "OPENABLE"}):
+        return "container_closed_needs_open"
+    return "container_unknown"
 
 
 def _hand_state_metadata(held_object_names: dict[Any, str]) -> dict[str, Any]:
