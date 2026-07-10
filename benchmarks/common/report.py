@@ -28,6 +28,7 @@ REPORT_FIELDS = [
     "navigation_loop_count",
     "result_failure_count",
     "failed_action_counts",
+    "failure_reason_counts",
     "policy_override_reason_counts",
     "error_type",
     "error_message",
@@ -98,6 +99,7 @@ def summarize_cwah_matrix(path: Path) -> list[dict[str, Any]]:
             "navigation_loop_count": int(diagnostics.get("navigation_loop_count") or 0),
             "result_failure_count": int(diagnostics.get("result_failure_count") or 0),
             "failed_action_counts": _json_counts(diagnostics.get("failed_action_counts", {}) if isinstance(diagnostics.get("failed_action_counts"), dict) else {}),
+            "failure_reason_counts": _json_counts(diagnostics.get("failure_reason_counts", {}) if isinstance(diagnostics.get("failure_reason_counts"), dict) else {}),
             "policy_override_reason_counts": _json_counts(diagnostics.get("policy_override_reason_counts", {}) if isinstance(diagnostics.get("policy_override_reason_counts"), dict) else {}),
         })
         rows.append(row)
@@ -134,6 +136,7 @@ def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None)
         "navigation_loop_count": int(diagnostics.get("navigation_loop_count") or 0),
         "result_failure_count": int(diagnostics.get("result_failure_count") or 0),
         "failed_action_counts": _json_counts(diagnostics.get("failed_action_counts", {}) if isinstance(diagnostics.get("failed_action_counts"), dict) else {}),
+        "failure_reason_counts": _json_counts(diagnostics.get("failure_reason_counts", {}) if isinstance(diagnostics.get("failure_reason_counts"), dict) else {}),
         "policy_override_reason_counts": _json_counts(diagnostics.get("policy_override_reason_counts", {}) if isinstance(diagnostics.get("policy_override_reason_counts"), dict) else {}),
     })
     return row
@@ -174,6 +177,7 @@ def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
         "navigation_loop_count": 0,
         "result_failure_count": 0,
         "failed_action_counts": _json_counts({}),
+        "failure_reason_counts": _json_counts({}),
         "policy_override_reason_counts": _json_counts({}),
         "error_type": row.get("error_type", ""),
         "error_message": row.get("error_message", ""),
@@ -188,6 +192,7 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     step_values = [_as_float(row.get("mean_steps")) for row in rows]
     action_counts = _aggregate_action_counts(rows)
     failed_action_counts = _aggregate_json_count_field(rows, "failed_action_counts")
+    failure_reason_counts = _aggregate_json_count_field(rows, "failure_reason_counts")
     policy_override_reason_counts = _aggregate_json_count_field(rows, "policy_override_reason_counts")
     return {
         "runs": len(rows),
@@ -205,6 +210,7 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "navigation_loop_count": sum(int(row.get("navigation_loop_count") or 0) for row in rows),
         "result_failure_count": sum(int(row.get("result_failure_count") or 0) for row in rows),
         "failed_action_counts": failed_action_counts,
+        "failure_reason_counts": failure_reason_counts,
         "policy_override_reason_counts": policy_override_reason_counts,
     }
 

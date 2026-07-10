@@ -18,7 +18,7 @@ def test_build_summary_counts_actions_and_overrides():
                 "event": "policy_step",
                 "decision": {
                     "policy_override": {"reason": "prefer_physical_after_steps", "action_id": "walktowards:agent_0:20"},
-                    "failed_action_recorded": {"action_id": "walktowards:agent_0:20", "error": "execution_failed"},
+                    "failed_action_recorded": {"action_id": "walktowards:agent_0:20", "error": "EXECUTION_GENERAL: Script is impossible to execute"},
                     "navigation_loop_recorded": {"action_signature": "walktowards:20:", "count": 12, "threshold": 12},
                 },
                 "result": {"succeeded": False, "metrics": {"communication_count": 0}},
@@ -34,6 +34,7 @@ def test_build_summary_counts_actions_and_overrides():
         "policy_override_reason_counts": {"prefer_physical_after_steps": 1},
         "failed_action_record_count": 1,
         "failed_action_counts": {"walktowards": 1},
+        "failure_reason_counts": {"script_impossible": 1},
         "navigation_loop_count": 1,
         "result_failure_count": 1,
     }

@@ -1,4 +1,4 @@
-from benchmarks.common.actions import InformationActionSpec
+from benchmarks.common.actions import ActionSpec, InformationActionSpec
 from benchmarks.cwah.adapter import CWAHConfig, CWAHSymbolicAdapter
 from benchmarks.cwah.mock_env import mock_cwah_env_factory
 
@@ -193,6 +193,29 @@ def test_cwah_adapter_does_not_offer_open_for_already_open_object():
 
     assert "open:agent_0:30" not in action_ids
     assert "close:agent_0:30" in action_ids
+
+
+def test_cwah_adapter_extracts_failure_message_from_step_info():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+
+        def failed_step(_action_dict):
+            env.steps += 1
+            return env.get_observations(), 0.0, False, {
+                "failed_exec": True,
+                "details": {"0": {"message": "PROCESS PUT: Not found object: sink"}},
+            }, [None, None]
+
+        env.step = failed_step
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    result = adapter.execute_action("agent_0", ActionSpec(action_id="grab:agent_0:20", action_type="grab", parameters={"object_id": 20, "object_name": "plate"}))
+
+    assert result.succeeded is False
+    assert result.error == "PROCESS PUT: Not found object: sink"
 
 
 def test_cwah_adapter_tracks_progress_and_final_metrics():
