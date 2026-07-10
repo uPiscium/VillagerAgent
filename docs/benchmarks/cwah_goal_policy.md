@@ -71,6 +71,8 @@ The runner also keeps episode-local failed action history for physical actions:
 
 When the fallback scheduler chooses a physical action, it filters actions matching either the failed id or failed signature. The LLM prompt also receives compact recent failed ids and signatures. This history is not persisted across runs and does not use evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
+For failed `open` actions, the runner also tracks episode-local target ids. The fallback scheduler filters repeated `open` attempts for the same target, the LLM prompt receives compact recent failed open target ids, and normalized artifacts record `open_failure_record_count` plus `open_failure_reason_counts`. This remains agent-local and uses only the attempted action parameters and the returned execution result.
+
 ## Failure-Message Diagnostics
 
 C-WAH normalized artifacts, matrix outputs, and common reports also classify execution failure messages into `failure_reason_counts`. Current categories include:
@@ -333,3 +335,36 @@ Observed common-report aggregate:
 - Failure reason counts: `script_impossible=14`, `not_found_object=4`
 
 Container suitability reduced failed action records relative to the failure-diagnostics comparison (`27` to `18`) while preserving zero runtime failures. It did not improve task success or normalized progress, so this remains policy hardening rather than a benchmark-performance claim. The next policy work should focus on repeated-open suppression and relation-aware placement selection.
+
+## 2026-07-10 Repeated-Open Suppression Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-repeated-open-real-20260710`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+- Navigation-loop threshold: `12`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `close=1`, `grab=25`, `open=21`, `putback=24`, `putin=9`, `walktowards=70`
+- Failed action records: `38`
+- Open failure records: `16`
+- Navigation loop suppressions: `3`
+- Failed action mix: `grab=1`, `open=16`, `putback=9`, `putin=8`, `walktowards=4`
+- Failure reason counts: `script_impossible=33`, `not_found_object=4`, `not_found_source_object=1`
+- Open failure reason counts: `execution_failed=16`
+
+Repeated-open suppression adds explicit tracking and report diagnostics for failed open targets, but this bounded run did not improve task success, normalized progress, or failed-action counts relative to container suitability. Treat this as observability and suppression plumbing only; the higher open failure count suggests the next policy iteration should improve open-target readiness before making benchmark-performance claims.

@@ -50,6 +50,7 @@ def main() -> None:
     events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
     blocked_action_ids: set[str] = set()
     failed_action_signatures: set[str] = set()
+    failed_open_target_ids: set[str] = set()
     suppressed_action_signatures: set[str] = set()
     navigation_signature_counts: dict[str, int] = {}
 
@@ -68,6 +69,7 @@ def main() -> None:
                 context=context,
                 blocked_action_ids=tuple(sorted(blocked_action_ids)),
                 failed_action_signatures=tuple(sorted(failed_action_signatures)),
+                failed_open_target_ids=tuple(sorted(failed_open_target_ids)),
                 suppressed_action_signatures=tuple(sorted(suppressed_action_signatures)),
             )
             prefer_physical = args.prefer_physical_after_steps >= 0 and context.step >= args.prefer_physical_after_steps
@@ -79,6 +81,7 @@ def main() -> None:
                 prefer_physical=prefer_physical,
                 blocked_action_ids=blocked_action_ids,
                 blocked_action_signatures=blocked_action_signatures,
+                blocked_open_target_ids=failed_open_target_ids,
             )
             if action.action_type == "send_message":
                 result = adapter.execute_information_action(agent_id, action)
@@ -94,6 +97,15 @@ def main() -> None:
                     "action_signature": signature,
                     "error": result.error or "execution_failed",
                 }
+                if action.action_type == "open":
+                    target_id = str(action.parameters.get("object_id", ""))
+                    if target_id:
+                        failed_open_target_ids.add(target_id)
+                    decision["open_failure_recorded"] = {
+                        "action_id": action.action_id,
+                        "target_id": target_id,
+                        "error": result.error or "execution_failed",
+                    }
             navigation_signature = action_navigation_signature(action)
             if navigation_signature and args.navigation_loop_threshold > 0:
                 navigation_signature_counts[navigation_signature] = navigation_signature_counts.get(navigation_signature, 0) + 1
@@ -140,6 +152,7 @@ def decide_with_llm(
     context,
     blocked_action_ids: tuple[str, ...] = (),
     failed_action_signatures: tuple[str, ...] = (),
+    failed_open_target_ids: tuple[str, ...] = (),
     suppressed_action_signatures: tuple[str, ...] = (),
 ) -> dict:
     prompt = {
@@ -149,6 +162,7 @@ def decide_with_llm(
         "candidate_action_intents": summarize_action_intents(context.legal_actions),
         "recent_failed_action_ids": list(blocked_action_ids)[-10:],
         "recent_failed_action_signatures": list(failed_action_signatures)[-10:],
+        "recent_failed_open_target_ids": list(failed_open_target_ids)[-10:],
         "recent_suppressed_action_signatures": list(suppressed_action_signatures)[-10:],
         "legal_actions": [
             {"action_id": action.action_id, "action_type": action.action_type, "parameters": action.parameters}
@@ -160,7 +174,8 @@ def decide_with_llm(
             "held objects into visible containers or onto visible surfaces. Use send_message only to share "
             "useful new information. Prefer candidate actions with precondition_status executable_now. "
             "If a goal action is setup_required, choose its setup_action_id first when that setup action is legal. "
-            "Do not choose recent_failed_action_ids, recent_failed_action_signatures, or "
+            "Do not choose recent_failed_action_ids, recent_failed_action_signatures, "
+            "recent_failed_open_target_ids, or "
             "recent_suppressed_action_signatures unless no alternative exists. "
             "Return compact JSON only: "
             "{\"action_id\": \"...\", \"rationale\": \"...\", \"message\": \"...\"}. "
@@ -289,13 +304,16 @@ def action_from_decision(
     prefer_physical: bool = False,
     blocked_action_ids: set[str] | frozenset[str] | None = None,
     blocked_action_signatures: set[str] | frozenset[str] | None = None,
+    blocked_open_target_ids: set[str] | frozenset[str] | None = None,
 ) -> ActionSpec:
     blocked_action_ids = blocked_action_ids or set()
     blocked_action_signatures = blocked_action_signatures or set()
+    blocked_open_target_ids = blocked_open_target_ids or set()
     action_by_id = {action.action_id: action for action in legal_actions}
     selected = action_by_id.get(str(decision.get("action_id", "")))
     selected_signature = action_failure_signature(selected) if selected is not None else ""
     selected_is_blocked = selected is not None and (selected.action_id in blocked_action_ids or selected_signature in blocked_action_signatures)
+    selected_open_is_blocked = _open_target_id(selected) in blocked_open_target_ids
     selected_needs_setup = selected is not None and selected.parameters.get("precondition_status") == "setup_required"
     if selected_is_blocked:
         decision["policy_override"] = {
@@ -303,22 +321,29 @@ def action_from_decision(
             "blocked_action_id": selected.action_id,
             "blocked_action_signature": selected_signature,
         }
+    if selected_open_is_blocked:
+        decision["policy_override"] = {
+            "reason": "avoid_repeated_failed_open",
+            "blocked_action_id": selected.action_id,
+            "blocked_open_target_id": _open_target_id(selected),
+        }
     if selected_needs_setup:
         decision["policy_override"] = {
             "reason": "precondition_setup_required",
             "blocked_action_id": selected.action_id,
             "setup_action_id": selected.parameters.get("setup_action_id", ""),
         }
-    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked or selected_needs_setup):
+    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked or selected_open_is_blocked or selected_needs_setup):
         physical = preferred_physical_action(
             legal_actions,
             blocked_action_ids=blocked_action_ids,
             blocked_action_signatures=blocked_action_signatures,
+            blocked_open_target_ids=blocked_open_target_ids,
         )
         if physical is not None and (selected is None or physical.action_id != selected.action_id):
             decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
             return physical
-    if selected is not None and not selected_is_blocked:
+    if selected is not None and not selected_is_blocked and not selected_open_is_blocked:
         if selected.action_type == "send_message":
             return InformationActionSpec(
                 action_id=selected.action_id,
@@ -335,6 +360,7 @@ def action_from_decision(
                 legal_actions,
                 blocked_action_ids=blocked_action_ids,
                 blocked_action_signatures=blocked_action_signatures,
+                blocked_open_target_ids=blocked_open_target_ids,
             )
             if physical is not None:
                 decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
@@ -360,17 +386,26 @@ def preferred_physical_action(
     *,
     blocked_action_ids: set[str] | frozenset[str] | None = None,
     blocked_action_signatures: set[str] | frozenset[str] | None = None,
+    blocked_open_target_ids: set[str] | frozenset[str] | None = None,
 ) -> ActionSpec | None:
     blocked_action_ids = blocked_action_ids or set()
     blocked_action_signatures = blocked_action_signatures or set()
+    blocked_open_target_ids = blocked_open_target_ids or set()
     physical = [
         action
         for action in legal_actions
         if action.action_type not in {"send_message", "wait"}
         and action.action_id not in blocked_action_ids
         and action_failure_signature(action) not in blocked_action_signatures
+        and _open_target_id(action) not in blocked_open_target_ids
     ]
     return min(physical, key=physical_action_rank, default=None)
+
+
+def _open_target_id(action: ActionSpec | None) -> str:
+    if action is None or action.action_type != "open":
+        return ""
+    return str(action.parameters.get("object_id", ""))
 
 
 def action_failure_signature(action: ActionSpec | None) -> str:
