@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from benchmarks.cwah.failure_diagnostics import failure_reason_counts_from_process_output, merge_count_dicts
+
 
 @dataclass(frozen=True)
 class MatrixRun:
@@ -124,6 +126,17 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
         result["action_counts"] = summary.get("action_counts", {})
         result["event_counts"] = summary.get("event_counts", {})
         result["diagnostics"] = summary.get("diagnostics", {})
+    output_failure_counts = failure_reason_counts_from_process_output("\n".join([completed.stdout, completed.stderr]))
+    if output_failure_counts:
+        diagnostics = result.get("diagnostics", {}) if isinstance(result.get("diagnostics"), dict) else {}
+        existing_failure_counts = diagnostics.get("failure_reason_counts", {}) if isinstance(diagnostics.get("failure_reason_counts"), dict) else {}
+        if any(reason != "execution_failed" for reason in output_failure_counts):
+            existing_failure_counts = {reason: count for reason, count in existing_failure_counts.items() if reason != "execution_failed"}
+        diagnostics["failure_reason_counts"] = merge_count_dicts(
+            existing_failure_counts,
+            output_failure_counts,
+        )
+        result["diagnostics"] = diagnostics
     return result
 
 
@@ -157,6 +170,7 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
             "failed_action_records",
             "navigation_loop_count",
             "result_failures",
+            "failure_reason_counts",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -177,6 +191,7 @@ def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> 
                 "failed_action_records": diagnostics.get("failed_action_record_count"),
                 "navigation_loop_count": diagnostics.get("navigation_loop_count"),
                 "result_failures": diagnostics.get("result_failure_count"),
+                "failure_reason_counts": json.dumps(diagnostics.get("failure_reason_counts", {}), sort_keys=True),
             })
 
 

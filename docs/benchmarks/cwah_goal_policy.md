@@ -71,6 +71,21 @@ The runner also keeps episode-local failed action history for physical actions:
 
 When the fallback scheduler chooses a physical action, it filters actions matching either the failed id or failed signature. The LLM prompt also receives compact recent failed ids and signatures. This history is not persisted across runs and does not use evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
+## Failure-Message Diagnostics
+
+C-WAH normalized artifacts, matrix outputs, and common reports also classify execution failure messages into `failure_reason_counts`. Current categories include:
+
+- `not_found_source_object`
+- `not_found_object`
+- `already_open`
+- `script_impossible`
+- `general_execution_failure`
+- `execution_failed`
+- `debugger_abort`
+- `unknown`
+
+The classifier uses recorded step errors and CoELA/VirtualHome process output when available. These diagnostics are report-facing only; they are not added to agent contexts and do not expose evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
+
 ## Navigation-Loop Suppression
 
 The runner also tracks episode-local navigation signatures for `walktowards` actions. A navigation signature is derived from agent-facing action parameters as `walktowards:object_id:`. After the same signature is selected at least `navigation_loop_threshold` times, the fallback scheduler suppresses that signature for the rest of the episode.
@@ -255,3 +270,34 @@ Observed common-report aggregate:
 - Failed action mix: `grab=1`, `open=6`, `putback=9`, `putin=10`, `walktowards=1`
 
 Placement target suitability reduced failed action records relative to the navigation-loop comparison (`31` to `27`) and reduced repeated navigation (`walktowards=75` to `54`) while preserving zero runtime failures. It still did not improve task success or normalized progress, and `putin` failures increased, so this remains policy hardening rather than a benchmark-performance claim. The next step should distinguish container suitability more precisely rather than only de-prioritizing fallback surface/receptacle targets.
+
+## 2026-07-10 Failure-Message Diagnostics Comparison
+
+Comparison artifact directory: `/tmp/opencode/cwah-failure-diagnostics-real-20260710-fix`.
+
+Configuration matched the previous bounded comparisons:
+
+- Tasks: `0,1,2`
+- Seeds: `0,1`
+- Step budget: `25`
+- Full episode mode: enabled
+- Physical-action preference: from step `0`
+- Navigation-loop threshold: `12`
+
+Observed common-report aggregate:
+
+- Runs: `6`
+- Runtime failed runs: `0`
+- Task successes: `0`
+- Success rate: `0.0`
+- Mean normalized progress: `0.5920745920745921`
+- Mean steps: `25.0`
+- Physical actions: `150`
+- Communication actions: `0`
+- Action mix: `grab=34`, `open=11`, `putback=28`, `putin=8`, `walktowards=69`
+- Failed action records: `27`
+- Navigation loop suppressions: `2`
+- Failed action mix: `grab=1`, `open=9`, `putback=3`, `putin=7`, `walktowards=7`
+- Failure reason counts: `script_impossible=23`, `not_found_object=4`
+
+This run validates diagnostics propagation rather than a policy change. The new failure reason counts show most observed failures remain generic VirtualHome script impossibility, with a smaller number of missing-object failures. The next policy work should use these reason counts to target container suitability and repeated-open handling.

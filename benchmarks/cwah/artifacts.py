@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from benchmarks.cwah.failure_diagnostics import failure_reason_counts_from_messages
+
 
 def write_normalized_artifacts(*, artifact_dir: Path, run_config: dict[str, Any], events: list[dict[str, Any]], metrics: dict[str, Any]) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -20,6 +22,7 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
     override_count = 0
     override_reason_counts: dict[str, int] = {}
     failed_action_counts: dict[str, int] = {}
+    failure_messages: list[str] = []
     failed_action_record_count = 0
     navigation_loop_count = 0
     result_failure_count = 0
@@ -33,16 +36,20 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
             reason = str(policy_override.get("reason", "unknown"))
             override_reason_counts[reason] = override_reason_counts.get(reason, 0) + 1
         failed_record = decision.get("failed_action_recorded") if isinstance(decision.get("failed_action_recorded"), dict) else {}
+        has_failed_record = bool(failed_record)
         if failed_record:
             failed_action_record_count += 1
             failed_action_type = _action_type_from_id(str(failed_record.get("action_id", "")))
             failed_action_counts[failed_action_type] = failed_action_counts.get(failed_action_type, 0) + 1
+            failure_messages.append(str(failed_record.get("error", "")))
         navigation_loop = decision.get("navigation_loop_recorded") if isinstance(decision.get("navigation_loop_recorded"), dict) else {}
         if navigation_loop:
             navigation_loop_count += 1
         result = event.get("result", {}) if isinstance(event.get("result"), dict) else {}
         if result.get("succeeded") is False or result.get("error"):
             result_failure_count += 1
+            if not has_failed_record:
+                failure_messages.append(str(result.get("error", "")))
     return {
         "schema_version": 1,
         "benchmark": "cwah",
@@ -58,6 +65,7 @@ def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], m
             "policy_override_reason_counts": dict(sorted(override_reason_counts.items())),
             "failed_action_record_count": failed_action_record_count,
             "failed_action_counts": dict(sorted(failed_action_counts.items())),
+            "failure_reason_counts": failure_reason_counts_from_messages(failure_messages),
             "navigation_loop_count": navigation_loop_count,
             "result_failure_count": result_failure_count,
         },

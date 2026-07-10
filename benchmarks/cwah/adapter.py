@@ -217,7 +217,7 @@ class CWAHSymbolicAdapter:
             succeeded=not bool(info.get("failed_exec", False)),
             observations=tuple(record.observation_id for agent_id in self.agent_ids() for record in self.get_observation(agent_id)),
             metrics={"communication_count": sum(1 for message in messages or [] if message is not None)},
-            error=str(info.get("error", "")) or None,
+            error=_error_from_info(info),
         )
 
 
@@ -614,6 +614,28 @@ def _unpack_step_result(result: Any) -> tuple[Any, Any, bool, dict[str, Any], li
         observations, reward, done, info = result
         return observations, reward, bool(done), info or {}, list((info or {}).get("messages", []) or [])
     raise ValueError(f"Unsupported C-WAH step result shape: {type(result)!r}")
+
+
+def _error_from_info(info: dict[str, Any]) -> str | None:
+    explicit_error = str(info.get("error", ""))
+    if explicit_error:
+        return explicit_error
+    if not info.get("failed_exec"):
+        return None
+    messages = list(_message_values(info))
+    return " | ".join(messages) if messages else "execution_failed"
+
+
+def _message_values(value: Any):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"message", "error"} and item:
+                yield str(item)
+            else:
+                yield from _message_values(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            yield from _message_values(item)
 
 
 def _progress_from_info(info: dict[str, Any]) -> float | None:
