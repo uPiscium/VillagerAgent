@@ -1,7 +1,9 @@
 import json
+import time
 
 from benchmarks.minecraft.experiment import run_minecraft_experiment
 from benchmarks.minecraft.metrics import build_minecraft_metrics
+from benchmarks.common.report import summarize_inputs
 
 
 def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
@@ -220,3 +222,76 @@ def test_minecraft_metrics_extracts_representative_counts_without_secrets():
     assert metrics["time_to_completion"] == 5.0
     assert metrics["recommendation_adopted_count"] == 1
     assert "api_key" not in json.dumps(metrics)
+
+
+def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def fail_runtime(*args, **kwargs):
+        raise RuntimeError("server unavailable")
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", fail_runtime)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="execute_error",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    output_dir = tmp_path / "result" / "execute_error"
+    assert summary["mode"] == "execute"
+    assert summary["execute_real_environment"] is True
+    assert summary["execute_timeout_seconds"] == 30
+    assert summary["error"] == "server unavailable"
+    assert summary["error_type"] == "RuntimeError"
+    assert summary["timed_out"] is False
+    assert (output_dir / "summary.json").exists()
+    assert (output_dir / "metrics.json").exists()
+    metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["error"] == "server unavailable"
+
+
+def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def slow_runtime(*args, **kwargs):
+        time.sleep(1)
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", slow_runtime)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="execute_timeout",
+        execute=True,
+        execute_timeout_seconds=0.01,
+    )
+
+    output_dir = tmp_path / "result" / "execute_timeout"
+    assert summary["error_type"] == "timeout"
+    assert summary["timed_out"] is True
+    assert "timed out after 0.01 seconds" in summary["error"]
+    assert (output_dir / "action_log.json").exists()
+    persisted = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert persisted["timed_out"] is True
+    common_rows = summarize_inputs([output_dir])
+    assert common_rows[0]["error_type"] == "timeout"
+
+
+def _write_minecraft_config(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps({
+            "task_type": "meta",
+            "task_idx": 0,
+            "agent_num": 1,
+            "task_goal": "Find the village bell",
+            "host": "127.0.0.1",
+            "port": 25565,
+            "task_name": "bounded_execute",
+        }),
+        encoding="utf-8",
+    )
+    return config_path

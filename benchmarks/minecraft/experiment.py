@@ -1,5 +1,6 @@
 import argparse
 import json
+import signal
 import time
 from pathlib import Path
 
@@ -17,6 +18,10 @@ from type_define.graph import Graph, Task
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 
 
+class MinecraftExecuteTimeoutError(TimeoutError):
+    """Raised when a bounded real Minecraft run exceeds its timeout."""
+
+
 def run_minecraft_experiment(
     *,
     config_path: str | Path,
@@ -25,6 +30,7 @@ def run_minecraft_experiment(
     config_index: int = 0,
     enable_dual_dag_task_selection: bool = False,
     execute: bool = False,
+    execute_timeout_seconds: float | None = None,
     command_text: str | None = None,
 ) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
@@ -44,12 +50,23 @@ def run_minecraft_experiment(
     action_log: dict = _fixture_action_log(launch_config)
     score: dict = {}
     error = None
+    error_type = ""
+    timed_out = False
 
     if execute:
         try:
-            _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+            _execute_real_runtime_bounded(
+                launch_config,
+                dual_dag_config=dual_dag_config,
+                timeout_seconds=execute_timeout_seconds,
+            )
+        except MinecraftExecuteTimeoutError as exc:
+            error = str(exc)
+            error_type = "timeout"
+            timed_out = True
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
+            error_type = exc.__class__.__name__
         action_log = _read_json(Path("data/action_log.json"), default={})
         score = _read_json(Path("data/score.json"), default={})
 
@@ -80,6 +97,7 @@ def run_minecraft_experiment(
         "task_idx": launch_config.get("task_idx"),
         "dual_dag_task_selection_enabled": enable_dual_dag_task_selection,
         "execute_real_environment": bool(execute),
+        "execute_timeout_seconds": execute_timeout_seconds,
         "mutates_runtime": False,
         "artifact_summary": artifact.get("summary", {}),
         "recommended_task_id": decision_support.get("recommended_task_id", ""),
@@ -91,6 +109,8 @@ def run_minecraft_experiment(
         "final_score": sanitize_public_value(score),
         "progress": _progress_from_score(score),
         "error": error,
+        "error_type": error_type,
+        "timed_out": timed_out,
     }
     metrics = build_minecraft_metrics(
         summary=summary,
@@ -124,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config-index", type=int, default=0)
     parser.add_argument("--dual-dag-task-selection", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Run the real Minecraft environment")
+    parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     args = parser.parse_args(argv)
 
     summary = run_minecraft_experiment(
@@ -133,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         config_index=args.config_index,
         enable_dual_dag_task_selection=args.dual_dag_task_selection,
         execute=args.execute,
+        execute_timeout_seconds=args.execute_timeout_seconds,
         command_text=_command_text(args),
     )
     print(json.dumps(summary, indent=2))
@@ -173,6 +195,31 @@ def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> None
         document,
         minecraft_dual_dag_config=dual_dag_config,
     )
+
+
+def _execute_real_runtime_bounded(
+    launch_config: dict,
+    *,
+    dual_dag_config: dict,
+    timeout_seconds: float | None,
+) -> None:
+    if timeout_seconds is None or timeout_seconds <= 0:
+        _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+        return
+
+    def _timeout_handler(signum, frame):
+        raise MinecraftExecuteTimeoutError(
+            f"Minecraft execute mode timed out after {timeout_seconds} seconds"
+        )
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph]:
@@ -268,6 +315,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.append("--dual-dag-task-selection")
     if args.execute:
         parts.append("--execute")
+    if args.execute_timeout_seconds is not None:
+        parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
     return " ".join(parts)
 
 
