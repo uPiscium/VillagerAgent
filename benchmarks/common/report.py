@@ -243,7 +243,7 @@ def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = N
         "failure_reason_counts": _json_counts({}),
         "open_failure_reason_counts": _json_counts({}),
         "policy_override_reason_counts": _json_counts({}),
-        "error_type": "runtime_error" if error_message else "",
+        "error_type": summary.get("error_type") or ("runtime_error" if error_message else ""),
         "error_message": error_message,
     })
     return row

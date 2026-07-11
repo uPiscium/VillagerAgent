@@ -21,6 +21,7 @@ def run_minecraft_matrix(
     run_names: list[str] | None = None,
     enable_dual_dag_task_selection: bool = False,
     execute: bool = False,
+    execute_timeout_seconds: float | None = None,
     command_text: str | None = None,
 ) -> dict[str, Any]:
     """Run a CI-safe Minecraft benchmark matrix and write a matrix summary.
@@ -57,6 +58,7 @@ def run_minecraft_matrix(
             config_index=config_index,
             enable_dual_dag_task_selection=enable_dual_dag_task_selection,
             execute=execute,
+            execute_timeout_seconds=execute_timeout_seconds,
             command_text=command_text or _command_text(),
         )
         run_dir = Path(summary["output_dir"])
@@ -69,6 +71,7 @@ def run_minecraft_matrix(
             "run_name": summary.get("run_name", ""),
             "run_dir": str(run_dir),
             "mode": summary.get("mode", ""),
+            "execute_timeout_seconds": summary.get("execute_timeout_seconds"),
             "passed": summary.get("error") is None,
             "task_type": summary.get("task_type", ""),
             "task_idx": summary.get("task_idx"),
@@ -86,6 +89,7 @@ def run_minecraft_matrix(
         "run_output_root": str(run_output_root),
         "run_count": len(results),
         "dual_dag_task_selection_enabled": enable_dual_dag_task_selection,
+        "execute_timeout_seconds": execute_timeout_seconds,
         "aggregate": aggregate_rows(common_rows),
         "runs": results,
     }
@@ -102,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         run_names=_parse_run_names(args.run_names),
         enable_dual_dag_task_selection=args.dual_dag_task_selection,
         execute=args.execute,
+        execute_timeout_seconds=args.execute_timeout_seconds,
         command_text=_command_text(args),
     )
     print(json.dumps(summary, indent=2))
@@ -116,6 +121,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-names", default="", help="Comma-separated run names matching selected config indices")
     parser.add_argument("--dual-dag-task-selection", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Explicitly run the real Minecraft environment")
+    parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     return parser.parse_args(argv)
 
 
@@ -159,6 +165,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.append("--dual-dag-task-selection")
     if args.execute:
         parts.append("--execute")
+    if args.execute_timeout_seconds is not None:
+        parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
     return " ".join(parts)
 
 

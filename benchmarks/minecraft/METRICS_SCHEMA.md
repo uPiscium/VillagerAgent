@@ -35,6 +35,8 @@ Each run directory contains:
 
 All normalized outputs are passed through the Minecraft public sanitizer, which drops underscore-prefixed fields and credential-like keys such as API keys, passwords, secrets, and tokens.
 
+In execute mode, `summary.json` also records bounded-run metadata: `execute_timeout_seconds`, `error_type`, and `timed_out`. These fields are report-facing diagnostics and are not agent-facing context.
+
 Minecraft run directories can be passed to `benchmarks.common.report` when they contain top-level `summary.json` and `metrics.json`. The common report path also reads `action_log.json` when available to derive action-mix and failed-action count fields.
 
 `benchmarks.minecraft.matrix` runs one or more config entries through the same single-run harness and writes `matrix_summary.json` with `benchmark == "minecraft"`, aggregate common-report metrics, and per-run artifact directories under `runs/`. Dry-run mode is the default and does not require Minecraft runtime assets.

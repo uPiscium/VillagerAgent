@@ -43,6 +43,7 @@ def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
         output_dir=tmp_path / "matrix",
         run_names=["bell_run", "chest_run"],
         enable_dual_dag_task_selection=True,
+        execute_timeout_seconds=600,
     )
 
     matrix_dir = tmp_path / "matrix"
@@ -52,10 +53,12 @@ def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
     assert summary["aggregate"]["runs"] == 2
     assert summary["aggregate"]["failed_runs"] == 0
     assert summary["dual_dag_task_selection_enabled"] is True
+    assert summary["execute_timeout_seconds"] == 600
     assert (matrix_dir / "matrix_summary.json").exists()
     assert (matrix_dir / "runs" / "bell_run" / "summary.json").exists()
     assert (matrix_dir / "runs" / "chest_run" / "metrics.json").exists()
     assert summary["runs"][0]["common_report"]["benchmark"] == "minecraft"
+    assert summary["runs"][0]["execute_timeout_seconds"] == 600
     assert summary["runs"][0]["common_report"]["physical_action_count"] == 1
     assert summary["runs"][1]["common_report"]["communication_action_count"] == 1
 
