@@ -8,6 +8,7 @@ Supported inputs:
 - C-WAH normalized run directories containing `summary.json`
 - CRAFT run directories containing `normalized/summary.json` and `normalized/metrics.csv`
 - Minecraft/Villager Agent run directories containing top-level `summary.json` and `metrics.json`
+- Minecraft/Villager Agent matrix directories containing `matrix_summary.json` with `benchmark == "minecraft"`
 
 Example for a C-WAH matrix run:
 
@@ -19,7 +20,7 @@ python -m benchmarks.common.report /tmp/opencode/cwah-real-matrix-20260703 \
 
 The shared schema includes benchmark name, run status, task/seed where available, episode counts, success/progress, step counts, failed-run counts, and action mix. CRAFT-specific report files and artifact schemas are unchanged.
 
-For Minecraft/Villager Agent inputs, common reports read the normalized `summary.json`, `metrics.json`, and optional `action_log.json` produced by `benchmarks.minecraft.experiment`. They map task metadata, task completion rate, progress, action counts, failed action counts, and runtime errors into the shared fields. `talkTo` actions are counted as communication actions; other Minecraft tool actions are counted as physical actions.
+For Minecraft/Villager Agent inputs, common reports read the normalized `summary.json`, `metrics.json`, and optional `action_log.json` produced by `benchmarks.minecraft.experiment`. They also accept matrix summaries from `benchmarks.minecraft.matrix`. They map task metadata, task completion rate, progress, action counts, failed action counts, and runtime errors into the shared fields. `talkTo` actions are counted as communication actions; other Minecraft tool actions are counted as physical actions.
 
 For C-WAH inputs, common reports also include policy diagnostics when available:
 
