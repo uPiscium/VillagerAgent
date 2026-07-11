@@ -34,3 +34,5 @@ Each run directory contains:
 - `mutates_runtime`: always `false` for normalized metric extraction.
 
 All normalized outputs are passed through the Minecraft public sanitizer, which drops underscore-prefixed fields and credential-like keys such as API keys, passwords, secrets, and tokens.
+
+Minecraft run directories can be passed to `benchmarks.common.report` when they contain top-level `summary.json` and `metrics.json`. The common report path also reads `action_log.json` when available to derive action-mix and failed-action count fields.

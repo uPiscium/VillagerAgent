@@ -7,6 +7,7 @@ from benchmarks.common.report import (
     write_csv_report,
     write_json_report,
 )
+from benchmarks.minecraft.experiment import run_minecraft_experiment
 
 
 def test_summarizes_cwah_matrix_and_writes_common_outputs(tmp_path):
@@ -173,5 +174,112 @@ def test_summarizes_existing_craft_run_without_changing_craft_schema(tmp_path):
     assert rows[0]["failed_action_counts"] == "{}"
 
 
+def test_summarizes_minecraft_dry_run_artifacts(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps({
+            "task_type": "meta",
+            "task_idx": 3,
+            "agent_num": 2,
+            "task_goal": "Find the village bell",
+            "host": "127.0.0.1",
+            "port": 25565,
+            "task_name": "minecraft_common_report",
+            "smoke_tasks": [
+                {
+                    "id": "find_bell",
+                    "description": "Find the village bell",
+                    "assigned_agents": ["Alice"],
+                }
+            ],
+            "smoke_action_log": {
+                "Alice": [
+                    {
+                        "action": "navigateTo",
+                        "duration": 1.5,
+                        "result": {"status": False, "message": "path blocked"},
+                    }
+                ],
+                "Bob": [
+                    {
+                        "action": "talkTo",
+                        "duration": 0.5,
+                        "result": {"status": True},
+                    }
+                ],
+            },
+        }),
+        encoding="utf-8",
+    )
+    run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="minecraft_report",
+    )
+
+    rows = summarize_inputs([tmp_path / "result" / "minecraft_report"])
+
+    assert rows == [
+        {
+            "benchmark": "minecraft",
+            "run_name": "minecraft_report",
+            "status": "completed",
+            "task_id": 3,
+            "seed": "",
+            "episodes": 1,
+            "successes": 0,
+            "success_rate": 0.0,
+            "mean_progress": 0.0,
+            "mean_steps": 2.0,
+            "failed_runs": 0,
+            "physical_action_count": 1,
+            "communication_action_count": 1,
+            "action_counts": '{"navigateTo": 1, "talkTo": 1}',
+            "policy_override_count": 0,
+            "policy_override_rate": 0.0,
+            "failed_action_record_count": 1,
+            "open_failure_record_count": 0,
+            "navigation_loop_count": 0,
+            "result_failure_count": 1,
+            "failed_action_counts": '{"navigateTo": 1}',
+            "failure_reason_counts": "{}",
+            "open_failure_reason_counts": "{}",
+            "policy_override_reason_counts": "{}",
+            "error_type": "",
+            "error_message": "",
+        }
+    ]
+
+
+def test_summarizes_minecraft_summary_file_without_craft_fallback(tmp_path):
+    run_minecraft_experiment(
+        config_path=_minecraft_config(tmp_path),
+        output_root=tmp_path / "result",
+        run_name="minecraft_summary_file",
+    )
+
+    rows = summarize_inputs([tmp_path / "result" / "minecraft_summary_file" / "summary.json"])
+
+    assert rows[0]["benchmark"] == "minecraft"
+    assert rows[0]["run_name"] == "minecraft_summary_file"
+
+
 def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _minecraft_config(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps({
+            "task_type": "meta",
+            "task_idx": 0,
+            "agent_num": 1,
+            "task_goal": "Find the village bell",
+            "host": "127.0.0.1",
+            "port": 25565,
+            "task_name": "minecraft_summary_file",
+        }),
+        encoding="utf-8",
+    )
+    return config_path

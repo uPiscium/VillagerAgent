@@ -36,6 +36,8 @@ REPORT_FIELDS = [
     "error_message",
 ]
 
+_MINECRAFT_COMMUNICATION_ACTIONS = {"talkTo"}
+
 
 class CommonReportInputError(ValueError):
     """Raised when benchmark artifacts cannot be summarized."""
@@ -54,9 +56,14 @@ def summarize_path(path: Path) -> list[dict[str, Any]]:
     if path.is_dir():
         matrix_summary = path / "matrix_summary.json"
         normalized_summary = path / "summary.json"
+        minecraft_metrics = path / "metrics.json"
         craft_summary = path / "normalized" / "summary.json"
         if matrix_summary.exists():
             return summarize_cwah_matrix(matrix_summary)
+        if normalized_summary.exists() and minecraft_metrics.exists():
+            summary = _read_json(normalized_summary)
+            if _looks_like_minecraft_summary(summary):
+                return [summarize_minecraft_run(path, summary=summary)]
         if normalized_summary.exists():
             return [summarize_cwah_summary(normalized_summary)]
         if craft_summary.exists():
@@ -67,6 +74,8 @@ def summarize_path(path: Path) -> list[dict[str, Any]]:
         summary = _read_json(path)
         if summary.get("benchmark") == "cwah":
             return [summarize_cwah_summary(path, summary=summary)]
+        if (path.parent / "metrics.json").exists() and _looks_like_minecraft_summary(summary):
+            return [summarize_minecraft_run(path.parent, summary=summary)]
         return [summarize_craft_run(path.parent.parent)]
     raise CommonReportInputError(f"Unsupported benchmark report input: {path}")
 
@@ -193,6 +202,47 @@ def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
     return common
 
 
+def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    summary = summary or _read_json(run_dir / "summary.json")
+    metrics = _read_json(run_dir / "metrics.json")
+    action_log = _read_optional_json(run_dir / "action_log.json")
+    action_counts = _minecraft_action_counts(action_log)
+    failed_action_counts = _minecraft_failed_action_counts(action_log)
+    status = "failed" if summary.get("error") or metrics.get("error") else "completed"
+    task_count = int(metrics.get("task_count") or 0)
+    completed_tasks = int(metrics.get("completed_task_count") or 0)
+    success_rate = _as_float(metrics.get("task_completion_rate")) if task_count else 0.0
+    error_message = str(summary.get("error") or metrics.get("error") or "")
+    row = _base_row(benchmark="minecraft", run_name=str(summary.get("run_name") or metrics.get("run_name") or run_dir.name))
+    row.update({
+        "status": status,
+        "task_id": _minecraft_task_id(summary),
+        "seed": summary.get("seed", ""),
+        "episodes": 1,
+        "successes": completed_tasks,
+        "success_rate": success_rate,
+        "mean_progress": _as_float(metrics.get("progress")),
+        "mean_steps": _as_float(metrics.get("action_count")),
+        "failed_runs": 1 if status != "completed" else 0,
+        "physical_action_count": _minecraft_physical_action_count(action_counts),
+        "communication_action_count": _minecraft_communication_action_count(action_counts),
+        "action_counts": _json_counts(action_counts),
+        "policy_override_count": 0,
+        "policy_override_rate": 0.0,
+        "failed_action_record_count": int(metrics.get("failed_action_count") or 0),
+        "open_failure_record_count": 0,
+        "navigation_loop_count": 0,
+        "result_failure_count": int(metrics.get("failed_action_count") or 0),
+        "failed_action_counts": _json_counts(failed_action_counts),
+        "failure_reason_counts": _json_counts({}),
+        "open_failure_reason_counts": _json_counts({}),
+        "policy_override_reason_counts": _json_counts({}),
+        "error_type": "runtime_error" if error_message else "",
+        "error_message": error_message,
+    })
+    return row
+
+
 def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     episodes = sum(int(row.get("episodes") or 0) for row in rows)
     successes = sum(int(row.get("successes") or 0) for row in rows)
@@ -274,6 +324,70 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise CommonReportInputError(f"Expected JSON object in benchmark report input: {path}")
     return payload
+
+
+def _read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return _read_json(path)
+
+
+def _looks_like_minecraft_summary(summary: dict[str, Any]) -> bool:
+    return summary.get("mode") in {"dry_run", "execute"} and (
+        "artifact_summary" in summary or "execute_real_environment" in summary
+    )
+
+
+def _minecraft_task_id(summary: dict[str, Any]) -> Any:
+    if summary.get("task_idx") is not None:
+        return summary.get("task_idx")
+    return summary.get("selected_task_id") or summary.get("task_name", "")
+
+
+def _minecraft_action_counts(action_log: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in _minecraft_actions(action_log):
+        action_type = str(action.get("action") or "unknown")
+        counts[action_type] = counts.get(action_type, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _minecraft_failed_action_counts(action_log: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for action in _minecraft_actions(action_log):
+        result = action.get("result")
+        if not isinstance(result, dict) or result.get("status") is not False:
+            continue
+        action_type = str(action.get("action") or "unknown")
+        counts[action_type] = counts.get(action_type, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _minecraft_actions(action_log: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(action_log, dict):
+        return []
+    actions = []
+    for entries in action_log.values():
+        if not isinstance(entries, list):
+            continue
+        actions.extend(entry for entry in entries if isinstance(entry, dict))
+    return actions
+
+
+def _minecraft_physical_action_count(action_counts: dict[str, int]) -> int:
+    return sum(
+        count
+        for action_type, count in action_counts.items()
+        if action_type not in _MINECRAFT_COMMUNICATION_ACTIONS
+    )
+
+
+def _minecraft_communication_action_count(action_counts: dict[str, int]) -> int:
+    return sum(
+        count
+        for action_type, count in action_counts.items()
+        if action_type in _MINECRAFT_COMMUNICATION_ACTIONS
+    )
 
 
 def _as_float(value: Any) -> float:
