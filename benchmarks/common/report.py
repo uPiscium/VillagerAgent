@@ -59,6 +59,9 @@ def summarize_path(path: Path) -> list[dict[str, Any]]:
         minecraft_metrics = path / "metrics.json"
         craft_summary = path / "normalized" / "summary.json"
         if matrix_summary.exists():
+            summary = _read_json(matrix_summary)
+            if summary.get("benchmark") == "minecraft":
+                return summarize_minecraft_matrix(matrix_summary, summary=summary)
             return summarize_cwah_matrix(matrix_summary)
         if normalized_summary.exists() and minecraft_metrics.exists():
             summary = _read_json(normalized_summary)
@@ -69,6 +72,9 @@ def summarize_path(path: Path) -> list[dict[str, Any]]:
         if craft_summary.exists():
             return [summarize_craft_run(path)]
     if path.name == "matrix_summary.json":
+        summary = _read_json(path)
+        if summary.get("benchmark") == "minecraft":
+            return summarize_minecraft_matrix(path, summary=summary)
         return summarize_cwah_matrix(path)
     if path.name == "summary.json":
         summary = _read_json(path)
@@ -243,6 +249,22 @@ def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = N
     return row
 
 
+def summarize_minecraft_matrix(path: Path, *, summary: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    summary = summary or _read_json(path)
+    rows = []
+    for run in summary.get("runs", []):
+        if not isinstance(run, dict):
+            continue
+        common_row = run.get("common_report")
+        if isinstance(common_row, dict):
+            rows.append(_report_row_from_mapping(common_row))
+            continue
+        run_dir = run.get("run_dir")
+        if run_dir:
+            rows.append(summarize_minecraft_run(Path(run_dir)))
+    return rows
+
+
 def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     episodes = sum(int(row.get("episodes") or 0) for row in rows)
     successes = sum(int(row.get("successes") or 0) for row in rows)
@@ -314,6 +336,10 @@ def _base_row(*, benchmark: str, run_name: str) -> dict[str, Any]:
         "run_name": run_name,
         "failed_runs": 0,
     }
+
+
+def _report_row_from_mapping(row: dict[str, Any]) -> dict[str, Any]:
+    return {field: row.get(field, "") for field in REPORT_FIELDS}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
