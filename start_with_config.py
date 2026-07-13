@@ -7,7 +7,7 @@ import psutil
 import time
 from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
-from model.ollama_config import make_ollama_llm_config, configure_ollama_agent
+from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
 
 start_time = time.time()
 from pipeline.controller_tiny import GlobalController
@@ -24,7 +24,24 @@ os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None):
     start_time = time.time()
 
-    api_key_list = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"]
+    api_key_list = load_agent_api_key_list()
+    os.makedirs(".cache", exist_ok=True)
+    with open(".cache/meta_setting.json", "w") as f:
+        json.dump({
+            "api_model": api_model,
+            "api_base": api_base,
+            "task_type": task_type,
+            "task_idx": task_idx,
+            "agent_num": agent_num,
+            "dig_needed": dig_needed,
+            "max_task_num": max_task_num,
+            "task_goal": task_goal,
+            "document_file": document_file,
+            "host": host,
+            "port": port,
+            "task_name": task_name,
+            "role": role,
+        }, f, indent=4)
 
     # Agent.base_url = "https://api.deepseek.com/v1"
     # Agent.model = "deepseek-chat"
@@ -99,7 +116,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         else:
             env.agent_register(agent_tool=agent_tool, agent_number=agent_num, name_list=name_list[:agent_num])
 
-    with env.run(fast_api=False):  # 新增加了一个参数，用于控制是否使用fastapi server
+    with env.run(fast_api=True):  # Use the FastAPI bridge; it avoids viewer-only Node dependencies such as canvas.
         # 启动DM
         dm = DataManager(silent=False)
         dm.update_database_init(env.get_init_state())
@@ -194,6 +211,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
 
 
 if __name__ == "__main__":
+    os.makedirs(".cache", exist_ok=True)
     # with open("qwen3_235b_a22b_launch_config_farming.json", "r") as f:
     # with open("/home/yubo/VillagerAgent-Minecraft-multiagent-framework/test_config.json", "r") as f:
     with open("base_agent_multi_test_config.json", "r") as f:
@@ -217,7 +235,7 @@ if __name__ == "__main__":
             os.remove(".cache/heart_beat.cache")
 
 
-        api_key_list = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"]
+        api_key_list = load_agent_api_key_list()
 
         llm_config = make_ollama_llm_config()
 

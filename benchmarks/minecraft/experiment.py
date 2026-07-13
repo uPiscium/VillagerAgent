@@ -207,7 +207,10 @@ def _execute_real_runtime_bounded(
         _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
         return
 
+    timeout_triggered = {"value": False}
+
     def _timeout_handler(signum, frame):
+        timeout_triggered["value"] = True
         raise MinecraftExecuteTimeoutError(
             f"Minecraft execute mode timed out after {timeout_seconds} seconds"
         )
@@ -217,6 +220,15 @@ def _execute_real_runtime_bounded(
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
         _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+    except RuntimeError as exc:
+        # env.run() is a contextmanager that logs and swallows exceptions raised
+        # before its first yield; contextlib then surfaces ``generator didn't
+        # yield``. Preserve the original timeout classification for reports.
+        if timeout_triggered["value"] and str(exc) == "generator didn't yield":
+            raise MinecraftExecuteTimeoutError(
+                f"Minecraft execute mode timed out after {timeout_seconds} seconds"
+            ) from exc
+        raise
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)

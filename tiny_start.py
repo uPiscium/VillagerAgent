@@ -20,8 +20,8 @@ if __name__ == "__main__":
     )
 
     # Set Agent
-    llm_config = make_ollama_llm_config("gemma4:e4b")
-    configure_ollama_agent(Agent, "gemma4:e4b")
+    llm_config = make_ollama_llm_config("gemma4:12b")
+    configure_ollama_agent(Agent, "gemma4:12b")
 
     # more agent tools can be added here you can refer to the agent_tool in doc/api_library.md
     agent_tool = [

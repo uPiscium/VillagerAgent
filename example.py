@@ -15,8 +15,8 @@ if __name__ == "__main__":
         port=40000,
     )
 
-    llm_config = make_ollama_llm_config("gemma4:e4b")
-    configure_ollama_agent(Agent, "gemma4:e4b")
+    llm_config = make_ollama_llm_config("gemma4:12b")
+    configure_ollama_agent(Agent, "gemma4:12b")
 
     agent_tool = [
         Agent.fetchContainerContents,
