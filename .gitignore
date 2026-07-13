@@ -33,7 +33,6 @@ img/*graph.md
 ui/logs/*
 
 result/*
-!result/*.py
 processed_result/*
 Player_*.log
 port_*.txt

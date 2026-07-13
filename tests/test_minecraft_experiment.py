@@ -1,7 +1,7 @@
 import json
 import time
 
-from benchmarks.minecraft.experiment import run_minecraft_experiment
+from benchmarks.minecraft.experiment import MinecraftExecuteTimeoutError, run_minecraft_experiment
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
 
@@ -278,6 +278,33 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert persisted["timed_out"] is True
     common_rows = summarize_inputs([output_dir])
     assert common_rows[0]["error_type"] == "timeout"
+
+
+def test_minecraft_execute_timeout_survives_contextmanager_generator_error(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def contextmanager_swallowed_timeout(*args, **kwargs):
+        try:
+            time.sleep(1)
+        except MinecraftExecuteTimeoutError as exc:
+            raise RuntimeError("generator didn't yield") from exc
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        contextmanager_swallowed_timeout,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="execute_contextmanager_timeout",
+        execute=True,
+        execute_timeout_seconds=0.01,
+    )
+
+    assert summary["error_type"] == "timeout"
+    assert summary["timed_out"] is True
+    assert "timed out after 0.01 seconds" in summary["error"]
 
 
 def _write_minecraft_config(tmp_path):

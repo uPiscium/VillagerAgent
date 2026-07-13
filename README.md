@@ -1,378 +1,210 @@
-# 🏰 VillagerAgent: A Graph-Based Multi-Agent Framework for Coordinating Complex Task Dependencies in Minecraft 🌍
+# VillagerAgent
 
-<img src="img/VillagerBench.png" width="100%" /> 
+VillagerAgent is a Minecraft multi-agent research framework. It runs LLM-driven agents in a Minecraft server, decomposes high-level tasks into graph-structured subtasks, assigns those subtasks to agents, and records normalized benchmark artifacts for analysis.
 
-<!-- <style>
-.showcase-table {
-    width: 100%;
-    border-spacing: 10px;
-    border-collapse: separate;
-}
+Japanese documentation: [README.ja.md](README.ja.md)
 
-.showcase-cell {
-    width: 25%;
-    padding: 10px;
-    background: #f5f5f5;
-    border-radius: 8px;
-    transition: transform 0.2s;
-}
+## Current Status
 
-.showcase-cell:hover {
-    transform: scale(1.02);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-}
+This repository is currently optimized for local or OpenAI-compatible Ollama execution.
 
-.showcase-image {
-    width: 256px;
-    height: 256px;
-    object-fit: cover;
-    border-radius: 4px;
-    margin-bottom: 8px;
-}
+- Default LLM endpoint: `http://localhost:11434/v1`
+- Default model: `gemma4:12b`
+- Dummy API key for Ollama: `ollama`
+- `API_KEY_LIST` is optional for Ollama. If the file is missing, the runtime falls back to `OLLAMA_API_KEY` or `ollama`.
+- Minecraft bridge defaults to the FastAPI path used by `env.run(fast_api=True)`.
+- The verified Minecraft server endpoint in the local environment is `10.12.3.1:40000`.
 
-.showcase-title {
-    font-size: 14px;
-    color: #333;
-    margin-top: 8px;
-    font-weight: 500;
-}
-</style> -->
+The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current default path is local Ollama.
 
-<table class="showcase-table">
-    <tr>
-        <td class="showcase-cell" align="center">
-            <img src="img/fishing.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Fishing</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/build.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Building</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/cart.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Driving</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/conversition.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Talking</sub>
-        </td>
-    </tr>
-    <tr>
-        <td class="showcase-cell" align="center">
-            <img src="img/farm.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Farming</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/feed.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Feeding</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/grow.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Cultivate</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/saddle.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Holding</sub>
-        </td>
-    </tr>
-    <tr>
-        <td class="showcase-cell" align="center">
-            <img src="img/ride.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Riding</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/seed.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Seeding</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/store.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Storing</sub>
-        </td>
-        <td class="showcase-cell" align="center">
-            <img src="img/sleep.png" class="showcase-image" /><br>
-            <sub class="showcase-title">Sleeping</sub>
-        </td>
-    </tr>
-</table>
+## Repository Map
 
+- `start_with_config.py`: main configured runtime entrypoint for VillagerBench runs.
+- `tiny_start.py`: minimal example for manually launching one agent.
+- `env/env.py`: `VillagerBench` environment wrapper, agent registration, bridge launch, judger launch, score/action-log access.
+- `env/minecraft_client.py`: Mineflayer/FastAPI bridge client and Minecraft tool definitions.
+- `pipeline/controller_tiny.py`: main controller currently used by `start_with_config.py`.
+- `pipeline/controller.py`: older/full controller path with extra decomposition logic.
+- `pipeline/task_manager.py`: task decomposition and task graph management.
+- `pipeline/data_manager.py`: environment, agent, history, and experience state management.
+- `pipeline/agent.py`: per-agent prompt, action, and reflection loop.
+- `model/ollama_config.py`: Ollama defaults and API-key fallback logic.
+- `model/init_model.py`: LLM provider routing.
+- `benchmarks/minecraft/experiment.py`: single-run dry-run/execute benchmark harness.
+- `benchmarks/minecraft/matrix.py`: CI-safe dry-run matrix wrapper.
+- `benchmarks/common/report.py`: shared benchmark report generator.
 
-We aim to investigate the interactions between agents within the Minecraft environment and their collaboration with human players. Concurrently, we will explore the capabilities of Large Language Models (LLMs) in task decomposition and cooperation.
+## Detailed Guides
 
-Welcome to VillagerBench, where the blocky world of Minecraft isn't just for fun and games—it's a testing ground for the cutting-edge of multi-agent collaboration! 🤖 Our benchmark suite is designed to push the boundaries of what virtual agents can achieve together, tackling everything from construction projects 🏗️ to culinary quests 🍳 and escape room puzzles 🔐.
+- [Minimal startup](docs/minimal_run.md): Ollama defaults, Minecraft smoke, and bounded execute.
+- [Task graph structure](docs/graph_structure.md): `Task`, `Graph`, statuses, dependencies, and artifacts.
+- [Configuration](docs/configuration.md): Minecraft JSON fields, LLM defaults, API key fallback, and benchmark CLI options.
+- [Execution flow](docs/execution_flow.md): end-to-end runtime flow from config load to artifacts.
 
-Customize your private tasks in your Minecraft server with our VillagerAgent multi-agent framework, designed for personalized gameplay experiences! 🌟 
-点击此处查看 [中文版 README](READMEzh.md)。
-クリックして [README](README.md) をご覧ください。
-<p align="center">
-    <a href='https://arxiv.org/abs/2406.05720'>
-      <img src='https://img.shields.io/badge/Paper-PDF-green?style=for-the-badge&logo=arXiv&logoColor=green' alt='Paper PDF'>
-    </a>
-    <a href='https://cnsdqd-dyb.github.io/workshare/2024/04/01/VillagerAgent.html'>
-      <img src='https://img.shields.io/badge/Project-Page-blue?style=for-the-badge&logo=Web&logoColor=white' alt='Project Page'>
-    </a>
-</p>
+## Architecture In One Pass
 
----
+1. `VillagerBench` starts the Minecraft bridge and exposes agent tools.
+2. `DataManager` stores and summarizes environment/agent/history information.
+3. `TaskManager` initializes the top-level task, decomposes it, and maintains a task graph.
+4. `GlobalController` assigns runnable tasks to available agents.
+5. `BaseAgent` queries state through `DataManager`, calls the LLM, executes Minecraft tools, and reflects on task success.
+6. Benchmark harnesses write normalized artifacts: `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, and `decision_support.json`.
 
-## News
-\[2024.12.18\] We've added new attributes. VillagerBaseAgent LLM 8b v1 will be released soon.
+For code reading, start with `start_with_config.py`, then `pipeline/controller_tiny.py`, then `task_manager.py`, `data_manager.py`, and `agent.py`. See [Execution flow](docs/execution_flow.md) for the full processing path.
 
-\[2024.12.11\] Support LLM api ranking with PPO method.
+## Setup
 
-\[2024.12.08\] LLM driven AutoGen task to get data for Agent-tuning.
+Python is pinned in `pyproject.toml`:
 
-<table> <tr> <td><img src="img/chat.png" width="100%" /></td> <td><img src="img/chat2.png" width="100%" /></td> </tr> <tr> <td><img src="img/chat3.png" width="100%" /></td> <td><img src="img/chat4.png" width="100%" /></td> </tr> </table>
-
-\[2024.12.01\] \[Human -- Agent\]  \[Agent -- Agent\] Real Time Chat supports now!!!🎉
-
-<table> <tr> <td><img src="img/autogen1.png" width="100%" /></td> <td><img src="img/autogen2.png" width="100%" /></td> </tr>  </table> 
-
-\[2024.10.23\] We are trying to replace the LLM in VillagerAgent with finetuned open source LLMs to improve the performance and efficiency of the agent's task execution.
-
-\[2024.10.04\] 🎉Our minecraft multi-agent framework VillagerAgent has been accepted by ACL 2024.
-## Setup and Configuration 🛠️
-
-### Requirements
-- **Python Version**: Python 3.8 or newer installed on your system.
-- **API Keys**: Obtain API keys from one or more of the following services:
-  - OpenAI (for access to models like GPT-4)
-  - Google Cloud (for access to models like Gemini)
-  - Zhipu AI (for access to GLM models)
-  - Ollama-compatible OpenAI API (for local or private deployments)
-- **NPM Package**: Node Package Manager (npm) installed, which is typically included with Node.js：
-  ```python
-  python js_setup.py
-  ```
-- **Minecraft Server**: If you want to know how to configure the Minecraft 1.19.2 server, please see the [tutorial here](#minecraft-1192-server-setup).
-- **Python Dependencies**: Install all necessary Python libraries as specified in the `requirements.txt` file. You can install these dependencies using the following command:
-  ```
-  pip install -r requirements.txt
-  ```
-- **Other Model Choice**: You have the option to use models from Hugging Face's Transformers library. Ensure you have the necessary credentials to use and download the model.
-
-### Installation Steps
-1. Clone the repository 📦:
-   ```bash
-   git clone https://github.com/cnsdqd-dyb/VillagerAgent.git
-   ```
-2. Opt for a virtual environment 🧹:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows, try venv\Scripts\activate
-   ```
-3. Install the dependencies 🧑‍🍳:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Set up your API key 🗝️:
-    - Craft a file named `API_KEY_LIST` and inscribe your API key in this way:
-   ```json
-   {
-      "OPENAI":["put your openai key here", ...],
-      "GEMINI":[...],
-      "GLM":[...],
-      ...
-   }
-   ```
-    - We might try calling multiple available APIs to break through the access limit.
-    - Place this file in the root of the project directory.
-
-### Ollama setup
-- Set `api_base` to your Ollama OpenAI-compatible endpoint and keep the defaults in `model/ollama_config.py` in sync.
-- Use an Ollama model name such as `qwen3.6:27b`, `gemma4:26b`, or `gemma4:e4b` for `api_model`.
-- Set `provider` to `ollama` so the code path is selected explicitly.
-- Set `OPENAI_API_KEY` or `API_KEY_LIST` to a dummy value such as `ollama` if you only use Ollama.
-- For embeddings, use `embeddinggemma:latest` through the same OpenAI-compatible endpoint.
-
-## QuickStart 🚀
-
-```python
-from env.env import VillagerBench, env_type, Agent
-from pipeline.controller import GlobalController
-from pipeline.data_manager import DataManager
-from pipeline.task_manager import TaskManager
-import json
-
-if __name__ == "__main__":
-
-    # 🌍 Set Environment
-    env = VillagerBench(env_type.construction, task_id=0, _virtual_debug=False, dig_needed=False)
-
-    # 🤖 Set Agent
-    api_key_list = json.load(open("API_KEY_LIST", "r"))["OPENAI"]  # 🗝️ Use OPENAI as an example
-    base_url = "base url of the model"
-    llm_config = {
-        "api_model": "fill in the model name here",  # For example, "gpt-4-1106-preview"
-        "api_base": base_url,  # 🔗 For example, "https://api.openai.com/v1"
-        "api_key_list": api_key_list
-    }
-
-    Agent.model = "fill in the agent model name here"  # 🛠️ Customize your agent model
-    Agent.base_url = base_url
-    Agent.api_key_list = api_key_list
-
-    # 🔨 More agent tools can be added here - refer to the agent_tool in doc/api_library.md
-    agent_tool = [Agent.fetchContainerContents, Agent.MineBlock, ..., Agent.handoverBlock]
-
-    # 📝 Register Agent
-    env.agent_register(agent_tool=agent_tool, agent_number=3, name_list=["Agent1", "Agent2", "Agent3"])  # Ensure the agent number matches the agent_tool
-    # ⚠️ Use /op to give the agent permission to use commands on the Minecraft server, e.g., /op Agent1
-
-    # 🏃‍♂️ Run Environment
-    with env.run():
-        
-        # Set Data Manager
-        dm = DataManager(silent=False)
-        dm.update_database_init(env.get_init_state())
-
-        # Set Task Manager
-        tm = TaskManager(silent=False)
-
-        # Set Controller
-        ctrl = GlobalController(llm_config, tm, dm, env)
-
-        # Set Task
-        tm.init_task("Write your task description here.", json.load(open("your json task related file here if any.")))
-
-        # 🚀 Run Controller
-        ctrl.run()
+```bash
+python --version
 ```
 
-### Batch Testing 🧪
-- Whip up test configs with `config.py` 📝.
-- Kick off automated batch testing with `start with config.py` 🤖.
+Expected version:
 
+```text
+3.10.19
+```
 
-### Docker 🐳
-- Build your Docker image with `docker build -t VillagerAgent .` 🏗.
-- Launch the Docker container with `docker run VillagerAgent` 🚀.
-- Note: If you need to open specific ports for API connectivity, you may need to modify the Dockerfile accordingly and launch with `docker run -p <your_port>:<app_port> VillagerAgent` 🌐.
+Install dependencies using the project environment manager or your existing virtual environment. Then install JavaScript bridge dependencies if needed:
 
-## Overview 📜
+```bash
+python js_setup.py
+```
 
-### VillagerBench
-Dive into VillagerBench, powered by Mineflayer, to explore the dynamics of cooperative AI. Our agents don't just play—they learn 🎓, adapt 🔄, and work together to overcome challenges that would stump the lone wolf 🐺.
+Start or expose an Ollama OpenAI-compatible endpoint:
 
-<img src="img/benchmark.png" width="55%" /> 
-<img src="img/radar.png" width="43.2%" /> 
+```bash
+ollama serve
+ollama pull gemma4:12b
+```
 
-### VillagerAgent Framework
-Meet VillagerAgent, our multi-agent maestro 🎼, orchestrating a symphony of tasks with its four core components: Task Decomposer, Agent Controller, State Manager, and Base Agents. It's like a conductor for AI, turning individual actions into a masterpiece of collaboration.
+Optional environment overrides:
 
-<img src="img/framework.png" width="100%" /> 
+```bash
+export OLLAMA_API_BASE=http://localhost:11434/v1
+export OLLAMA_MODEL=gemma4:12b
+export OLLAMA_API_KEY=ollama
+```
 
-## Core Components 🌟
+If you use paid or remote providers, create `API_KEY_LIST` in the repository root. For local Ollama, this file is not required.
 
-- **VillagerBench**: The virtual sandbox where agents interact and learn 🤹.
-- **TaskManager**: The master planner, keeping tasks on track and agents in the know 📊.
-- **DataManager**: The keeper of knowledge, holding all the data cards close to its chest 🗃️.
-- **GlobalController**: The overseer, ensuring every agent plays their part to perfection 🎯.
+## Minecraft Server
 
+The current verified endpoint is:
 
-## npm Installation
-### Windows
+```text
+10.12.3.1:40000
+```
 
-1. **Download the Node.js Installer**:
-   - Visit the [Node.js official website](https://nodejs.org/).
-   - Download the latest stable version of the Node.js installer for Windows (the LTS version is usually recommended).
+Agents must be allowed to join and use required commands/tools. In a Minecraft server console, grant operator permissions to the agent names you use, for example:
 
-2. **Run the Installer**:
-   - Double-click the downloaded installer file.
-   - Follow the instructions provided by the installation wizard. Make sure to include all necessary components, including npm, during the installation process.
+```text
+/op Alice
+/op Bob
+```
 
-3. **Verify Installation**:
-   - Open Command Prompt or PowerShell.
-   - Enter the following commands to check the versions of Node.js and npm:
-     ```
-     node -v
-     npm -v
-     ```
-   - If the installation was successful, you will see the version numbers of Node.js and npm displayed.
+The non-judged connectivity path has been verified with `env_type.none`, `Alice`, and `performMovement(jump)`. A judged task also requires the relevant judger script to finish loading and produce `data/score.json`.
 
-### Linux (Debian/Ubuntu-based)
+## Run A Connectivity Smoke
 
-1. **Install Using Package Manager**:
-   - Open the terminal.
-   - First, update your package index:
-     ```
-     sudo apt update
-     ```
-   - Install Node.js and npm:
-     ```
-     sudo apt install nodejs npm
-     ```
+Use a non-destructive `env_type.none` smoke before judged runs. The full minimal startup guide is in [docs/minimal_run.md](docs/minimal_run.md).
 
-2. **Install Using nvm** (Node Version Manager, recommended for managing multiple versions of Node.js):
-   - Open the terminal.
-   - Install nvm by running:
-     ```
-     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.1/install.sh | bash
-     ```
-   - Restart the terminal or run the following command to update the current session:
-     ```
-     export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
-     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" # This loads nvm
-     ```
-   - Install Node.js using nvm (this will also install npm):
-     ```
-     nvm install node
-     ```
+```bash
+python - <<'PY'
+from env.env import VillagerBench, env_type, Agent
 
-3. **Verify Installation**:
-   - Type the following commands to check the versions of Node.js and npm:
-     ```
-     node -v
-     npm -v
-     ```
-   - If the installation was successful, you will see the version numbers of Node.js and npm displayed.
+env = VillagerBench(
+    env_type.none,
+    task_id=0,
+    dig_needed=False,
+    host='10.12.3.1',
+    port=40000,
+    task_name='smoke_env_none',
+    _virtual_debug=False,
+)
+env.agent_register(agent_tool=[Agent.performMovement], agent_number=1, name_list=['Alice'])
+with env.run(fast_api=True):
+    print('ping', env.agents_ping())
+    print('before', env.get_init_state())
+    print('action', Agent.performMovement.func(player_name='Alice', action_name='jump', seconds=1, emotion=[], murmur=''))
+    print('after', env.get_init_state())
+PY
+```
 
+## Run A Bounded Benchmark Execute
 
-## Minecraft 1.19.2 Server Setup
-### Preparation
+Use the benchmark harness for artifact-preserving runs:
 
-1. **Ensure Java is Installed**: Minecraft servers require the Java runtime environment. Make sure you have the latest version of Java installed on your computer. You can check if Java is installed by running `java -version` in the command line.
+```bash
+python -m benchmarks.minecraft.experiment \
+  --config path/to/minecraft_config.json \
+  --output-root result/minecraft_real \
+  --run-name bounded_real_run \
+  --execute \
+  --execute-timeout-seconds 600
+```
 
-2. **Download Server File**: Visit the official Minecraft website to download the 1.19.2 version of the server file (`minecraft_server.1.19.2.jar`).
+Dry-run is the default if `--execute` is omitted. Dry-run does not require a Minecraft server, LLM, judger, or credentials.
 
-### Configuring the Server
+Config field details are documented in [docs/configuration.md](docs/configuration.md).
 
-1. **Create a Server Folder**: Choose a location on your computer to create a new folder that will hold all the Minecraft server files.
+## Run A Dry Matrix
 
-2. **Move Server File**: Move the downloaded server file (`minecraft_server.1.19.2.jar`) into the folder you created.
+```bash
+python -m benchmarks.minecraft.matrix \
+  --config path/to/minecraft_config_list.json \
+  --output-dir result/minecraft_matrix \
+  --run-names run_a,run_b \
+  --dual-dag-task-selection
+```
 
-3. **Run the Server**:
-   - Open the command line interface.
-   - Navigate to the folder containing the server file using the `cd` command.
-   - Run the following command to start the server:
-     ```
-     java -Xmx1024M -Xms1024M -jar minecraft_server.1.19.2.jar nogui
-     ```
-   - The `-Xmx1024M` and `-Xms1024M` parameters set the maximum and initial memory allocation for the server in megabytes (MB). You may need to adjust these values based on your server's hardware.
+Generate a shared report:
 
-4. **Accept the EULA**: The first time you run the server, a file named `eula.txt` will be generated. Open this file and change `eula=false` to `eula=true` to accept the Minecraft End User License Agreement.
+```bash
+python -m benchmarks.common.report result/minecraft_matrix \
+  --output result/minecraft_matrix/common_report.csv \
+  --json-output result/minecraft_matrix/common_report.json
+```
 
-5. **Restart the Server**: Run the `java` command again to start the server.
+## Verification Notes
 
-### Configuring Server Properties
+Useful documents:
 
-1. **Edit the `server.properties` File**: After the first server run, a configuration file named `server.properties` will be generated. You can edit this file to customize the server settings, such as game mode, difficulty, etc. If you are testing the capabilities of multiple agents on VillagerBench, set the mode to peaceful and the terrain to superflat.
+- `docs/benchmarks/minecraft_real_run.md`: bounded real-run procedure and runtime asset assumptions.
+- `doc/minecraft_e2e_verification.md`: earlier bridge-level E2E verification.
+- `/tmp/opencode/minecraft-verification-20260712.md`: local verification log from the recent development session.
 
-2. **Port Forwarding**: If you want other players to be able to access your server from outside networks, you may need to set up port forwarding on your router. By default, the Minecraft server uses port 25565.
+Current known state:
 
-3. **Start and Test the Server**: After completing all the settings, restart the server and try connecting to it to ensure everything is running smoothly.
+- Local Ollama is reachable at `127.0.0.1:11434`.
+- Minecraft server is reachable at `10.12.3.1:40000`.
+- `API_KEY_LIST` is no longer required for Ollama runs.
+- The next blocker for judged `meta` runs is judger/server-side task loading, not OpenAI billing credentials.
 
-### Important Notes
+## Tests
 
-- Ensure that any agents that may join the server have been granted admin privileges (you can add permissions with the command `/op agent_name`).
-- Make sure your server's firewall rules allow the port used by the Minecraft server.
-- Regularly back up your server files to prevent data loss.
-- Keep the server's Java version up to date for optimal performance and security.
+Compile check:
 
-The steps above provide a basic tutorial for setting up a Minecraft server. Depending on your specific needs and configuration, more advanced settings may be required.
+```bash
+just validate
+```
+
+Full test suite:
+
+```bash
+just test
+```
+
+Targeted Minecraft/Ollama tests:
+
+```bash
+pytest tests/test_ollama_config.py tests/test_minecraft_experiment.py tests/test_minecraft_matrix.py tests/test_minecraft_adapter.py
+```
 
 ## Citation
-🌟 If you find our work helpful, please leave us a star and cite our paper.
-```
+
+```bibtex
 @inproceedings{dong2024villageragent,
   title={VillagerAgent: A Graph-Based Multi-Agent Framework for Coordinating Complex Task Dependencies in Minecraft},
   author={Dong, Yubo and Zhu, Xukun and Pan, Zhengzhe and Zhu, Linchao and Yang, Yi},
@@ -380,15 +212,8 @@ The steps above provide a basic tutorial for setting up a Minecraft server. Depe
   year={2024},
   url={https://arxiv.org/abs/2406.05720}
 }
-
 ```
 
-## Contribution Guide 🤝
+## License
 
-Jump on board! We love contributions. Before you submit your pull request, make sure:
-- Your changes have aced the tests 🏆.
-- You've spruced up the docs (if you've added some pizzazz) 📚.
-
-## License 📜
-
-This project is all yours under the [MIT License](LICENSE).
+This project is available under the [MIT License](LICENSE).
