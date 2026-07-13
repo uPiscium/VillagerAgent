@@ -392,23 +392,31 @@ class BaseAgent:
             "agent_state": self.data_manager.query_history(self.name),
         })
         self.IDLE = False
+        last_error = None
         while max_retry > 0:
             try:
                 feedback, detail = self.env.step(self.name, task_str)
                 break
             except KeyboardInterrupt:
+                self.IDLE = True
                 self.logger.info("KeyboardInterrupt")
                 raise KeyboardInterrupt
             except ConnectionError:
+                self.IDLE = True
                 self.logger.error("ConnectionError")
                 raise ConnectionError
             except ConnectionRefusedError:
+                self.IDLE = True
                 self.logger.error("ConnectionRefusedError")
                 raise ConnectionRefusedError
             except Exception as e:
+                last_error = e
                 self.logger.error(f"Error: {e}")
                 max_retry -= 1
                 time.sleep(3)
+        else:
+            self.IDLE = True
+            raise last_error
         
         self.IDLE = True
 
