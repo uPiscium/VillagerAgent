@@ -52,7 +52,8 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
     # Agent.api_key_list = api_key_list
 
     # Agent.base_url = "http://10.112.59.240:55049/v1"
-    configure_ollama_agent(Agent)
+    selected_api_key = api_key_list[0] if api_key_list else None
+    configure_ollama_agent(Agent, api_model=api_model, api_base=api_base, api_key=selected_api_key)
 
     # 设置env
     if task_type == "construction":
@@ -131,7 +132,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         start_time = time.time()
 
         # 设置llm
-        llm_config = make_ollama_llm_config()
+        llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
         # llm_config = {
         #     "api_key": api_key_list[0],
         #     "api_base": "https://api.deepseek.com/v1",
@@ -172,7 +173,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         #     "api_model": "qwen3-next-80b-a3b-instruct",
         #     "api_key_list": api_key_list
         # }
-        base_llm_config = make_ollama_llm_config()
+        base_llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
 
 
         ctrl = GlobalController(llm_config, tm, dm, env, 

@@ -57,15 +57,13 @@ class TaskManager:
         self.manage_method = "update"
 
 
-        # delete img/*graph.png
-        for file in os.listdir("img"):
-            if "graph" in file:
-                os.remove("img/" + file)
-
-        # delete data/*graph.json
-        for file in os.listdir("logs"):
-            if "graph" in file:
-                os.remove("logs/" + file)
+        # delete generated graph files when the runtime directories exist
+        for directory in ("img", "logs"):
+            if not os.path.isdir(directory):
+                continue
+            for file in os.listdir(directory):
+                if "graph" in file:
+                    os.remove(os.path.join(directory, file))
                 
     def get_relevant_content_by_path(self, subtask_data: dict, query: [str]) -> list:
         # Initialize an empty dictionary to store the extracted information
@@ -146,9 +144,7 @@ class TaskManager:
                 if idx > 0 and idx < len(task_list):
                     graph.add_edge(task_list[idx-1], task)
             if len(task._pre_idxs) == 0 and t_id > 0:
-                nodes = graph.get_node_to(task_list[t_id-1])
-                for node in nodes:
-                    graph.add_edge(node, task)
+                graph.add_edge(task_list[t_id-1], task)
         return graph
 
     def update_history(self, system_prompt, user_prompt, response):

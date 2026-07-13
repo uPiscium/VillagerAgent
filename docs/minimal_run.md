@@ -9,6 +9,16 @@ This path checks the current Ollama-first Minecraft runtime with the fewest movi
 - Ollama serving an OpenAI-compatible endpoint.
 - A reachable Minecraft server for real environment runs.
 
+Primary Python setup path:
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
+python js_setup.py
+```
+
 ## Ollama Defaults
 
 The runtime default is local Ollama:
@@ -53,6 +63,14 @@ with env.run(fast_api=True):
     print('after', env.get_init_state())
 PY
 ```
+
+Expected:
+
+- `agents_ping()` reports `status=True` for the registered agent.
+- `get_init_state()` succeeds before and after the action.
+- `performMovement(jump)` returns `status=True`.
+
+If it fails, check Minecraft host/port, agent OP permissions, FastAPI bridge startup, Node.js dependencies, port conflicts, server version compatibility, and duplicate agent names.
 
 ## Bounded Real Benchmark
 

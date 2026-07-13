@@ -16,10 +16,11 @@ VillagerAgent represents decomposed work as a directed task graph in `type_defin
 - `candidate_list`: agent names that may execute the task.
 - `number`: minimum or assigned number of agents.
 - `available`: whether assignment logic can consider the task.
-- `_pre_idxs`: LLM-produced predecessor indexes used by `TaskManager.query_graph()`.
-- `_agent`: agents assigned during execution.
-- `_summary`: task-manager summary state.
-- `_direct_pre_task_list`: direct open predecessors exposed to assignment prompts.
+- `reflect`: reflection feedback from agent execution.
+- `_pre_idxs`: LLM decomposition output for `required subtasks`. `TaskManager.query_graph()` converts these 1-based indexes to graph edges; runtime dependency truth then lives in `Graph.edge`.
+- `_agent`: agent names assigned by the controller and read by `BaseAgent` prompt construction.
+- `_summary`: task-manager summary state updated during feedback/reflection.
+- `_direct_pre_task_list`: direct unfinished predecessor tasks, computed by `Graph.get_open_task_list()` and exposed in assignment views.
 
 `Task.to_json()`, `assign_json()`, `analyze_json()`, and `decompose_json()` produce different public views for graph artifacts, assignment prompts, feedback analysis, and decomposition prompts.
 
@@ -28,7 +29,7 @@ VillagerAgent represents decomposed work as a directed task graph in `type_defin
 `Graph` stores:
 
 - `vertex`: list of `Task` nodes.
-- `edge`: list of `(start_task, end_task)` dependency edges.
+- `edge`: list of `(start_task, end_task)` dependency edges. The edge means `end_task` depends on completion of `start_task`.
 - `G`: a NetworkX `DiGraph` used only for drawing.
 
 Core operations include:
@@ -37,18 +38,19 @@ Core operations include:
 - `get_entry_node()` and `get_exit_node()` to identify source and sink tasks.
 - `get_all_predecessor()` and `get_all_successor()` for dependency traversal.
 - `get_open_task_list()` to compute unfinished tasks and direct open prerequisites.
-- `check_graph_completion()` to detect whether the graph has no runnable unfinished work.
+- `get_terminal_state()` to distinguish `RUNNING`, `SUCCESS`, `FAILURE`, `BLOCKED`, and `EMPTY`.
+- `check_graph_completion()` as a backward-compatible wrapper that returns true for every non-`RUNNING` terminal state.
 - `merge_at()`, `replace_node()`, and `remove_node_merge_edge()` for graph updates.
 
 ## Construction Flow
 
 `TaskManager.init_task()` asks the LLM to decompose the user goal into subtasks. Each generated subtask becomes a `Task`. The `required subtasks` field is stored in `_pre_idxs`, then `TaskManager.query_graph()` converts those predecessor indexes into edges.
 
-If a generated task has no explicit predecessor and is not the first task, `query_graph()` links it after the predecessor chain of the previous task. This keeps partially specified decompositions connected.
+If a generated task has no explicit predecessor and is not the first task, `query_graph()` links it after the previous task. Explicit parallelism must be represented by explicit `required subtasks` indexes. For example, `B requires A` and `C requires A` becomes `A -> B` and `A -> C`; a missing predecessor on `C` after `B` becomes `B -> C`.
 
 ## Runtime Semantics
 
-The controller asks `TaskManager.query_subtask_list()` for open work. The returned tasks are ranked or filtered, then assigned to available agents. During execution the status moves through:
+The controller asks `TaskManager.query_subtask_list()` for open work. A runnable task is a task with `status == unknown`, no unfinished predecessor in `predecessor_task_list`, enough free candidate agents, and `available == True`. The returned tasks are ranked or filtered, then assigned to available agents. During execution the status moves through:
 
 ```text
 unknown -> running -> success
@@ -56,6 +58,14 @@ unknown -> running -> failure
 ```
 
 Feedback can trigger `TaskManager.feedback_task()`, which may update, merge, or refine the graph depending on task-manager mode.
+
+Terminal graph states:
+
+- `RUNNING`: at least one task is running or at least one unknown task is runnable.
+- `SUCCESS`: all tasks are `success`.
+- `FAILURE`: at least one task is `failure`.
+- `BLOCKED`: unknown tasks remain, but none are runnable and no task has explicitly failed.
+- `EMPTY`: the graph has no tasks.
 
 ## Artifacts
 

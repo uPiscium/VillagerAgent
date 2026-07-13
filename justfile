@@ -4,7 +4,7 @@ default:
     just --list
 
 validate:
-    python -m compileall -q benchmarks/common benchmarks/craft benchmarks/cwah benchmarks/minecraft env
+    python -m compileall -q benchmarks env model pipeline type_define
 
 test:
     pytest

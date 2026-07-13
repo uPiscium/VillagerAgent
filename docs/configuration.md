@@ -63,6 +63,14 @@ Environment variables override the defaults:
 - `OLLAMA_MODEL`: defaults to `gemma4:12b`.
 - `OLLAMA_API_KEY`: defaults to `ollama`.
 
+Runtime configuration priority for maintained Ollama paths is:
+
+```text
+explicit function/CLI argument > environment variable > repository default
+```
+
+Minecraft benchmark config files provide environment/task settings. `start_with_config.run()` receives `api_model` and `api_base` from its caller and passes them through to the Ollama agent and LLM configs.
+
 `API_KEY_LIST` remains supported for legacy or paid providers. The expected legacy shape is:
 
 ```json
