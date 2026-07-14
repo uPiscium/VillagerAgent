@@ -1,5 +1,5 @@
 from pipeline.task_manager import TaskManager
-from type_define.graph import GraphState, Task
+from type_define.graph import Graph, GraphState, Task
 
 
 def test_task_manager_uses_dual_dag_store_as_task_source_of_truth():
@@ -85,3 +85,32 @@ def test_task_manager_checkpoints_decomposition_and_lifecycle_transitions():
         Task.running,
         Task.success,
     ]
+
+
+def test_task_manager_replan_edits_store_first_and_preserves_history(monkeypatch):
+    task = Task("A", {"old": True})
+    manager = TaskManager(silent=True, method="merge")
+    manager.set_task_list_from_decomposition([task])
+    manager.mark_task_running(task, ["Alice"])
+    manager.mark_task_status(task.id, Task.failure, "failed detail")
+    manager.get_graph_strategy = lambda _task: {
+        "strategy": "replan",
+        "origin-id": 1,
+        "description": "Replanned A",
+        "milestones": ["retry"],
+    }
+    manager.sync_dual_dag_from_graph = lambda: (_ for _ in ()).throw(
+        AssertionError("Graph must not be reloaded into the canonical store")
+    )
+    monkeypatch.setattr(Graph, "write_graph_to_md", lambda *args, **kwargs: None)
+    monkeypatch.setattr(Graph, "write_graph_to_json", lambda *args, **kwargs: None)
+
+    manager.merge_task(manager.graph.vertex[0])
+
+    node = manager.runtime_task_store.snapshot()["nodes"][0]
+    assert node["content"]["description"] == "Replanned A"
+    assert node["content"]["reflect"] == "failed detail"
+    assert node["lifecycle"]["last_assigned_agents"] == ["Alice"]
+    assert node["lifecycle"]["status"] == Task.unknown
+    assert manager.graph.vertex[0].id == task.id
+    assert manager.graph.vertex[0].description == "Replanned A"

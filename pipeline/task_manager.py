@@ -446,14 +446,16 @@ class TaskManager:
 
         if strategy == "replan":
             # 1. replan task
-            origin_task = self.graph.get_graph_list()[int(result["origin-id"])-1]
+            origin_task_id = self.runtime_task_store.task_id_at(int(result["origin-id"]) - 1)
+            origin_task = self.runtime_task_store.get_task(origin_task_id)
             replan_task = Task(name=result["description"], content=origin_task.content)
             replan_task.milestones = result["milestones"]
-            self.graph.replace_node(origin_task, replan_task)
+            self.runtime_task_store.replace_task(origin_task_id, replan_task)
 
         elif strategy == "decompose":
             # 2. decompose
-            origin_task = self.graph.get_graph_list()[int(result["origin-id"])-1]
+            origin_task_id = self.runtime_task_store.task_id_at(int(result["origin-id"]) - 1)
+            origin_task = self.runtime_task_store.get_task(origin_task_id)
             subtasks = result["subtasks"]
 
             subtask_list = []
@@ -469,28 +471,29 @@ class TaskManager:
                 subtask.number = int(subtask_data["minimum required agents"])
                 subtask._pre_idxs = [int(idx) for idx in subtask_data["required subtasks"]]
                 subtask_list.append(subtask)
-            sub_graph = self.query_graph(subtask_list)
-            self.graph.merge_at(sub_graph, origin_task)
+            self.runtime_task_store.replace_task_with_subgraph(origin_task_id, subtask_list)
 
         elif strategy == "move":
             # 3. move task to a new position
-            origin_task = self.graph.get_graph_list()[int(result["origin-id"])-1]
-            predecessor = self.graph.get_graph_list()[int(result["new-id"])-1]
-            self.graph.remove_node_merge_edge(task)
-            self.graph.insert_node_merge_edge(task, predecessor)
+            origin_task_id = self.runtime_task_store.task_id_at(int(result["origin-id"]) - 1)
+            predecessor_id = self.runtime_task_store.task_id_at(int(result["new-id"]) - 1)
+            self.runtime_task_store.move_task_after(origin_task_id, predecessor_id)
         elif strategy == "insert":
             # 4. insert a new task after a task
             new_task = Task(name=result["description"], content=task.content)
             new_task.milestones = result["milestones"]
-            predecessor = self.graph.get_graph_list()[int(result["insert-id"])-1]
-            self.graph.insert_node_merge_edge(new_task, predecessor)
+            predecessor_id = self.runtime_task_store.task_id_at(int(result["insert-id"]) - 1)
+            self.runtime_task_store.insert_task_after(predecessor_id, new_task)
         elif strategy == "delete":
             # 5. delete task
-            self.graph.remove_node_merge_edge(task)
+            delete_task_id = self.runtime_task_store.task_id_at(int(result["delete-id"]) - 1)
+            self.runtime_task_store.remove_task(delete_task_id)
         else:
             self.logger.error("Task status error.")
+            return
 
-        self.sync_dual_dag_from_graph()
+        self.sync_graph_from_dual_dag()
+        self.checkpoint_runtime_state()
         
         time_str = time.strftime("%Y_%m_%d_%H_%M_%S_graph", time.localtime())
         
