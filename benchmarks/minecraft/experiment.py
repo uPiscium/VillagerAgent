@@ -19,6 +19,7 @@ from type_define.graph import Graph, Task
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
 TASK_SELECTION_POLICIES = ("dual-dag", "original")
+RUNTIME_RESULT_PATH = Path(".cache/minecraft_runtime_result.json")
 
 
 class MinecraftExecuteTimeoutError(TimeoutError):
@@ -57,17 +58,20 @@ def run_minecraft_experiment(
     tasks, graph, task_store = _task_graph_from_config(launch_config)
     action_log: dict = _fixture_action_log(launch_config)
     score: dict = {}
+    runtime_result: dict = {}
     error = None
     error_type = ""
     timed_out = False
 
     if execute:
+        if RUNTIME_RESULT_PATH.exists():
+            RUNTIME_RESULT_PATH.unlink()
         try:
-            _execute_real_runtime_bounded(
+            runtime_result = _execute_real_runtime_bounded(
                 launch_config,
                 dual_dag_config=dual_dag_config,
                 timeout_seconds=execute_timeout_seconds,
-            )
+            ) or {}
         except MinecraftExecuteTimeoutError as exc:
             error = str(exc)
             error_type = "timeout"
@@ -75,8 +79,10 @@ def run_minecraft_experiment(
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
             error_type = exc.__class__.__name__
-        action_log = _read_json(Path("data/action_log.json"), default={})
-        score = _read_json(Path("data/score.json"), default={})
+        persisted_runtime_result = _read_json(RUNTIME_RESULT_PATH, default={})
+        runtime_result = runtime_result or persisted_runtime_result
+        action_log = runtime_result.get("action_log") or _read_json(Path("data/action_log.json"), default={})
+        score = runtime_result.get("score") or _read_json(Path("data/score.json"), default={})
 
     artifact = build_minecraft_dual_dag_artifact(
         action_log=action_log,
@@ -94,7 +100,12 @@ def run_minecraft_experiment(
         config=dual_dag_config,
     )
     ranked_tasks = ranked.get("tasks", tasks)
-    task_graph_snapshot = _task_graph_snapshot(graph)
+    runtime_task_dag_snapshot = _runtime_task_dag_snapshot(
+        runtime_result=runtime_result,
+        fallback_snapshot=task_store.snapshot(),
+        execute=execute,
+    )
+    task_graph_snapshot = runtime_result.get("task_graph_snapshot") or _task_graph_snapshot(graph)
     summary = {
         "run_name": selected_run_name,
         "mode": "execute" if execute else "dry_run",
@@ -108,6 +119,7 @@ def run_minecraft_experiment(
         "task_selection_policy": selected_policy,
         "runtime_task_store": "runtime_task_dag",
         "source_of_truth": "runtime_task_dag",
+        "snapshot_source": runtime_task_dag_snapshot.get("snapshot_source", "config_fixture"),
         "execute_real_environment": bool(execute),
         "execute_timeout_seconds": execute_timeout_seconds,
         "mutates_runtime": False,
@@ -134,7 +146,7 @@ def run_minecraft_experiment(
     _write_json(output_dir / "launch_config.json", sanitize_public_value(launch_config))
     _write_json(output_dir / "action_log.json", sanitize_public_value(action_log))
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
-    _write_json(output_dir / "runtime_dual_dag_snapshot.json", task_store.snapshot())
+    _write_json(output_dir / "runtime_dual_dag_snapshot.json", runtime_task_dag_snapshot)
     _write_json(output_dir / "dual_dag_artifact.json", artifact)
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
@@ -239,14 +251,14 @@ def _required_int(config: dict, field: str, *, context: str) -> int:
         raise ValueError(f"{context}.{field} must be an integer") from exc
 
 
-def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> None:
+def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> dict:
     from start_with_config import run
     from model.ollama_config import make_ollama_llm_config
 
     llm_config = make_ollama_llm_config()
     config = dict(launch_config)
     document = config.get("evaluation_arg", {}) if config.get("task_type") == "meta" else {}
-    run(
+    return run(
         llm_config["api_model"],
         llm_config["api_base"],
         config["task_type"],
@@ -263,6 +275,7 @@ def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> None
         [llm_config.get("api_key_list", [])],
         document,
         minecraft_dual_dag_config=dual_dag_config,
+        runtime_result_path=str(RUNTIME_RESULT_PATH),
     )
 
 
@@ -271,10 +284,9 @@ def _execute_real_runtime_bounded(
     *,
     dual_dag_config: dict,
     timeout_seconds: float | None,
-) -> None:
+) -> dict:
     if timeout_seconds is None or timeout_seconds <= 0:
-        _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
-        return
+        return _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
 
     timeout_triggered = {"value": False}
 
@@ -288,7 +300,7 @@ def _execute_real_runtime_bounded(
     signal.signal(signal.SIGALRM, _timeout_handler)
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
-        _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+        return _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
     except RuntimeError as exc:
         # env.run() is a contextmanager that logs and swallows exceptions raised
         # before its first yield; contextlib then surfaces ``generator didn't
@@ -315,6 +327,16 @@ def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, RuntimeTas
     task_store.load_tasks_from_decomposition(tasks)
     graph = task_store.to_task_graph_projection()
     return tasks, graph, task_store
+
+
+def _runtime_task_dag_snapshot(*, runtime_result: dict, fallback_snapshot: dict, execute: bool) -> dict:
+    if execute and isinstance(runtime_result.get("runtime_task_dag_snapshot"), dict) and runtime_result["runtime_task_dag_snapshot"]:
+        snapshot = dict(runtime_result["runtime_task_dag_snapshot"])
+        snapshot["snapshot_source"] = "real_runtime"
+        return snapshot
+    snapshot = dict(fallback_snapshot)
+    snapshot["snapshot_source"] = "config_fixture"
+    return snapshot
 
 
 def _task_from_config(config: dict, task_config: dict) -> Task:

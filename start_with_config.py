@@ -15,13 +15,47 @@ from pipeline.data_manager import DataManager
 from pipeline.task_manager import TaskManager
 import json
 
+
+def _task_graph_snapshot(graph) -> dict:
+    return {
+        "mutates_runtime": False,
+        "projection": "type_define.Graph compatibility projection",
+        "tasks": [task.to_json() for task in getattr(graph, "vertex", [])],
+        "edges": [
+            {"source": start.description, "target": end.description}
+            for start, end in getattr(graph, "edge", [])
+        ],
+    }
+
+
+def _runtime_result(env=None, tm=None, *, error: str | None = None) -> dict:
+    runtime_store = getattr(tm, "runtime_task_store", None) if tm is not None else None
+    runtime_snapshot = runtime_store.snapshot() if runtime_store is not None else {}
+    task_graph_snapshot = _task_graph_snapshot(tm.graph) if tm is not None and hasattr(tm, "graph") else {}
+    return {
+        "score": env.get_score() if env is not None and hasattr(env, "get_score") else {},
+        "action_log": env.get_action_log() if env is not None and hasattr(env, "get_action_log") else {},
+        "runtime_task_dag_snapshot": runtime_snapshot,
+        "task_graph_snapshot": task_graph_snapshot,
+        "error": error,
+    }
+
+
+def _write_runtime_result(path: str | None, payload: dict) -> None:
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+
 print(f"pipeline Time taken: {time.time() - start_time}")
 start_time = time.time()
 
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None):
     start_time = time.time()
 
     api_key_list = load_agent_api_key_list()
@@ -117,98 +151,107 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         else:
             env.agent_register(agent_tool=agent_tool, agent_number=agent_num, name_list=name_list[:agent_num])
 
-    with env.run(fast_api=True):  # Use the FastAPI bridge; it avoids viewer-only Node dependencies such as canvas.
-        # 启动DM
-        dm = DataManager(silent=False)
-        dm.update_database_init(env.get_init_state())
+    runtime_tm = None
+    try:
+        with env.run(fast_api=True):  # Use the FastAPI bridge; it avoids viewer-only Node dependencies such as canvas.
+            # 启动DM
+            dm = DataManager(silent=False)
+            dm.update_database_init(env.get_init_state())
 
-        print(f"DataManager Time taken: {time.time() - start_time}")
-        start_time = time.time()
+            print(f"DataManager Time taken: {time.time() - start_time}")
+            start_time = time.time()
 
-        # 启动TM
-        tm = TaskManager(silent=False, cache_enabled=False)
+            # 启动TM
+            tm = TaskManager(silent=False, cache_enabled=False)
+            runtime_tm = tm
 
-        print(f"TaskManager Time taken: {time.time() - start_time}")
-        start_time = time.time()
+            print(f"TaskManager Time taken: {time.time() - start_time}")
+            start_time = time.time()
 
-        # 设置llm
-        llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
-        # llm_config = {
-        #     "api_key": api_key_list[0],
-        #     "api_base": "https://api.deepseek.com/v1",
-        #     "api_model": "deepseek-chat",
-        #     "api_key_list": api_key_list
-        # }
+            # 设置llm
+            llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
+            # llm_config = {
+            #     "api_key": api_key_list[0],
+            #     "api_base": "https://api.deepseek.com/v1",
+            #     "api_model": "deepseek-chat",
+            #     "api_key_list": api_key_list
+            # }
         
-        # llm_config = {
-        #     "api_key": "sk-VillagerTuning",
-        #     # "api_base": "http://10.112.59.240:50892/v1",
-        #     "api_base": "http://localhost:8264/v1/",
-        #     "api_model": "default",
-        #     "api_key_list": ["sk-VillagerTuning"]
-        # }
+            # llm_config = {
+            #     "api_key": "sk-VillagerTuning",
+            #     # "api_base": "http://10.112.59.240:50892/v1",
+            #     "api_base": "http://localhost:8264/v1/",
+            #     "api_model": "default",
+            #     "api_key_list": ["sk-VillagerTuning"]
+            # }
 
-        tm_llm_config = llm_config
-        dm_llm_config = llm_config
-        # base_llm_config = llm_config
+            tm_llm_config = llm_config
+            dm_llm_config = llm_config
+            # base_llm_config = llm_config
+
+            # tm_llm_config = {
+            #     "api_key": api_key_list[0],
+            #     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            #     "api_model": "qwen-max",
+            #     "api_key_list": api_key_list
+            # }
+
+            # dm_llm_config = {
+            #     "api_key": api_key_list[0],
+            #     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            #     "api_model": "qwen-plus",
+            #     "api_key_list": api_key_list
+            # }
+
+            # base_llm_config = {
+            #     "api_key": api_key_list[0],
+            #     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            #     "api_model": "qwen3-next-80b-a3b-instruct",
+            #     "api_key_list": api_key_list
+            # }
+            base_llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
 
 
-        # tm_llm_config = {
-        #     "api_key": api_key_list[0],
-        #     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        #     "api_model": "qwen-max",
-        #     "api_key_list": api_key_list
-        # }
-
-        # dm_llm_config = {
-        #     "api_key": api_key_list[0],
-        #     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        #     "api_model": "qwen-plus",
-        #     "api_key_list": api_key_list
-        # }
-
-        # base_llm_config = {
-        #     "api_key": api_key_list[0],
-        #     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        #     "api_model": "qwen3-next-80b-a3b-instruct",
-        #     "api_key_list": api_key_list
-        # }
-        base_llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
-
-
-        ctrl = GlobalController(llm_config, tm, dm, env, 
+            ctrl = GlobalController(llm_config, tm, dm, env,
                                 tm_llm_config=tm_llm_config, 
                                 dm_llm_config=dm_llm_config,
                                 base_agent_config=base_llm_config,
                                 all_tools=agent_tool,
                                 minecraft_dual_dag_config=minecraft_dual_dag_config)
 
-        # response = ctrl.agent_list[0].llm.few_shot_generate_thoughts(system_prompt="", example_prompt="hi")
-        # print(response)
-        if task_type == "farming": #补充材料来源prompt
-            with open("data/farm_setting.json", "r") as f:
-                task_settings = json.load(f)
-            task_data = task_settings[task_idx]
-            task_goal += f"\nBelow is a detailed list of ingredients and their specific sources. Use this information to plan and coordinate your actions efficiently:\n"
-            if "cake" in task_data["name"]:
-                task_goal += f"egg: egg in chest\n"
-                task_goal += f"milk: {task_data['milk']}\n"
-                task_goal += f"wheat: {task_data['wheat']}\n"
-                task_goal += f"sugar: {task_data['sugar']}\n"
-            elif "rabbit_stew" in task_data["name"]:
-                task_goal += f"cooked_rabbit: {task_data['cooked_rabbit']}\n"
-                task_goal += f"baked_potato: {task_data['baked_potato']}\n"
-                task_goal += f"carrot: {task_data['carrot']}\n"
-                task_goal += f"brown_mushroom: {task_data['brown_mushroom']}\n"
-                task_goal += f"bowl: {task_data['bowl']}\n"
+            # response = ctrl.agent_list[0].llm.few_shot_generate_thoughts(system_prompt="", example_prompt="hi")
+            # print(response)
+            if task_type == "farming": #补充材料来源prompt
+                with open("data/farm_setting.json", "r") as f:
+                    task_settings = json.load(f)
+                task_data = task_settings[task_idx]
+                task_goal += f"\nBelow is a detailed list of ingredients and their specific sources. Use this information to plan and coordinate your actions efficiently:\n"
+                if "cake" in task_data["name"]:
+                    task_goal += f"egg: egg in chest\n"
+                    task_goal += f"milk: {task_data['milk']}\n"
+                    task_goal += f"wheat: {task_data['wheat']}\n"
+                    task_goal += f"sugar: {task_data['sugar']}\n"
+                elif "rabbit_stew" in task_data["name"]:
+                    task_goal += f"cooked_rabbit: {task_data['cooked_rabbit']}\n"
+                    task_goal += f"baked_potato: {task_data['baked_potato']}\n"
+                    task_goal += f"carrot: {task_data['carrot']}\n"
+                    task_goal += f"brown_mushroom: {task_data['brown_mushroom']}\n"
+                    task_goal += f"bowl: {task_data['bowl']}\n"
                 
-        if os.path.exists(document_file):
-            document["recipe"] = json.load((open(document_file)))
-        tm.init_task(description=task_goal, document=document)
+            if os.path.exists(document_file):
+                document["recipe"] = json.load((open(document_file)))
+            tm.init_task(description=task_goal, document=document)
+            _write_runtime_result(runtime_result_path, _runtime_result(env, tm))
 
-        ctrl.run()
+            ctrl.run()
 
-        env.get_score()
+            result = _runtime_result(env, tm)
+            _write_runtime_result(runtime_result_path, result)
+            return result
+    except Exception as exc:
+        result = _runtime_result(env, runtime_tm, error=str(exc))
+        _write_runtime_result(runtime_result_path, result)
+        raise
 
 
 if __name__ == "__main__":
