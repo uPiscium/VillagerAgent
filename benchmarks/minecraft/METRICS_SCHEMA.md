@@ -41,6 +41,6 @@ All normalized outputs are passed through the Minecraft public sanitizer, which 
 
 In execute mode, `summary.json` also records bounded-run metadata: `execute_timeout_seconds`, `error_type`, and `timed_out`. These fields are report-facing diagnostics and are not agent-facing context.
 
-Minecraft run directories can be passed to `benchmarks.common.report` when they contain top-level `summary.json` and `metrics.json`. The common report path also reads `action_log.json` when available to derive action-mix and failed-action count fields.
+Minecraft run directories can be passed to `benchmarks.common.report` when they contain top-level `summary.json` and `metrics.json`. Common report schema version 2 treats each Minecraft run as one episode: run success requires all tasks in a non-empty runtime task set to succeed, while `task_count`, `completed_task_count`, and `task_completion_rate` retain task-level completion. The common report path also reads `action_log.json` when available to derive action-mix and action-count step fields; those fields remain unavailable when the log is absent.
 
 `benchmarks.minecraft.matrix` runs one or more config entries through the same single-run harness and writes `matrix_summary.json` with `benchmark == "minecraft"`, aggregate common-report metrics, and per-run artifact directories under `runs/`. Dry-run mode is the default and does not require Minecraft runtime assets.

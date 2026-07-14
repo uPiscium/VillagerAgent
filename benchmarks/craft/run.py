@@ -1,6 +1,10 @@
 import argparse
+import csv
+import json
 from pathlib import Path
 
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
+from benchmarks.common.sanitization import collect_secret_values, redact_text
 from benchmarks.craft.config import (
     InvalidConfigError,
     condition_from_config,
@@ -25,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--turns", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--condition", choices=sorted(CONDITIONS), default=None)
+    parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
@@ -87,47 +92,123 @@ def run_config(
     dry_run: bool = False,
     overrides: dict | None = None,
     command_text: str | None = None,
+    overwrite: bool = False,
 ) -> Path:
     config = load_config(config_path, overrides=overrides, require_api_keys=False)
     condition = (overrides or {}).get("condition") or condition_from_config(config)
-    if not dry_run and condition != "official_baseline":
-        _require_runtime_api_keys(config)
     output_dir = output_dir_for_config(config)
-    save_resolved_config(config, output_dir)
-    write_provenance(
+    attempt_id = prepare_run_directory(
         output_dir,
-        benchmark="craft",
-        command=command_text or _default_command_text(config_path, dry_run=dry_run, overrides=overrides),
-        resolved_config=config,
-        environment_notes=f"condition={condition}",
+        producer="benchmarks.craft.run",
+        overwrite=overwrite,
     )
-    (output_dir / "logs").mkdir(parents=True, exist_ok=True)
-    (output_dir / "raw").mkdir(parents=True, exist_ok=True)
-    (output_dir / "normalized").mkdir(parents=True, exist_ok=True)
-    if dry_run:
-        _print_dry_run(config, condition, output_dir)
-        return output_dir
-
-    if condition != "official_baseline":
-        _preflight_ollama_models(config)
-
-    adapter = CraftEnvAdapter(config, output_dir)
-    raw_result = adapter.run(condition)
-    normalize_results(
-        config=config,
-        condition=condition,
-        raw_result=raw_result,
-        output_dir=output_dir,
+    config.setdefault("_meta", {})["attempt_id"] = attempt_id
+    try:
+        if not dry_run and condition != "official_baseline":
+            _require_runtime_api_keys(config)
+        save_resolved_config(config, output_dir)
+        write_provenance(
+            output_dir,
+            benchmark="craft",
+            command=command_text or _default_command_text(
+                config_path,
+                dry_run=dry_run,
+                overrides=overrides,
+                overwrite=overwrite,
+            ),
+            resolved_config=config,
+            environment_notes=f"condition={condition}",
+        )
+        (output_dir / "logs").mkdir(parents=True, exist_ok=True)
+        (output_dir / "raw").mkdir(parents=True, exist_ok=True)
+        (output_dir / "normalized").mkdir(parents=True, exist_ok=True)
+        if dry_run:
+            _print_dry_run(config, condition, output_dir)
+        else:
+            if condition != "official_baseline":
+                _preflight_ollama_models(config)
+            adapter = CraftEnvAdapter(config, output_dir)
+            raw_result = adapter.run(condition)
+            normalize_results(
+                config=config,
+                condition=condition,
+                raw_result=raw_result,
+                output_dir=output_dir,
+            )
+    except BaseException as exc:
+        _write_failure_artifacts(
+            config=config,
+            condition=condition,
+            output_dir=output_dir,
+            error=exc,
+        )
+        finalize_run_directory(
+            output_dir,
+            attempt_id=attempt_id,
+            producer="benchmarks.craft.run",
+            status="failed",
+        )
+        raise
+    finalize_run_directory(
+        output_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.craft.run",
+        status="completed",
     )
     return output_dir
 
 
-def _default_command_text(config_path: str, *, dry_run: bool, overrides: dict | None) -> str:
+def _write_failure_artifacts(
+    *,
+    config: dict,
+    condition: str,
+    output_dir: Path,
+    error: BaseException,
+) -> None:
+    if not (output_dir / "config.resolved.yaml").exists():
+        save_resolved_config(config, output_dir)
+    normalized_dir = output_dir / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    secret_values = collect_secret_values(config)
+    failure = {
+        "type": error.__class__.__name__,
+        "message": redact_text(str(error), secret_values=secret_values),
+    }
+    summary_path = normalized_dir / "summary.json"
+    if not summary_path.exists():
+        summary_path.write_text(
+            json.dumps({
+                "run_name": output_dir.name,
+                "condition": condition,
+                "seed": config.get("run", {}).get("seed", ""),
+                "structures": config.get("run", {}).get("structures", []) or [],
+                "turns": config.get("run", {}).get("turns", ""),
+                "num_games": 0,
+                "mean_final_progress": None,
+                "completion_rate": None,
+                "runtime": {"status": "failed", "failure": failure},
+                "status": "failed",
+                "failure": failure,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    metrics_path = normalized_dir / "metrics.csv"
+    if not metrics_path.exists():
+        with metrics_path.open("w", encoding="utf-8", newline="") as f:
+            csv.DictWriter(f, fieldnames=["leakage_passed"]).writeheader()
+
+
+def _default_command_text(
+    config_path: str,
+    *,
+    dry_run: bool,
+    overrides: dict | None,
+    overwrite: bool = False,
+) -> str:
     command = "python -m benchmarks.craft.run --config " + config_path
     if dry_run:
         command += " --dry-run"
-    if not overrides:
-        return command
+    overrides = overrides or {}
     if overrides.get("structures") is not None:
         command += " --structure " + ",".join(str(item) for item in overrides["structures"])
     if overrides.get("turns") is not None:
@@ -136,6 +217,8 @@ def _default_command_text(config_path: str, *, dry_run: bool, overrides: dict | 
         command += f" --seed {overrides['seed']}"
     if overrides.get("condition") is not None:
         command += f" --condition {overrides['condition']}"
+    if overwrite:
+        command += " --overwrite"
     return command
 
 
@@ -158,11 +241,14 @@ def main() -> None:
         command += f" --seed {args.seed}"
     if args.condition is not None:
         command += f" --condition {args.condition}"
+    if args.overwrite:
+        command += " --overwrite"
     run_config(
         args.config,
         dry_run=args.dry_run,
         overrides=overrides,
         command_text=command,
+        overwrite=args.overwrite,
     )
 
 

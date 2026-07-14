@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.common.report import aggregate_rows, summarize_minecraft_run
+from benchmarks.common.run_artifacts import (
+    finalize_run_directory,
+    prepare_run_directory,
+    validate_run_attempt,
+)
 from benchmarks.experiment_provenance import standard_run_name
 from benchmarks.minecraft.experiment import TASK_SELECTION_POLICIES, run_minecraft_experiment, validate_minecraft_config
 
@@ -25,6 +30,50 @@ def run_minecraft_matrix(
     execute_timeout_seconds: float | None = None,
     retain_runtime_result: bool = False,
     command_text: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    attempt_state: dict = {}
+    try:
+        return _run_minecraft_matrix_attempt(
+            config_path=config_path,
+            output_dir=output_dir,
+            config_indices=config_indices,
+            run_names=run_names,
+            enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+            task_selection_policy=task_selection_policy,
+            execute=execute,
+            execute_timeout_seconds=execute_timeout_seconds,
+            retain_runtime_result=retain_runtime_result,
+            command_text=command_text,
+            overwrite=overwrite,
+            attempt_state=attempt_state,
+        )
+    except BaseException:
+        if attempt_state:
+            finalize_run_directory(
+                attempt_state["output_dir"],
+                attempt_id=attempt_state["attempt_id"],
+                producer="benchmarks.minecraft.matrix",
+                status="failed",
+                stamp_nested=False,
+            )
+        raise
+
+
+def _run_minecraft_matrix_attempt(
+    *,
+    config_path: str | Path,
+    output_dir: str | Path,
+    config_indices: list[int] | None,
+    run_names: list[str] | None,
+    enable_dual_dag_task_selection: bool,
+    task_selection_policy: str,
+    execute: bool,
+    execute_timeout_seconds: float | None,
+    retain_runtime_result: bool,
+    command_text: str | None,
+    overwrite: bool,
+    attempt_state: dict,
 ) -> dict[str, Any]:
     """Run a CI-safe Minecraft benchmark matrix and write a matrix summary.
 
@@ -40,7 +89,12 @@ def run_minecraft_matrix(
 
     matrix_dir = Path(output_dir)
     run_output_root = matrix_dir / "runs"
-    matrix_dir.mkdir(parents=True, exist_ok=True)
+    attempt_id = prepare_run_directory(
+        matrix_dir,
+        producer="benchmarks.minecraft.matrix",
+        overwrite=overwrite,
+    )
+    attempt_state.update({"output_dir": matrix_dir, "attempt_id": attempt_id})
     run_output_root.mkdir(parents=True, exist_ok=True)
 
     results = []
@@ -66,6 +120,11 @@ def run_minecraft_matrix(
             command_text=command_text or _command_text(),
         )
         run_dir = Path(summary["output_dir"])
+        validate_run_attempt(
+            run_dir,
+            attempt_id=summary["attempt_id"],
+            require_completed=summary.get("error") is None,
+        )
         common_row = summarize_minecraft_run(run_dir, summary=summary)
         metrics = _read_json(run_dir / "metrics.json")
         result = {
@@ -73,6 +132,7 @@ def run_minecraft_matrix(
             "matrix_index": matrix_index,
             "config_index": config_index,
             "run_name": summary.get("run_name", ""),
+            "attempt_id": summary.get("attempt_id", ""),
             "run_dir": str(run_dir),
             "mode": summary.get("mode", ""),
             "execute_timeout_seconds": summary.get("execute_timeout_seconds"),
@@ -89,6 +149,7 @@ def run_minecraft_matrix(
         common_rows.append(common_row)
 
     payload = {
+        "attempt_id": attempt_id,
         "benchmark": "minecraft",
         "mode": "execute" if execute else "dry_run",
         "matrix_output_dir": str(matrix_dir),
@@ -105,6 +166,13 @@ def run_minecraft_matrix(
         "runs": results,
     }
     _write_json(matrix_dir / "matrix_summary.json", payload)
+    finalize_run_directory(
+        matrix_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.minecraft.matrix",
+        status="completed" if all(run["passed"] for run in results) else "failed",
+        stamp_nested=False,
+    )
     return payload
 
 
@@ -121,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         execute_timeout_seconds=args.execute_timeout_seconds,
         retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
+        overwrite=args.overwrite,
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary["aggregate"].get("failed_runs", 0) == 0 else 1
@@ -138,6 +207,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true", help="Explicitly run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     parser.add_argument("--retain-runtime-result", action="store_true", help="Keep each run's internal runtime result after artifact normalization")
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing non-empty matrix directory")
     args = parser.parse_args(argv)
     if args.no_dual_dag_task_selection:
         args.task_selection_policy = "original"
@@ -200,6 +270,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
     if args.retain_runtime_result:
         parts.append("--retain-runtime-result")
+    if getattr(args, "overwrite", False):
+        parts.append("--overwrite")
     return " ".join(parts)
 
 

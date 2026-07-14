@@ -3,12 +3,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from benchmarks.common.run_artifacts import (
+    finalize_run_directory,
+    prepare_run_directory,
+    validate_run_attempt,
+)
+from benchmarks.common.sanitization import redact_text
 from benchmarks.cwah.failure_diagnostics import failure_reason_counts_from_process_output, merge_count_dicts
 
 
@@ -22,13 +29,36 @@ class MatrixRun:
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    runs = build_matrix(parse_int_list(args.tasks), parse_int_list(args.seeds))
-    results = []
-    for run in runs:
-        results.append(run_matrix_item(args=args, output_dir=output_dir, run=run))
-    write_matrix_summary(output_dir=output_dir, results=results)
+    attempt_id = prepare_run_directory(
+        output_dir,
+        producer="benchmarks.cwah.matrix",
+        overwrite=args.overwrite,
+    )
+    try:
+        runs = build_matrix(parse_int_list(args.tasks), parse_int_list(args.seeds))
+        results = []
+        for run in runs:
+            results.append(run_matrix_item(args=args, output_dir=output_dir, run=run))
+        write_matrix_summary(output_dir=output_dir, results=results, attempt_id=attempt_id)
+    except BaseException:
+        finalize_run_directory(
+            output_dir,
+            attempt_id=attempt_id,
+            producer="benchmarks.cwah.matrix",
+            status="failed",
+            stamp_nested=False,
+        )
+        raise
+    finalize_run_directory(
+        output_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.cwah.matrix",
+        status="completed" if all(result.get("passed") for result in results) else "failed",
+        stamp_nested=False,
+    )
     print(json.dumps(aggregate_results(results), sort_keys=True))
+    if not all(result.get("passed") for result in results):
+        raise SystemExit(1)
 
 
 def parse_int_list(value: str) -> tuple[int, ...]:
@@ -57,8 +87,39 @@ def matrix_port(*, base_port: int, run: MatrixRun, port_stride: int) -> int:
 
 
 def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRun) -> dict[str, Any]:
+    attempt_state: dict = {}
+    try:
+        return _run_matrix_item_attempt(
+            args=args,
+            output_dir=output_dir,
+            run=run,
+            attempt_state=attempt_state,
+        )
+    except BaseException:
+        if attempt_state:
+            finalize_run_directory(
+                attempt_state["run_dir"],
+                attempt_id=attempt_state["attempt_id"],
+                producer="benchmarks.cwah.matrix.run",
+                status="failed",
+            )
+        raise
+
+
+def _run_matrix_item_attempt(
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+    run: MatrixRun,
+    attempt_state: dict,
+) -> dict[str, Any]:
     run_name = f"task_{run.task_id}_seed_{run.seed}"
     run_dir = output_dir / run_name
+    attempt_id = prepare_run_directory(
+        run_dir,
+        producer="benchmarks.cwah.matrix.run",
+    )
+    attempt_state.update({"run_dir": run_dir, "attempt_id": attempt_id})
     raw_output = run_dir / "raw.json"
     artifact_dir = run_dir / "normalized"
     command = [
@@ -83,14 +144,14 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
         str(args.navigation_loop_threshold),
         "--base-url",
         args.base_url,
-        "--api-key",
-        args.api_key,
         "--model",
         args.model,
         "--output",
         str(raw_output),
         "--artifact-dir",
         str(artifact_dir),
+        "--attempt-id",
+        attempt_id,
     ]
     if args.full_episode:
         command.append("--full-episode")
@@ -106,27 +167,43 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
         command.extend(["--base-port", str(assigned_port)])
 
     completed = subprocess.run(command, cwd=Path.cwd(), text=True, capture_output=True, check=False)
+    secret_values = (
+        getattr(args, "api_key", ""),
+        os.environ.get("CWAH_LLM_API_KEY", ""),
+    )
+    stdout = redact_text(completed.stdout.strip(), secret_values=secret_values)
+    stderr = redact_text(completed.stderr.strip(), secret_values=secret_values)
+    passed = completed.returncode == 0
     result = {
+        "attempt_id": attempt_id,
         "task_id": run.task_id,
         "seed": run.seed,
         "matrix_index": run.index,
         "base_port": assigned_port,
         "run_name": run_name,
         "returncode": completed.returncode,
-        "passed": completed.returncode == 0,
-        "stdout": completed.stdout.strip(),
-        "stderr": completed.stderr.strip(),
+        "passed": passed,
+        "stdout": stdout,
+        "stderr": stderr,
         "raw_output": str(raw_output),
         "artifact_dir": str(artifact_dir),
     }
     summary_path = artifact_dir / "summary.json"
-    if summary_path.exists():
+    if passed and summary_path.exists():
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        result["metrics"] = summary.get("metrics", {})
-        result["action_counts"] = summary.get("action_counts", {})
-        result["event_counts"] = summary.get("event_counts", {})
-        result["diagnostics"] = summary.get("diagnostics", {})
-    output_failure_counts = failure_reason_counts_from_process_output("\n".join([completed.stdout, completed.stderr]))
+        summary_attempt_id = summary.get("attempt_id") or summary.get("run_config", {}).get("attempt_id")
+        if summary_attempt_id != attempt_id:
+            result["passed"] = False
+            result["artifact_error"] = "summary_attempt_mismatch"
+        else:
+            result["metrics"] = summary.get("metrics", {})
+            result["action_counts"] = summary.get("action_counts", {})
+            result["event_counts"] = summary.get("event_counts", {})
+            result["diagnostics"] = summary.get("diagnostics", {})
+    elif passed:
+        result["passed"] = False
+        result["artifact_error"] = "missing_current_attempt_summary"
+    output_failure_counts = failure_reason_counts_from_process_output("\n".join([stdout, stderr]))
     if output_failure_counts:
         diagnostics = result.get("diagnostics", {}) if isinstance(result.get("diagnostics"), dict) else {}
         existing_failure_counts = diagnostics.get("failure_reason_counts", {}) if isinstance(diagnostics.get("failure_reason_counts"), dict) else {}
@@ -137,6 +214,17 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
             output_failure_counts,
         )
         result["diagnostics"] = diagnostics
+    finalize_run_directory(
+        run_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.cwah.matrix.run",
+        status="completed" if result["passed"] else "failed",
+    )
+    validate_run_attempt(
+        run_dir,
+        attempt_id=attempt_id,
+        require_completed=result["passed"],
+    )
     return result
 
 
@@ -153,8 +241,13 @@ def aggregate_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def write_matrix_summary(*, output_dir: Path, results: list[dict[str, Any]]) -> None:
-    summary = {"aggregate": aggregate_results(results), "runs": results}
+def write_matrix_summary(
+    *,
+    output_dir: Path,
+    results: list[dict[str, Any]],
+    attempt_id: str | None = None,
+) -> None:
+    summary = {"attempt_id": attempt_id, "aggregate": aggregate_results(results), "runs": results}
     (output_dir / "matrix_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     with (output_dir / "matrix_metrics.csv").open("w", newline="", encoding="utf-8") as f:
         fieldnames = [
@@ -211,13 +304,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefer-physical-after-steps", type=int, default=2)
     parser.add_argument("--navigation-loop-threshold", type=int, default=12, help="Suppress repeated walktowards signatures after this many episode-local selections; use 0 to disable.")
     parser.add_argument("--base-url", default="http://ollama.arc.upiscium.dev/v1")
-    parser.add_argument("--api-key", default="ollama")
     parser.add_argument("--model", default="gemma4:e4b")
     parser.add_argument("--coela-cwah-path", default="")
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")
     parser.add_argument("--base-port", type=int, default=6314)
     parser.add_argument("--port-stride", type=int, default=1, help="Port increment between matrix entries. Ports are assigned as base_port + matrix_index * port_stride.")
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing non-empty matrix directory")
     return parser.parse_args()
 
 

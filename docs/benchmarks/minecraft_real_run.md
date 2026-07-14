@@ -35,6 +35,9 @@ python -m benchmarks.minecraft.experiment \
 ```
 
 Each execute run checkpoints partial state under its own `<output_dir>/.runtime/runtime_result.json`. The checkpoint is atomically replaced and removed after normalized artifacts are written. Add `--retain-runtime-result` only when the internal checkpoint is needed for debugging.
+On POSIX, the runtime child starts a dedicated process group. The harness terminates and joins that group on timeout, interruption, or unexpected parent-side failure before finalizing the run bundle, so bridge/judger descendants are not left running.
+
+Run and matrix output directories are single-attempt bundles and are rejected when already non-empty. Pass `--overwrite` explicitly to replace a previous bundle; the new run receives a different attempt ID and artifact manifest.
 
 The real runtime runs in a child process. The parent waits up to `--execute-timeout-seconds`, reads any completed partial checkpoint, sends terminate, waits for a grace period, and uses kill as a fallback before generating timeout artifacts. A timeout therefore cannot leave controller/executor threads in the parent process or continue Minecraft actions from the child.
 
@@ -58,6 +61,8 @@ The harness preserves normalized artifacts even when the runtime raises or times
 - `dual_dag_artifact.json`
 - `decision_support.json`
 - provenance files
+
+Execute mode consumes action logs and scores only from the current run-local runtime result. Repository-global `data/action_log.json` and `data/score.json` files are not fallback inputs because they may belong to an earlier attempt.
 
 Timeout metadata is recorded in `summary.json`:
 

@@ -4,6 +4,11 @@ from pathlib import Path
 
 import yaml
 
+from benchmarks.common.sanitization import (
+    collect_secret_values,
+    redact_command_text,
+    sanitize_artifact_value,
+)
 from benchmarks.craft.dual_dag.schema import DUAL_DAG_SCHEMA_VERSION
 
 
@@ -11,7 +16,7 @@ def standard_run_name(*parts: object) -> str:
     text = "_".join(str(part) for part in parts if part not in (None, ""))
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text.strip())
     text = re.sub(r"_+", "_", text).strip("_")
-    return text or "experiment_run"
+    return text if text not in {"", ".", ".."} else "experiment_run"
 
 
 def write_provenance(
@@ -24,15 +29,18 @@ def write_provenance(
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     commit = _git_commit()
+    secret_values = collect_secret_values(resolved_config)
+    sanitized_command = redact_command_text(command, secret_values=secret_values)
+    sanitized_config = sanitize_artifact_value(resolved_config, secret_values=secret_values)
     provenance = {
         "schema_version": DUAL_DAG_SCHEMA_VERSION,
         "benchmark": benchmark,
         "commit": commit,
-        "command": command,
+        "command": sanitized_command,
         "environment_notes": environment_notes,
     }
-    (output_dir / "command.txt").write_text(command + "\n", encoding="utf-8")
-    _write_resolved_config(output_dir, resolved_config)
+    (output_dir / "command.txt").write_text(sanitized_command + "\n", encoding="utf-8")
+    _write_resolved_config(output_dir, sanitized_config)
     with (output_dir / "provenance.json").open("w", encoding="utf-8") as f:
         import json
 

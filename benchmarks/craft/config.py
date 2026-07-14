@@ -1,10 +1,13 @@
 import copy
 import json
 import os
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from benchmarks.common.sanitization import sanitize_artifact_value
 
 
 SUPPORTED_PROVIDERS = {"openai", "openai_compatible", "ollama", "ollama_native"}
@@ -115,7 +118,7 @@ def load_config(
 
     for model_name in ("director", "builder"):
         model_config = config.setdefault("models", {}).setdefault(model_name, {})
-        api_key_env = model_config.pop("api_key_env", None)
+        api_key_env = model_config.get("api_key_env")
         if api_key_env:
             api_key = os.environ.get(api_key_env)
             if not api_key and require_api_keys:
@@ -183,13 +186,30 @@ def output_dir_for_config(config: dict) -> Path:
     output_root = Path(run.get("output_dir", "result/craft"))
     if not output_root.is_absolute():
         output_root = root / output_root
-    return output_root / run.get("name", "craft_run")
+    run_name = str(run.get("name", "craft_run"))
+    if (
+        not run_name
+        or run_name in {".", ".."}
+        or Path(run_name).is_absolute()
+        or len(Path(run_name).parts) != 1
+        or "/" in run_name
+        or "\\" in run_name
+    ):
+        raise InvalidConfigError(f"run.name must be a single safe path component: {run_name!r}")
+    output_root = Path(os.path.abspath(output_root))
+    if any(path.is_symlink() for path in (output_root, *output_root.parents)):
+        raise InvalidConfigError(f"run.output_dir must not contain symlinks: {output_root}")
+    output_dir = output_root / run_name
+    if output_dir.is_symlink():
+        raise InvalidConfigError(f"CRAFT output directory must not be a symlink: {output_dir}")
+    return output_dir
 
 
 def save_resolved_config(config: dict, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    sanitized_config = sanitize_artifact_value(config)
     with (output_dir / "config.resolved.yaml").open("w", encoding="utf-8") as f:
-        yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
+        yaml.safe_dump(sanitized_config, f, sort_keys=False, allow_unicode=True)
     with (output_dir / "config.resolved.json").open("w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+        json.dump(sanitized_config, f, indent=2)
         f.write("\n")

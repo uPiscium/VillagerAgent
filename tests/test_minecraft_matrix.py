@@ -92,6 +92,23 @@ def test_minecraft_matrix_accepts_selected_indices_and_default_run_names(tmp_pat
     assert (tmp_path / "matrix" / "runs" / "config_1_second_task" / "summary.json").exists()
 
 
+def test_minecraft_matrix_finalizes_failed_attempt_on_unexpected_error(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps([_config("first", 0)]), encoding="utf-8")
+
+    with pytest.raises(IndexError, match="out of range"):
+        run_minecraft_matrix(
+            config_path=config_path,
+            output_dir=tmp_path / "matrix",
+            config_indices=[99],
+        )
+
+    matrix_dir = tmp_path / "matrix"
+    manifest = json.loads((matrix_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert not (matrix_dir / "_COMPLETED").exists()
+
+
 def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path, monkeypatch):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(

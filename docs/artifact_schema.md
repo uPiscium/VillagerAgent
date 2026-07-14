@@ -92,6 +92,19 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written after normalized artifacts are produced.
 - Classification: public sanitized command/config/provenance metadata.
+- Credential values are recursively replaced with `[REDACTED]`; credential-source fields such as `api_key_env` remain so the authentication setup is reproducible without exposing the value.
+- Commands redact credential flags and known secret literals before writing. Benchmark subprocess output and failure summaries apply the same literal redaction when a runtime credential is available.
+
+## Run Attempt And Artifact Manifest
+
+- Producers: CRAFT, C-WAH matrix/baseline, and Minecraft single/matrix harnesses.
+- `attempt.json` is written before benchmark artifacts and contains a unique `attempt_id`, producer, and lifecycle status.
+- Existing non-empty run directories are rejected by default. `--overwrite` replaces only a managed directory whose `attempt.json` belongs to the same benchmark family, then starts a new attempt ID; unmanaged or cross-benchmark directories are never recursively deleted. Implicit resume is not supported.
+- JSON, JSONL, CSV, and YAML artifacts carry the attempt ID when the bundle is finalized.
+- `artifact_manifest.json` records the attempt ID, producer, final status, relative artifact paths, byte sizes, and SHA-256 hashes.
+- Manifest validation rejects absolute or parent-traversing paths, symlinked artifacts, missing or unlisted entries, duplicate paths, and checksum mismatches. Matrix manifests include nested child manifests and artifacts without rewriting child attempt IDs.
+- `_COMPLETED` is written last and only for successfully finalized harness runs. Failed or interrupted attempts do not carry this marker.
+- Matrix aggregators validate child attempt manifests before accepting child results. C-WAH additionally rejects summaries whose attempt ID does not match the launched child.
 
 ## Internal Runtime Result
 

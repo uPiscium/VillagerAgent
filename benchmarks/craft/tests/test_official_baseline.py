@@ -1,8 +1,12 @@
 import json
 import subprocess
 
+import pytest
+
+from benchmarks.common.report import summarize_inputs
 from benchmarks.craft.config import load_config
 from benchmarks.craft.craft_env_adapter import CraftEnvAdapter
+from benchmarks.craft.run import run_config
 from benchmarks.craft.result_converter import normalize_results
 from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
 
@@ -62,6 +66,8 @@ def test_official_baseline_runs_all_requested_structures(tmp_path):
 
 
 def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monkeypatch):
+    secret = "sentinel-secret-value-12345"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
     config = load_config_with_minimal_dataset(
         tmp_path,
         "configs/craft/official_baseline_full.yaml",
@@ -92,7 +98,7 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
                     "turns": [{
                         "turn_number": 1,
                         "director_responses": {
-                            "D1": {"public_message": "place red", "internal_thinking": "hidden"},
+                            "D1": {"public_message": f"place red {secret}", "internal_thinking": "hidden"},
                         },
                         "oracle_moves": [{"hidden": True}],
                         "move_attempted": {"action": "place", "color": "red"},
@@ -103,7 +109,7 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
             }),
             encoding="utf-8",
         )
-        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout=f"ok {secret}", stderr=f"warning {secret}")
 
     monkeypatch.setattr("benchmarks.craft.craft_env_adapter.subprocess.run", fake_run)
 
@@ -112,8 +118,9 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
 
     assert raw_result["official_craft_runner"]["mode"] == "external_cli"
     assert raw_result["final_progress"] == 1.0
-    assert raw_result["turns"][0]["director_messages"] == {"D1": "place red"}
+    assert raw_result["turns"][0]["director_messages"] == {"D1": "place red [REDACTED]"}
     assert raw_result["turns"][0]["progress"] == {"overall_progress": 0.5}
+    assert secret not in json.dumps(raw_result)
     sanitized_runner_output = json.loads(
         (tmp_path / "raw" / "official_craft_runner" / "gpt-4o-mini_gpt-4o-mini" / "craft_structure_001_7.json").read_text(
             encoding="utf-8"
@@ -123,6 +130,7 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
     assert "target_structure" not in serialized
     assert "oracle_moves" not in serialized
     assert "internal_thinking" not in serialized
+    assert secret not in serialized
 
     normalize_results(
         config=config,
@@ -132,3 +140,62 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
     )
     summary = json.loads((tmp_path / "normalized" / "summary.json").read_text(encoding="utf-8"))
     assert summary["runtime"]["baseline_type"] == "full_official_runner"
+
+
+def test_official_baseline_failure_redacts_partial_runner_output(tmp_path, monkeypatch):
+    secret = "runtime-secret"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    config = load_config_with_minimal_dataset(
+        tmp_path,
+        "configs/craft/official_baseline_full.yaml",
+        overrides={"structures": [0], "turns": 2, "seed": 7},
+    )
+
+    def fail_run(command, **kwargs):
+        output_dir = command[command.index("--output") + 1]
+        partial = tmp_path / "raw" / "official_craft_runner" / "partial" / "craft_structure_001_7.json"
+        assert output_dir == str(tmp_path / "raw" / "official_craft_runner")
+        partial.parent.mkdir(parents=True)
+        partial.write_text(f'{{"error": "rejected {secret}"', encoding="utf-8")
+        (partial.parent / "runner.log").write_text(f"provider rejected {secret}", encoding="utf-8")
+        (partial.parent / "metadata.json").write_text(
+            json.dumps({"api_key": secret, "message": f"rejected {secret}"}),
+            encoding="utf-8",
+        )
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr("benchmarks.craft.craft_env_adapter.subprocess.run", fail_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        CraftEnvAdapter(config, tmp_path).run("official_baseline")
+
+    assert not (
+        tmp_path / "raw" / "official_craft_runner" / "partial" / "craft_structure_001_7.json"
+    ).exists()
+    for artifact in (tmp_path / "raw" / "official_craft_runner").rglob("*"):
+        if artifact.is_file():
+            assert secret not in artifact.read_text(encoding="utf-8")
+
+
+def test_direct_craft_failure_writes_summarizable_failed_bundle(tmp_path, monkeypatch):
+    config = load_config_with_minimal_dataset(
+        tmp_path,
+        "configs/craft/official_baseline_full.yaml",
+        overrides={"structures": [0], "turns": 2, "seed": 7},
+    )
+    config["run"]["output_dir"] = str(tmp_path / "results")
+    config["run"]["name"] = "failed_direct_run"
+    monkeypatch.setattr("benchmarks.craft.run.load_config", lambda *args, **kwargs: config)
+    monkeypatch.setattr(
+        "benchmarks.craft.run.CraftEnvAdapter.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("runner failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="runner failed"):
+        run_config("unused.yaml")
+
+    run_dir = tmp_path / "results" / "failed_direct_run"
+    row = summarize_inputs([run_dir])[0]
+    assert row["status"] == "failed"
+    assert row["failed_runs"] == 1
+    assert row["success_rate"] is None

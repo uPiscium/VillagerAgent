@@ -5,6 +5,14 @@ from pathlib import Path
 
 import yaml
 
+from benchmarks.common.run_artifacts import (
+    RunDirectoryExistsError,
+    finalize_run_directory,
+    prepare_run_directory,
+    read_attempt_id,
+    validate_run_attempt,
+)
+from benchmarks.common.sanitization import collect_secret_values, redact_text
 from benchmarks.craft.config import (
     condition_from_config,
     load_config,
@@ -58,12 +66,15 @@ def run_experiment(
     *,
     dry_run: bool = False,
     overrides: dict | None = None,
+    overwrite: bool = False,
 ) -> list[dict]:
     root = repo_root()
     manifest = load_experiment(manifest_path)
     experiment = manifest["experiment"]
     run_overrides = _experiment_overrides(experiment, overrides)
     command = _command_text(manifest_path, dry_run=dry_run, overrides=overrides)
+    if overwrite:
+        command += " --overwrite"
 
     run_names = []
     failures = []
@@ -75,12 +86,19 @@ def run_experiment(
         output_dir = output_dir_for_config(config)
         run_names.append(output_dir.name)
         try:
-            run_config(
+            completed_run_dir = run_config(
                 config_path,
                 dry_run=dry_run,
                 overrides=spec_overrides,
                 command_text=command,
+                overwrite=overwrite,
             )
+            validate_run_attempt(
+                completed_run_dir,
+                attempt_id=read_attempt_id(completed_run_dir),
+            )
+        except RunDirectoryExistsError:
+            raise
         except Exception as exc:
             if dry_run or not continue_on_error:
                 raise
@@ -156,6 +174,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--structure", default=None)
     parser.add_argument("--turns", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--run-name-suffix",
         default=None,
@@ -266,7 +285,14 @@ def _write_failure_artifacts(
     command: str,
     error: Exception,
 ) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if (output_dir / "attempt.json").exists():
+        attempt_id = read_attempt_id(output_dir)
+    else:
+        attempt_id = prepare_run_directory(
+            output_dir,
+            producer="benchmarks.craft.experiment.failure",
+        )
+    config.setdefault("_meta", {})["attempt_id"] = attempt_id
     save_resolved_config(config, output_dir)
     write_provenance(
         output_dir,
@@ -277,9 +303,10 @@ def _write_failure_artifacts(
     )
     normalized_dir = output_dir / "normalized"
     normalized_dir.mkdir(parents=True, exist_ok=True)
+    secret_values = collect_secret_values(config)
     failure = {
         "type": type(error).__name__,
-        "message": str(error),
+        "message": redact_text(str(error), secret_values=secret_values),
         "config_path": config_path,
     }
     summary = {
@@ -315,6 +342,13 @@ def _write_failure_artifacts(
     with (normalized_dir / "metrics.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["leakage_passed"])
         writer.writeheader()
+    finalize_run_directory(
+        output_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.craft.experiment.failure",
+        status="failed",
+    )
+    validate_run_attempt(output_dir, attempt_id=attempt_id, require_completed=False)
 
 
 def main() -> None:
@@ -328,6 +362,7 @@ def main() -> None:
             "seed": args.seed,
             "run_name_suffix": args.run_name_suffix,
         },
+        overwrite=args.overwrite,
     )
 
 

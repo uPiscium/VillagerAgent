@@ -132,6 +132,9 @@ Runs write to `result/craft/{run_name}/`:
 - `normalized/leakage_report.json`
 - `logs/run.log`
 
+Each run directory is a single-attempt bundle. Existing non-empty directories are rejected by default; `--overwrite` explicitly replaces the old bundle. Finalized runs include `attempt.json`, `artifact_manifest.json`, and `_COMPLETED` for successful harness execution.
+`run.name` must be a single path component and cannot escape the configured output root.
+
 `clarification_trace.jsonl` contains one row per emitted Clarify action. It records public candidate snapshots, gate reasons, a canonical question key, and the next physical action linkage for offline analysis. It must not contain hidden target structures, oracle plans, or private Director views.
 
 `clarification_outcomes.jsonl` adds deterministic offline labels to trace rows. Initial labels are `beneficial`, `neutral`, `harmful`, and `failed`; aggregate reporting is handled separately from trace generation.

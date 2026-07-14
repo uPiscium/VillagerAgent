@@ -2,7 +2,14 @@ import copy
 
 import pytest
 
-from benchmarks.craft.config import InvalidConfigError, condition_from_config, load_config, validate_config
+from benchmarks.craft.config import (
+    InvalidConfigError,
+    condition_from_config,
+    load_config,
+    output_dir_for_config,
+    save_resolved_config,
+    validate_config,
+)
 from benchmarks.craft.craft_env_adapter import _evidence_summary_enabled
 
 
@@ -75,6 +82,45 @@ def test_qwen_ollama_config_uses_native_provider_without_openai_key():
     assert config["models"]["director"]["provider"] == "ollama_native"
     assert config["models"]["builder"]["provider"] == "ollama_native"
     assert config["models"]["director"]["think"] is False
+
+
+def test_resolved_config_preserves_credential_source_without_secret(tmp_path, monkeypatch):
+    secret = "sentinel-secret-value-12345"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    config = load_config_without_runtime_assets("configs/craft/villageragent_qwen.yaml")
+
+    assert config["models"]["builder"]["api_key_env"] == "OPENAI_API_KEY"
+    assert config["models"]["builder"]["api_key"] == secret
+
+    save_resolved_config(config, tmp_path)
+
+    yaml_text = (tmp_path / "config.resolved.yaml").read_text(encoding="utf-8")
+    json_text = (tmp_path / "config.resolved.json").read_text(encoding="utf-8")
+    assert secret not in yaml_text
+    assert secret not in json_text
+    assert "OPENAI_API_KEY" in yaml_text
+    assert "[REDACTED]" in json_text
+
+
+@pytest.mark.parametrize("run_name", ["../outside", "/tmp/outside", "nested/run", r"nested\run", ".", ""])
+def test_output_dir_rejects_unsafe_run_names(run_name):
+    config = load_config_without_runtime_assets("configs/craft/official_baseline.yaml")
+    config["run"]["name"] = run_name
+
+    with pytest.raises(InvalidConfigError, match="single safe path component"):
+        output_dir_for_config(config)
+
+
+def test_output_dir_rejects_existing_run_symlink(tmp_path):
+    output_root = tmp_path / "results"
+    output_root.mkdir()
+    target = output_root / "existing_run"
+    target.mkdir()
+    (output_root / "requested_run").symlink_to(target, target_is_directory=True)
+    config = {"run": {"output_dir": str(output_root), "name": "requested_run"}}
+
+    with pytest.raises(InvalidConfigError, match="must not be a symlink"):
+        output_dir_for_config(config)
 
 
 def test_batch_qwen_ollama_config_uses_three_structure_eval_axis():

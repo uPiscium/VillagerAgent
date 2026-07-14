@@ -4,9 +4,12 @@ import json
 import multiprocessing
 import os
 import queue
+import signal
 import time
 from pathlib import Path
 
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
+from benchmarks.common.sanitization import collect_secret_values, sanitize_artifact_value
 from benchmarks.experiment_provenance import standard_run_name, write_provenance
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from env.minecraft_dual_dag import (
@@ -52,6 +55,56 @@ def run_minecraft_experiment(
     execute_timeout_seconds: float | None = None,
     retain_runtime_result: bool = False,
     command_text: str | None = None,
+    overwrite: bool = False,
+) -> dict:
+    attempt_state: dict = {}
+    try:
+        return _run_minecraft_experiment_attempt(
+            config_path=config_path,
+            output_root=output_root,
+            run_name=run_name,
+            config_index=config_index,
+            enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+            task_selection_policy=task_selection_policy,
+            execute=execute,
+            execute_timeout_seconds=execute_timeout_seconds,
+            retain_runtime_result=retain_runtime_result,
+            command_text=command_text,
+            overwrite=overwrite,
+            attempt_state=attempt_state,
+        )
+    except BaseException as exc:
+        if attempt_state:
+            attempt_state["error"] = str(exc)
+            attempt_state["error_type"] = exc.__class__.__name__
+            _write_minimal_failure_artifacts(attempt_state)
+            _sanitize_runtime_checkpoint(
+                attempt_state["output_dir"] / ".runtime" / "runtime_result.json",
+                secret_values=attempt_state.get("secret_values", ()),
+            )
+            finalize_run_directory(
+                attempt_state["output_dir"],
+                attempt_id=attempt_state["attempt_id"],
+                producer="benchmarks.minecraft.experiment",
+                status="failed",
+            )
+        raise
+
+
+def _run_minecraft_experiment_attempt(
+    *,
+    config_path: str | Path,
+    output_root: str | Path,
+    run_name: str | None,
+    config_index: int,
+    enable_dual_dag_task_selection: bool,
+    task_selection_policy: str | None,
+    execute: bool,
+    execute_timeout_seconds: float | None,
+    retain_runtime_result: bool,
+    command_text: str | None,
+    overwrite: bool,
+    attempt_state: dict,
 ) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
 
@@ -60,9 +113,27 @@ def run_minecraft_experiment(
     runtime and then captures the same public artifact set from the run outputs.
     """
     launch_config = _load_config(config_path, config_index=config_index)
+    secret_values = collect_secret_values(launch_config)
     selected_run_name = standard_run_name(run_name or launch_config.get("task_name") or _default_run_name(config_path))
     output_dir = Path(output_root) / selected_run_name
-    output_dir.mkdir(parents=True, exist_ok=True)
+    attempt_id = prepare_run_directory(
+        output_dir,
+        producer="benchmarks.minecraft.experiment",
+        overwrite=overwrite,
+    )
+    attempt_state.update({
+        "output_dir": output_dir,
+        "attempt_id": attempt_id,
+        "secret_values": secret_values,
+        "execute": execute,
+        "run_name": selected_run_name,
+    })
+    if execute:
+        from model.ollama_config import make_ollama_llm_config
+
+        runtime_secret_values = collect_secret_values(make_ollama_llm_config())
+        secret_values = tuple(dict.fromkeys((*secret_values, *runtime_secret_values)))
+        attempt_state["secret_values"] = secret_values
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     selected_policy = _task_selection_policy(
@@ -72,6 +143,7 @@ def run_minecraft_experiment(
     dual_dag_config = _dual_dag_config(selected_policy)
     tasks, graph, task_store = _task_graph_from_config(launch_config)
     action_log: dict = _fixture_action_log(launch_config)
+    action_log_available = "smoke_action_log" in launch_config
     score: dict = {}
     runtime_result: dict = {}
     error = None
@@ -104,8 +176,9 @@ def run_minecraft_experiment(
         persisted_runtime_result = _read_json(runtime_result_path, default={})
         runtime_result = runtime_result or persisted_runtime_result
         runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
-        action_log = runtime_result.get("action_log") or _read_json(Path("data/action_log.json"), default={})
-        score = runtime_result.get("score") or _read_json(Path("data/score.json"), default={})
+        action_log_available = isinstance(runtime_result.get("action_log"), dict)
+        action_log = runtime_result.get("action_log") if action_log_available else {}
+        score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
 
     runtime_task_dag_snapshot = _runtime_task_dag_snapshot(
         runtime_result=runtime_result,
@@ -144,6 +217,7 @@ def run_minecraft_experiment(
     if not execute and ranked_tasks:
         selected_task = ranked_tasks[0]
     summary = {
+        "attempt_id": attempt_id,
         "run_name": selected_run_name,
         "mode": "execute" if execute else "dry_run",
         "started_at": started_at,
@@ -189,6 +263,7 @@ def run_minecraft_experiment(
         "runtime_process_exit_code": runtime_process.get("exit_code"),
         "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
         "runtime_process_killed": bool(runtime_process.get("killed", False)),
+        "action_log_available": action_log_available,
     }
     metrics = build_minecraft_metrics(
         summary=summary,
@@ -197,8 +272,19 @@ def run_minecraft_experiment(
         decision_support=decision_support,
     )
 
-    _write_json(output_dir / "launch_config.json", sanitize_public_value(launch_config))
-    _write_json(output_dir / "action_log.json", sanitize_public_value(action_log))
+    sanitized_launch_config = sanitize_artifact_value(
+        sanitize_public_value(launch_config),
+        secret_values=secret_values,
+    )
+    action_log = sanitize_artifact_value(action_log, secret_values=secret_values)
+    task_graph_snapshot = sanitize_artifact_value(task_graph_snapshot, secret_values=secret_values)
+    runtime_task_dag_snapshot = sanitize_artifact_value(runtime_task_dag_snapshot, secret_values=secret_values)
+    artifact = sanitize_artifact_value(artifact, secret_values=secret_values)
+    decision_support = sanitize_artifact_value(decision_support, secret_values=secret_values)
+    metrics = sanitize_artifact_value(metrics, secret_values=secret_values)
+    summary = sanitize_artifact_value(summary, secret_values=secret_values)
+    _write_json(output_dir / "launch_config.json", sanitized_launch_config)
+    _write_json(output_dir / "action_log.json", action_log)
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
     _write_json(output_dir / "runtime_dual_dag_snapshot.json", runtime_task_dag_snapshot)
     _write_json(output_dir / "dual_dag_artifact.json", artifact)
@@ -209,11 +295,19 @@ def run_minecraft_experiment(
         output_dir,
         benchmark="minecraft",
         command=command_text or _command_text(),
-        resolved_config=sanitize_public_value(launch_config),
+        resolved_config=sanitized_launch_config,
         environment_notes="real_environment_execute=" + str(bool(execute)).lower(),
     )
     if execute and not retain_runtime_result:
         _remove_runtime_result(runtime_result_path)
+    elif execute:
+        _sanitize_runtime_checkpoint(runtime_result_path, secret_values=secret_values)
+    finalize_run_directory(
+        output_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.minecraft.experiment",
+        status="failed" if error else "completed",
+    )
     return summary
 
 
@@ -229,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute", action="store_true", help="Run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     parser.add_argument("--retain-runtime-result", action="store_true", help="Keep the per-run internal runtime result after normalized artifacts are written")
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing non-empty run directory")
     args = parser.parse_args(argv)
 
     summary = run_minecraft_experiment(
@@ -242,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         execute_timeout_seconds=args.execute_timeout_seconds,
         retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
+        overwrite=args.overwrite,
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary.get("error") is None else 1
@@ -355,44 +451,57 @@ def _execute_real_runtime_bounded(
         target=_runtime_process_entry,
         args=(launch_config, dual_dag_config, str(runtime_result_path), status_queue),
     )
-    process.start()
-    process.join(timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None)
-    if process.is_alive():
-        partial_before_termination = _read_json(runtime_result_path, default={})
-        process_metadata = _terminate_runtime_process(
-            process,
-            grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
-        )
-        if partial_before_termination and not runtime_result_path.exists():
-            _write_runtime_checkpoint(runtime_result_path, partial_before_termination)
-        status_queue.close()
-        raise MinecraftExecuteTimeoutError(
-            f"Minecraft execute mode timed out after {timeout_seconds} seconds",
-            process_metadata=process_metadata,
-        )
+    process_started = False
+    process_group_id = None
+    try:
+        process.start()
+        process_started = True
+        process_group_id = _wait_for_isolated_process_group(process)
+        process.join(timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None)
+        if process.is_alive():
+            partial_before_termination = _read_json(runtime_result_path, default={})
+            process_metadata = _terminate_runtime_process(
+                process,
+                grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
+                process_group_id=process_group_id,
+            )
+            if partial_before_termination and not runtime_result_path.exists():
+                _write_runtime_checkpoint(runtime_result_path, partial_before_termination)
+            raise MinecraftExecuteTimeoutError(
+                f"Minecraft execute mode timed out after {timeout_seconds} seconds",
+                process_metadata=process_metadata,
+            )
 
-    process_metadata = {
-        "exit_code": process.exitcode,
-        "terminated": False,
-        "killed": False,
-    }
-    child_status = _read_child_status(status_queue)
-    status_queue.close()
-    if child_status.get("status") == "error":
-        raise MinecraftRuntimeChildError(
-            child_status.get("error", "Minecraft runtime child failed"),
-            error_type=child_status.get("error_type", "RuntimeError"),
-            process_metadata=process_metadata,
-        )
-    if process.exitcode not in (0, None):
-        raise MinecraftRuntimeChildError(
-            f"Minecraft runtime child exited with code {process.exitcode}",
-            error_type="ChildProcessError",
-            process_metadata=process_metadata,
-        )
-    result = _read_json(runtime_result_path, default={})
-    result["runtime_process"] = process_metadata
-    return result
+        process_metadata = {
+            "exit_code": process.exitcode,
+            "terminated": False,
+            "killed": False,
+        }
+        child_status = _read_child_status(status_queue)
+        if child_status.get("status") == "error":
+            raise MinecraftRuntimeChildError(
+                child_status.get("error", "Minecraft runtime child failed"),
+                error_type=child_status.get("error_type", "RuntimeError"),
+                process_metadata=process_metadata,
+            )
+        if process.exitcode not in (0, None):
+            raise MinecraftRuntimeChildError(
+                f"Minecraft runtime child exited with code {process.exitcode}",
+                error_type="ChildProcessError",
+                process_metadata=process_metadata,
+            )
+        result = _read_json(runtime_result_path, default={})
+        result["runtime_process"] = process_metadata
+        return result
+    finally:
+        group_alive = process_group_id is not None and _process_group_exists(process_group_id)
+        if process_started and (process.is_alive() or group_alive):
+            _terminate_runtime_process(
+                process,
+                grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
+                process_group_id=process_group_id,
+            )
+        status_queue.close()
 
 
 def _runtime_process_entry(
@@ -401,6 +510,8 @@ def _runtime_process_entry(
     runtime_result_path: str,
     status_queue,
 ) -> None:
+    if hasattr(os, "setsid"):
+        os.setsid()
     try:
         result = _execute_real_runtime(
             launch_config,
@@ -422,19 +533,77 @@ def _runtime_process_entry(
         })
 
 
-def _terminate_runtime_process(process, *, grace_seconds: float) -> dict:
-    process.terminate()
+def _terminate_runtime_process(
+    process,
+    *,
+    grace_seconds: float,
+    process_group_id: int | None = None,
+) -> dict:
+    process_group_id = process_group_id or _isolated_process_group_id(process)
+    group_signaled = process_group_id is not None and _signal_process_group(
+        process_group_id,
+        signal.SIGTERM,
+    )
+    if not group_signaled and process.is_alive():
+        process.terminate()
     process.join(grace_seconds)
     killed = False
-    if process.is_alive():
-        process.kill()
-        process.join()
+    group_alive = process_group_id is not None and _process_group_exists(process_group_id)
+    if process.is_alive() or group_alive:
+        if process_group_id is not None:
+            group_signaled = _signal_process_group(process_group_id, signal.SIGKILL)
+        if not group_signaled and process.is_alive():
+            process.kill()
+        if process.is_alive():
+            process.join()
         killed = True
     return {
         "exit_code": process.exitcode,
         "terminated": True,
         "killed": killed,
     }
+
+
+def _isolated_process_group_id(process) -> int | None:
+    if os.name != "posix" or not getattr(process, "pid", None):
+        return None
+    try:
+        process_group_id = os.getpgid(process.pid)
+    except ProcessLookupError:
+        return None
+    return process_group_id if process_group_id == process.pid else None
+
+
+def _wait_for_isolated_process_group(process, *, timeout_seconds: float = 0.5) -> int | None:
+    if os.name != "posix" or not getattr(process, "pid", None):
+        return None
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        process_group_id = _isolated_process_group_id(process)
+        if process_group_id is not None:
+            return process_group_id
+        if not process.is_alive():
+            return process.pid
+        time.sleep(0.01)
+    return _isolated_process_group_id(process) or process.pid
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _signal_process_group(process_group_id: int, sent_signal: int) -> bool:
+    try:
+        os.killpg(process_group_id, sent_signal)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _read_child_status(status_queue) -> dict:
@@ -453,6 +622,47 @@ def _write_runtime_checkpoint(path: Path, payload: dict) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(temporary_path, path)
+
+
+def _sanitize_runtime_checkpoint(path: Path, *, secret_values: tuple[str, ...]) -> None:
+    if not path.exists():
+        return
+    payload = _read_json(path, default={})
+    if isinstance(payload, dict):
+        _write_runtime_checkpoint(
+            path,
+            sanitize_artifact_value(payload, secret_values=secret_values),
+        )
+
+
+def _write_minimal_failure_artifacts(attempt_state: dict) -> None:
+    output_dir = attempt_state["output_dir"]
+    secret_values = attempt_state.get("secret_values", ())
+    error = sanitize_artifact_value(
+        str(attempt_state.get("error") or "Benchmark setup failed before normalized artifacts were written."),
+        secret_values=secret_values,
+    )
+    summary_path = output_dir / "summary.json"
+    if not summary_path.exists():
+        _write_json(summary_path, {
+            "attempt_id": attempt_state["attempt_id"],
+            "run_name": attempt_state.get("run_name", output_dir.name),
+            "mode": "execute" if attempt_state.get("execute") else "dry_run",
+            "artifact_summary": {},
+            "action_log_available": False,
+            "error": error,
+            "error_type": attempt_state.get("error_type", "setup_error"),
+        })
+    metrics_path = output_dir / "metrics.json"
+    if not metrics_path.exists():
+        _write_json(metrics_path, {
+            "task_count": 0,
+            "completed_task_count": 0,
+            "task_completion_rate": None,
+            "progress": None,
+            "action_count": None,
+            "error": error,
+        })
 
 
 def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, RuntimeTaskDAGStore]:
@@ -663,6 +873,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
     if args.retain_runtime_result:
         parts.append("--retain-runtime-result")
+    if getattr(args, "overwrite", False):
+        parts.append("--overwrite")
     return " ".join(parts)
 
 
