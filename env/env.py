@@ -175,7 +175,8 @@ class VillagerBench:
             return {"message": "action log not found", "status": False}
         
     def get_init_state(self) -> [dict]:
-        assert self.running or self._virtual_debug, "env not running, please '.launch()' first"
+        if not self.running and not self._virtual_debug:
+            raise RuntimeError("Environment is not running; call '.launch()' first")
         if self.running:
             return [self.agent_status(agent.name) for agent in self.agent_pool]
         else:
@@ -290,7 +291,7 @@ class VillagerBench:
         agent_names = [agent.name for agent in self.agent_pool]
         agent_names_str = ",".join(agent_names)
         if not self.running:
-            assert False, "env not running, please '.launch()' first"
+            raise RuntimeError("Environment is not running; call '.launch()' before '.reset()'")
         
         elif self.env_type == env_type.construction:
             if self.dig_needed:
@@ -318,7 +319,7 @@ class VillagerBench:
             self.logger.info("no env type specified, only agent will be launched")
             return
         else:
-            assert False, "env type not found"
+            raise ValueError(f"Unsupported environment type: {self.env_type!r}")
         max_wait_num = 160
         while max_wait_num:
             time.sleep(1)
