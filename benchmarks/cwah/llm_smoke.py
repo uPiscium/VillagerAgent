@@ -131,7 +131,13 @@ def main() -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps({"run_config": run_config, "events": events, "metrics": metrics}, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.artifact_dir:
-        write_normalized_artifacts(artifact_dir=Path(args.artifact_dir), run_config=run_config, events=events, metrics=metrics)
+        write_normalized_artifacts(
+            artifact_dir=Path(args.artifact_dir),
+            run_config=run_config,
+            events=events,
+            metrics=metrics,
+            dual_dag_snapshot=adapter.dual_dag_snapshot(),
+        )
     print(json.dumps({"passed": True, "env": args.env, "run_config": run_config, "metrics": metrics}, sort_keys=True))
 
 
@@ -160,6 +166,7 @@ def decide_with_llm(
         "step": context.step,
         "observation_summary": summarize_observations(context.visible_epistemic_nodes),
         "candidate_action_intents": summarize_action_intents(context.legal_actions),
+        "action_candidate_dag": list(context.visible_candidates),
         "recent_failed_action_ids": list(blocked_action_ids)[-10:],
         "recent_failed_action_signatures": list(failed_action_signatures)[-10:],
         "recent_failed_open_target_ids": list(failed_open_target_ids)[-10:],
