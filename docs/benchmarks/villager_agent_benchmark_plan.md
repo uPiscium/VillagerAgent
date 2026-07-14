@@ -43,7 +43,7 @@ Existing tests:
 
 Prior real-runtime evidence:
 
-- `doc/minecraft_e2e_verification.md` records a successful minimal `env_type.none` path from Python to the FastAPI/mineflayer bridge, remote Minecraft server, action response, and environment-state refresh.
+- `docs/benchmarks/minecraft_real_run.md` records the current bounded real-run procedure and the prior minimal `env_type.none` connectivity evidence.
 - That verification did not run a judged benchmark task or claim task completion performance.
 
 ## Benchmark Definition

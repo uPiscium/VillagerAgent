@@ -69,7 +69,7 @@ In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_
 
 When server access is available, start with `env_type.none` before running a judged task. This checks the bridge and a non-destructive action without measuring benchmark success.
 
-Prior connectivity evidence is documented in `doc/minecraft_e2e_verification.md`. That run verified Python `VillagerBench` to FastAPI/mineflayer bridge to a remote Minecraft server and back, but it did not launch a benchmark judger or measure scored task completion.
+Prior local connectivity evidence verified Python `VillagerBench` to FastAPI/mineflayer bridge to a remote Minecraft server and back, but it did not launch a benchmark judger or measure scored task completion. Keep new evidence in this document or in run-specific notes under `result/`; the legacy documentation directory has been removed.
 
 ## Tool Limitations
 

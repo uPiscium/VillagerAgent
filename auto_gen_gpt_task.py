@@ -165,7 +165,7 @@ def auto_gen_one_task(use_existing_task=False):
     
     if not use_existing_task:
 
-        # more agent tools can be added here you can refer to the agent_tool in doc/api_library.md
+        # More agent tools can be added here; see env/minecraft_client.py for tool definitions.
         basic_tools = [
             Agent.scanNearbyEntities, Agent.navigateTo, Agent.attackTarget,
             Agent.useItemOnEntity,

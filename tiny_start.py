@@ -1,6 +1,6 @@
 ### This is a simple example of how to run the pipeline.
 ### You can modify the code to fit your own environment and task.
-### You can also refer to the doc/api_library.md to add more agent tools.
+### See README.md and env/minecraft_client.py when adding more agent tools.
 
 from env.env import VillagerBench, env_type, Agent
 from pipeline.controller import GlobalController
@@ -23,7 +23,7 @@ if __name__ == "__main__":
     llm_config = make_ollama_llm_config("gemma4:12b")
     configure_ollama_agent(Agent, "gemma4:12b")
 
-    # more agent tools can be added here you can refer to the agent_tool in doc/api_library.md
+    # More agent tools can be added here; see env/minecraft_client.py for tool definitions.
     agent_tool = [
         Agent.talkTo,
         Agent.read,
