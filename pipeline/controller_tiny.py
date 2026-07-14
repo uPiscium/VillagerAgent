@@ -82,41 +82,59 @@ class GlobalController:
 
     def validate_assignments(self, result: [dict]):
         validated_assignments = []
+        reserved_agent_names = set()
 
         for assign in result:
-            task_id = assign["task_id"]
-            agent_names = assign["agent"]
+            task_id = assign.get("task_id")
+            agent_names = assign.get("agent", [])
             if isinstance(agent_names, BaseAgent):
                 agent_names = [agent_names.name]
+            elif isinstance(agent_names, tuple):
+                agent_names = list(agent_names)
             elif not isinstance(agent_names, list):
                 agent_names = [agent_names]
 
             # Check if task exists
-            if task_id >= len(self.task_list) or task_id < 0:
+            if not isinstance(task_id, int) or task_id >= len(self.task_list) or task_id < 0:
                 self.logger.warning("Choose a non exist task!")
                 continue
 
             task_instance = self.task_list[task_id]
+            required_agent_count = int(task_instance.number)
+            if len(agent_names) != required_agent_count or len(set(agent_names)) != len(agent_names):
+                self.logger.warning(
+                    f"Task {task_instance.description} requires exactly {required_agent_count} unique agent(s)!"
+                )
+                continue
+
             agent_instances = []
+            assignment_is_valid = True
 
             # Check if agents exist and are valid for the task
             for agent_name in agent_names:
                 agent = next((a for a in self.agent_list if a.name == agent_name), None)
                 if agent is None:
                     self.logger.warning(f"Agent {agent_name} does not exist!")
-                    continue
+                    assignment_is_valid = False
+                    break
 
-                if self.assignment.get(agent.name) is not None or agent_name not in task_instance.candidate_list:
+                if (
+                    self.assignment.get(agent.name) is not None
+                    or agent_name in reserved_agent_names
+                    or agent_name not in task_instance.candidate_list
+                ):
                     self.logger.warning(f"Agent {agent_name} is not valid for the task!")
-                    continue
+                    assignment_is_valid = False
+                    break
 
                 agent_instances.append(agent)
 
-            if agent_instances:
+            if assignment_is_valid and len(agent_instances) == required_agent_count:
                 validated_assignments.append({
                     "task_instance": task_instance,
                     "agent_instances": agent_instances
                 })
+                reserved_agent_names.update(agent.name for agent in agent_instances)
 
         return validated_assignments
 
@@ -254,6 +272,38 @@ class GlobalController:
             task for task in self.task_list
             if task.available and task.status == Task.unknown
         ]
+
+    def assign_runnable_tasks(self):
+        assigned_count = 0
+        for task_id, task in enumerate(self.task_list):
+            if not task.available or task.status != Task.unknown:
+                continue
+
+            eligible_agents = [
+                agent
+                for agent in self.agent_list
+                if self.assignment.get(agent.name) is None
+                and agent.name in task.candidate_list
+            ]
+            selected_agents = eligible_agents[:task.number]
+            if len(selected_agents) != task.number:
+                continue
+
+            validated_assignments = self.validate_assignments([{
+                "task_id": task_id,
+                "agent": [agent.name for agent in selected_agents],
+            }])
+            if not validated_assignments:
+                continue
+
+            self.logger.info(
+                f"Task {task.description} is assigned to {[agent.name for agent in selected_agents]}"
+            )
+            self.execute_assignments(validated_assignments)
+            assigned_count += 1
+
+        return assigned_count
+
     # 生产者
     def execute_tasks(self):
         try:
@@ -304,17 +354,7 @@ class GlobalController:
                     time.sleep(self.query_interval)
                     continue
 
-                if len(self.assignment) == 0:
-                    # 如果 number == candidate_list 的长度，那么直接分配任务
-                    for task in self.task_list:
-                        if task.number == len(task.candidate_list) and task.available and \
-                            all([self.assignment.get(agent.name) is None for agent in self.agent_list if agent.name in task.candidate_list]):
-
-                            self.logger.info(f"Task {task.description} is assigned to {task.candidate_list}")
-                            self.execute_assignments([{
-                                "task_instance": task,
-                                "agent_instances": [agent for agent in self.agent_list if agent.name in task.candidate_list]
-                            }])
+                self.assign_runnable_tasks()
 
         except KeyboardInterrupt:
             self.shutdown = True

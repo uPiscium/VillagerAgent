@@ -50,7 +50,7 @@ English documentation: [README.md](README.md)
 1. `VillagerBench` が Minecraft bridge を起動し、agent tool を公開する。
 2. `DataManager` が環境状態、agent 状態、履歴、経験を保持・要約する。
 3. `TaskManager` がトップレベルタスクを初期化・分解し、canonical task dependency/lifecycle state を `RuntimeTaskDAGStore` に書き込む。
-4. `GlobalController` が `TaskManager.query_runnable_subtasks()` から store-filtered runnable task を受け取り、設定された selection policy を適用して agent に割り当て、lifecycle update を runtime task DAG に書き戻す。
+4. `GlobalController` が `TaskManager.query_runnable_subtasks()` から store-filtered runnable task を受け取り、設定された selection policy を適用し、各taskの必要人数ちょうどのfree candidate agentを割り当てて、lifecycle updateをruntime task DAGへ書き戻す。同じscheduler iteration内で、残りのfree agentには別の独立taskを割り当てられる。
 5. `BaseAgent` が `DataManager` から状態を取得し、LLM を呼び、Minecraft tool を実行し、成功/失敗を reflection する。
 6. Benchmark harness が `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, `decision_support.json` を保存する。
 
