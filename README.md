@@ -181,7 +181,7 @@ python -m benchmarks.common.report result/minecraft_matrix \
 Useful documents:
 
 - `docs/benchmarks/minecraft_real_run.md`: bounded real-run procedure and runtime asset assumptions.
-- `doc/minecraft_e2e_verification.md`: earlier bridge-level E2E verification.
+- `docs/benchmarks/minecraft_real_run.md`: current bridge and bounded execute verification guidance.
 - `/tmp/opencode/minecraft-verification-20260712.md`: local verification log from the recent development session.
 
 Current known state:

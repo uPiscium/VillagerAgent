@@ -181,7 +181,7 @@ python -m benchmarks.common.report result/minecraft_matrix \
 関連ドキュメント:
 
 - `docs/benchmarks/minecraft_real_run.md`: bounded real-run 手順と runtime asset 前提。
-- `doc/minecraft_e2e_verification.md`: 以前の bridge-level E2E 検証。
+- `docs/benchmarks/minecraft_real_run.md`: 現在の bridge と bounded execute 検証手順。
 - `/tmp/opencode/minecraft-verification-20260712.md`: 直近のローカル検証ログ。
 
 現在分かっている状態:
