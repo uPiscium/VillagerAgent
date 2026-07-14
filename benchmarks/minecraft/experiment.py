@@ -1,4 +1,5 @@
 import argparse
+from copy import deepcopy
 import json
 import signal
 import time
@@ -84,28 +85,42 @@ def run_minecraft_experiment(
         action_log = runtime_result.get("action_log") or _read_json(Path("data/action_log.json"), default={})
         score = runtime_result.get("score") or _read_json(Path("data/score.json"), default={})
 
-    artifact = build_minecraft_dual_dag_artifact(
-        action_log=action_log,
-        tasks=tasks,
-        graph=graph,
-    )
-    decision_support = build_minecraft_runtime_decision_support(
-        artifact,
-        candidate_tasks=tasks,
-    )
-    ranked = rank_minecraft_runtime_tasks(
-        tasks,
-        graph=graph,
-        action_log=action_log,
-        config=dual_dag_config,
-    )
-    ranked_tasks = ranked.get("tasks", tasks)
     runtime_task_dag_snapshot = _runtime_task_dag_snapshot(
         runtime_result=runtime_result,
         fallback_snapshot=task_store.snapshot(),
         execute=execute,
     )
-    task_graph_snapshot = runtime_result.get("task_graph_snapshot") or _task_graph_snapshot(graph)
+    task_state_source = runtime_task_dag_snapshot.get("snapshot_source", "config_fixture")
+    artifact_tasks = tasks
+    artifact_graph = graph
+    if execute and task_state_source == "real_runtime":
+        artifact_tasks, artifact_graph = task_graph_from_runtime_task_dag_snapshot(
+            runtime_task_dag_snapshot
+        )
+
+    artifact = build_minecraft_dual_dag_artifact(
+        action_log=action_log,
+        tasks=artifact_tasks,
+        graph=artifact_graph,
+    )
+    artifact["task_state_source"] = task_state_source
+    decision_support = build_minecraft_runtime_decision_support(
+        artifact,
+        candidate_tasks=artifact_tasks,
+    )
+    decision_support["task_state_source"] = task_state_source
+    ranked = rank_minecraft_runtime_tasks(
+        artifact_tasks,
+        graph=artifact_graph,
+        action_log=action_log,
+        config=dual_dag_config,
+    )
+    ranked_tasks = ranked.get("tasks", artifact_tasks)
+    task_graph_snapshot = runtime_result.get("task_graph_snapshot") or _task_graph_snapshot(artifact_graph)
+    runtime_selected_task_ids = _runtime_selected_task_ids(runtime_result) if execute else []
+    selected_task = _find_task(artifact_tasks, runtime_selected_task_ids[0]) if runtime_selected_task_ids else None
+    if not execute and ranked_tasks:
+        selected_task = ranked_tasks[0]
     summary = {
         "run_name": selected_run_name,
         "mode": "execute" if execute else "dry_run",
@@ -117,19 +132,27 @@ def run_minecraft_experiment(
         "dual_dag_runtime_enabled": True,
         "dual_dag_task_selection_enabled": selected_policy == "dual-dag",
         "task_selection_policy": selected_policy,
+        "runtime_selection_policy": selected_policy,
         "runtime_task_store": "runtime_task_dag",
         "source_of_truth": "runtime_task_dag",
         "snapshot_source": runtime_task_dag_snapshot.get("snapshot_source", "config_fixture"),
+        "task_state_source": task_state_source,
         "execute_real_environment": bool(execute),
         "execute_timeout_seconds": execute_timeout_seconds,
         "mutates_runtime": False,
         "artifact_summary": artifact.get("summary", {}),
         "recommended_task_id": decision_support.get("recommended_task_id", ""),
         "recommended_description": decision_support.get("recommended_description", ""),
-        "task_order": _task_order(tasks),
+        "task_order": _task_order(artifact_tasks),
         "ranked_task_order": _task_order(ranked_tasks),
-        "selected_task_id": _task_id(ranked_tasks[0]) if ranked_tasks else "",
-        "selected_description": ranked_tasks[0].description if ranked_tasks else "",
+        "posthoc_ranked_task_order": _task_order(ranked_tasks),
+        "runtime_selected_task_ids": runtime_selected_task_ids,
+        "selected_task_id": (
+            runtime_selected_task_ids[0]
+            if execute and runtime_selected_task_ids
+            else _task_id(selected_task) if selected_task is not None else ""
+        ),
+        "selected_description": selected_task.description if selected_task is not None else "",
         "final_score": sanitize_public_value(score),
         "progress": _progress_from_score(score),
         "error": error,
@@ -339,6 +362,54 @@ def _runtime_task_dag_snapshot(*, runtime_result: dict, fallback_snapshot: dict,
     return snapshot
 
 
+def task_graph_from_runtime_task_dag_snapshot(snapshot: dict) -> tuple[list[Task], Graph]:
+    tasks = []
+    task_by_node_id = {}
+    graph = Graph()
+    for node in snapshot.get("nodes", []) or []:
+        if not isinstance(node, dict) or node.get("node_type") != "runtime_task":
+            continue
+        node_id = str(node.get("node_id", ""))
+        if not node_id:
+            continue
+        content = node.get("content", {}) if isinstance(node.get("content"), dict) else {}
+        lifecycle = node.get("lifecycle", {}) if isinstance(node.get("lifecycle"), dict) else {}
+        derived = node.get("derived", {}) if isinstance(node.get("derived"), dict) else {}
+        metadata = deepcopy(content.get("metadata", {}))
+        if not isinstance(metadata, dict):
+            metadata = {"value": metadata}
+        metadata["runtime_snapshot"] = {
+            "last_assigned_agents": deepcopy(lifecycle.get("last_assigned_agents", []) or []),
+            "provenance": deepcopy(node.get("provenance", {})),
+        }
+        task = Task(str(content.get("description", "")), metadata)
+        task.id = node_id.removeprefix("runtime:task:")
+        task.milestones = deepcopy(content.get("milestones", []) or [])
+        task.reflect = deepcopy(content.get("reflect"))
+        task.status = str(lifecycle.get("status", Task.unknown))
+        task.candidate_list = list(lifecycle.get("candidate_agents", []) or [])
+        task._agent = list(lifecycle.get("active_agents", []) or [])
+        task.number = int(lifecycle.get("required_agent_count", 1) or 1)
+        task.available = bool(derived.get("dependency_ready", False)) and task.status == Task.unknown
+        tasks.append(task)
+        task_by_node_id[node_id] = task
+        graph.add_node(task)
+
+    for edge in snapshot.get("edges", []) or []:
+        if not isinstance(edge, dict) or edge.get("edge_type") != "precedes_task":
+            continue
+        source_id = str(edge.get("source_id", ""))
+        target_id = str(edge.get("target_id", ""))
+        if source_id not in task_by_node_id or target_id not in task_by_node_id:
+            raise ValueError(f"Runtime task snapshot edge references unknown task: {source_id} -> {target_id}")
+        graph.add_edge(task_by_node_id[source_id], task_by_node_id[target_id])
+
+    for task in tasks:
+        task._direct_pre_task_list = list(graph.get_node_to(task))
+        task.predecessor_task_list = _graph_predecessors(graph, task)
+    return tasks, graph
+
+
 def _task_from_config(config: dict, task_config: dict) -> Task:
     task = Task(task_config.get("description", "Minecraft task"), {
         "task_name": config.get("task_name", ""),
@@ -402,6 +473,32 @@ def _task_order(tasks: list[Task]) -> list[dict]:
         {"task_id": _task_id(task), "description": task.description}
         for task in tasks
     ]
+
+
+def _runtime_selected_task_ids(runtime_result: dict) -> list[str]:
+    selected = runtime_result.get("runtime_selected_task_ids", [])
+    if not isinstance(selected, list):
+        return []
+    return [str(task_id) for task_id in selected if task_id is not None]
+
+
+def _find_task(tasks: list[Task], task_id: str) -> Task | None:
+    for task in tasks:
+        if task_id in {_task_id(task), str(task.id), f"runtime:task:{task.id}"}:
+            return task
+    return None
+
+
+def _graph_predecessors(graph: Graph, task: Task) -> list[Task]:
+    predecessors = []
+    pending = list(graph.get_node_to(task))
+    while pending:
+        predecessor = pending.pop(0)
+        if predecessor in predecessors:
+            continue
+        predecessors.append(predecessor)
+        pending.extend(graph.get_node_to(predecessor))
+    return predecessors
 
 
 def _task_id(task: Task) -> str:

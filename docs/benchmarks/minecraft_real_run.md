@@ -62,8 +62,11 @@ Timeout metadata is recorded in `summary.json`:
 - `error_type`
 - `timed_out`
 - `snapshot_source`
+- `task_state_source`
 
 In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_runtime` when the harness recovers a runtime task DAG snapshot from `start_with_config.run()` or `.cache/minecraft_runtime_result.json`. If no real runtime snapshot exists, the harness falls back to the config fixture snapshot for artifact completeness.
+
+`task_state_source` applies the same provenance to `dual_dag_artifact.json`, `decision_support.json`, summary task order, and post-hoc ranking. When it is `real_runtime`, those outputs are reconstructed from the runtime task nodes and `precedes_task` edges rather than the pre-run fixture. `runtime_selected_task_ids` contains only selection history explicitly returned by the runtime; `posthoc_ranked_task_order` is analysis performed after the run and is not runtime history.
 
 ## Connectivity Smoke Check
 
@@ -106,5 +109,6 @@ This change validates the bounded execute artifact path without requiring a serv
 
 - A monkeypatched runtime error preserves `summary.json` and `metrics.json` and records `error_type == "RuntimeError"`.
 - A monkeypatched slow runtime triggers `--execute-timeout-seconds`, preserves artifacts, and records `error_type == "timeout"` and `timed_out == true`.
+- A monkeypatched runtime snapshot with a task different from the config fixture drives execute task artifacts, lifecycle status, dependency edges, and post-hoc ranking without mixing fixture state.
 
 No real Minecraft server was launched for this repository change, and no benchmark performance is claimed.

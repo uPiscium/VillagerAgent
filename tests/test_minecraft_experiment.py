@@ -3,7 +3,12 @@ import time
 
 import pytest
 
-from benchmarks.minecraft.experiment import MinecraftExecuteTimeoutError, RUNTIME_RESULT_PATH, run_minecraft_experiment
+from benchmarks.minecraft.experiment import (
+    MinecraftExecuteTimeoutError,
+    RUNTIME_RESULT_PATH,
+    run_minecraft_experiment,
+    task_graph_from_runtime_task_dag_snapshot,
+)
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
 
@@ -38,6 +43,10 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert summary["dual_dag_task_selection_enabled"] is True
     assert summary["runtime_task_store"] == "runtime_task_dag"
     assert summary["source_of_truth"] == "runtime_task_dag"
+    assert summary["task_state_source"] == "config_fixture"
+    assert summary["runtime_selection_policy"] == "dual-dag"
+    assert summary["runtime_selected_task_ids"] == []
+    assert summary["posthoc_ranked_task_order"] == summary["ranked_task_order"]
     assert summary["mutates_runtime"] is False
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
@@ -58,9 +67,13 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert provenance["benchmark"] == "minecraft"
     assert provenance["schema_version"] == "1.0.0"
     runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
+    artifact = json.loads((output_dir / "dual_dag_artifact.json").read_text(encoding="utf-8"))
+    decision_support = json.loads((output_dir / "decision_support.json").read_text(encoding="utf-8"))
     assert runtime_snapshot["source_of_truth"] == "runtime_task_dag"
     assert runtime_snapshot["snapshot_source"] == "config_fixture"
     assert runtime_snapshot["nodes"][0]["node_type"] == "runtime_task"
+    assert artifact["task_state_source"] == "config_fixture"
+    assert decision_support["task_state_source"] == "config_fixture"
 
 
 def test_minecraft_experiment_sanitizes_run_names(tmp_path):
@@ -338,6 +351,106 @@ def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
     assert summary["snapshot_source"] == "real_runtime"
     assert runtime_snapshot["snapshot_source"] == "real_runtime"
     assert runtime_snapshot["nodes"][0]["lifecycle"]["status"] == "success"
+
+
+def test_runtime_task_snapshot_adapter_restores_tasks_edges_and_lifecycle_metadata():
+    snapshot = _runtime_result_snapshot(status="running")["runtime_task_dag_snapshot"]
+    snapshot["nodes"].append({
+        "node_id": "runtime:task:second",
+        "node_type": "runtime_task",
+        "content": {
+            "description": "Second runtime task",
+            "metadata": {"kind": "follow_up"},
+            "milestones": ["done"],
+            "reflect": {"ok": True},
+        },
+        "lifecycle": {
+            "status": "unknown",
+            "candidate_agents": ["Bob"],
+            "active_agents": [],
+            "last_assigned_agents": [],
+            "required_agent_count": 1,
+        },
+        "derived": {"dependency_ready": False, "blocked_by_tasks": ["runtime:task:mock"]},
+        "provenance": {"source": "test_replan"},
+    })
+    snapshot["edges"] = [{
+        "source_id": "runtime:task:mock",
+        "target_id": "runtime:task:second",
+        "edge_type": "precedes_task",
+        "metadata": {},
+    }]
+
+    tasks, graph = task_graph_from_runtime_task_dag_snapshot(snapshot)
+
+    assert [(task.id, task.description, task.status) for task in tasks] == [
+        ("mock", "Runtime task", "running"),
+        ("second", "Second runtime task", "unknown"),
+    ]
+    assert tasks[0].candidate_list == ["Alice"]
+    assert tasks[0]._agent == ["Alice"]
+    assert tasks[0].number == 1
+    assert tasks[0].content["runtime_snapshot"]["last_assigned_agents"] == ["Alice"]
+    assert tasks[1].content["runtime_snapshot"]["provenance"] == {"source": "test_replan"}
+    assert [(start.id, end.id) for start, end in graph.edge] == [("mock", "second")]
+
+
+def test_minecraft_execute_builds_task_artifacts_from_real_runtime_state(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: _runtime_result_snapshot(status="success"),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="runtime_artifact_source",
+        execute=True,
+    )
+
+    output_dir = tmp_path / "result" / "runtime_artifact_source"
+    artifact = json.loads((output_dir / "dual_dag_artifact.json").read_text(encoding="utf-8"))
+    decision_support = json.loads((output_dir / "decision_support.json").read_text(encoding="utf-8"))
+    task_nodes = [node for node in artifact["nodes"] if node["node_type"] == "minecraft_task"]
+    assert artifact["task_state_source"] == "real_runtime"
+    assert [node["content"]["description"] for node in task_nodes] == ["Runtime task"]
+    assert task_nodes[0]["content"]["status"] == "success"
+    assert task_nodes[0]["content"]["last_assigned_agents"] == ["Alice"]
+    assert task_nodes[0]["content"]["metadata"]["runtime_snapshot"]["last_assigned_agents"] == ["Alice"]
+    assert decision_support["task_state_source"] == "real_runtime"
+    assert [candidate["description"] for candidate in decision_support["candidates"]] == ["Runtime task"]
+    assert summary["task_state_source"] == "real_runtime"
+    assert summary["task_order"][0]["description"] == "Runtime task"
+    assert summary["runtime_selection_policy"] == "dual-dag"
+    assert summary["runtime_selected_task_ids"] == []
+    assert summary["posthoc_ranked_task_order"][0]["description"] == "Runtime task"
+    assert summary["selected_task_id"] == ""
+    assert any(edge["edge_type"] == "task_invokes_action" for edge in artifact["edges"])
+    metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["task_completion_rate"] == 1.0
+
+
+def test_minecraft_execute_uses_recorded_runtime_selection_history(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    runtime_result = _runtime_result_snapshot(status="success")
+    runtime_result["runtime_selected_task_ids"] = ["runtime:task:mock"]
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: runtime_result,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="runtime_selection_history",
+        execute=True,
+    )
+
+    assert summary["runtime_selected_task_ids"] == ["runtime:task:mock"]
+    assert summary["selected_task_id"] == "runtime:task:mock"
+    assert summary["selected_description"] == "Runtime task"
 
 
 def test_minecraft_execute_failure_uses_partial_runtime_snapshot(tmp_path, monkeypatch):
