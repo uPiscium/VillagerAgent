@@ -3,6 +3,7 @@ import random
 import re
 
 from model.init_model import init_language_model
+from model.ollama_config import load_agent_api_key_list
 import argparse
 from llm_gen_prompt import *
 from pipeline.utils import format_string
@@ -24,7 +25,7 @@ with open("data/gen_example.json", "r") as f:
     action_list = example["action_list"]
     concreting_examples = example["concreting_examples"]
 
-api_key_list = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"]
+api_key_list = load_agent_api_key_list()
 llm_config = {
     "api_key": api_key_list[0],
     "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",

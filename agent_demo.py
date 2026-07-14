@@ -5,13 +5,13 @@ from pipeline.controller import GlobalController
 from pipeline.data_manager import DataManager
 from pipeline.task_manager import TaskManager
 from model.openai_models import OpenAILanguageModel
-import json
+from model.ollama_config import load_agent_api_key_list
 
 if __name__ == "__main__":
 
 
     # 为了加速，我们使用了多个API KEY，同时api_base也改为了国内的服务器
-    openai_key_list = json.load(open("API_KEY_LIST", "r"))["OPENAI"]
+    openai_key_list = load_agent_api_key_list(key="OPENAI")
     base_url = "https://api.chatanywhere.tech/v1"
     llm = OpenAILanguageModel(api_model="gpt-4-1106-preview", api_base=base_url, api_key_list=openai_key_list)
     Agent.model = "gpt-4-1106-preview"
