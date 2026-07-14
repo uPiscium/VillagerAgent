@@ -98,10 +98,12 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
         json.dumps([_config("first", 0), _config("second", 1)]),
         encoding="utf-8",
     )
-    observed_paths = []
-
     def runtime_result(*args, **kwargs):
-        observed_paths.append(kwargs["runtime_result_path"])
+        runtime_result_path = kwargs["runtime_result_path"]
+        runtime_result_path.parent.parent.joinpath("child_runtime_path.txt").write_text(
+            str(runtime_result_path),
+            encoding="utf-8",
+        )
         return {}
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
@@ -113,10 +115,14 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
         execute=True,
     )
 
-    assert observed_paths == [
+    expected_paths = [
         tmp_path / "matrix" / "runs" / "first_run" / ".runtime" / "runtime_result.json",
         tmp_path / "matrix" / "runs" / "second_run" / ".runtime" / "runtime_result.json",
     ]
+    assert [
+        path.parent.parent.joinpath("child_runtime_path.txt").read_text(encoding="utf-8")
+        for path in expected_paths
+    ] == [str(path) for path in expected_paths]
 
 
 def test_minecraft_matrix_can_compare_task_selection_policies(tmp_path):

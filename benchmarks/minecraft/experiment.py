@@ -1,7 +1,9 @@
 import argparse
 from copy import deepcopy
 import json
-import signal
+import multiprocessing
+import os
+import queue
 import time
 from pathlib import Path
 
@@ -20,10 +22,22 @@ from type_define.graph import Graph, Task
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
 TASK_SELECTION_POLICIES = ("dual-dag", "original")
+RUNTIME_TERMINATE_GRACE_SECONDS = 1.0
 
 
 class MinecraftExecuteTimeoutError(TimeoutError):
     """Raised when a bounded real Minecraft run exceeds its timeout."""
+
+    def __init__(self, message: str, *, process_metadata: dict | None = None):
+        super().__init__(message)
+        self.process_metadata = process_metadata or {}
+
+
+class MinecraftRuntimeChildError(RuntimeError):
+    def __init__(self, message: str, *, error_type: str, process_metadata: dict):
+        super().__init__(message)
+        self.error_type = error_type
+        self.process_metadata = process_metadata
 
 
 def run_minecraft_experiment(
@@ -63,6 +77,7 @@ def run_minecraft_experiment(
     error = None
     error_type = ""
     timed_out = False
+    runtime_process = {}
     runtime_result_path = output_dir / ".runtime" / "runtime_result.json"
 
     if execute:
@@ -78,11 +93,17 @@ def run_minecraft_experiment(
             error = str(exc)
             error_type = "timeout"
             timed_out = True
+            runtime_process = exc.process_metadata
+        except MinecraftRuntimeChildError as exc:
+            error = str(exc)
+            error_type = exc.error_type
+            runtime_process = exc.process_metadata
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
             error_type = exc.__class__.__name__
         persisted_runtime_result = _read_json(runtime_result_path, default={})
         runtime_result = runtime_result or persisted_runtime_result
+        runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
         action_log = runtime_result.get("action_log") or _read_json(Path("data/action_log.json"), default={})
         score = runtime_result.get("score") or _read_json(Path("data/score.json"), default={})
 
@@ -160,6 +181,10 @@ def run_minecraft_experiment(
         "error_type": error_type,
         "timed_out": timed_out,
         "runtime_result_retained": bool(execute and retain_runtime_result and runtime_result_path.exists()),
+        "runtime_process_isolated": bool(execute),
+        "runtime_process_exit_code": runtime_process.get("exit_code"),
+        "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
+        "runtime_process_killed": bool(runtime_process.get("killed", False)),
     }
     metrics = build_minecraft_metrics(
         summary=summary,
@@ -320,42 +345,110 @@ def _execute_real_runtime_bounded(
     timeout_seconds: float | None,
     runtime_result_path: Path,
 ) -> dict:
-    if timeout_seconds is None or timeout_seconds <= 0:
-        return _execute_real_runtime(
-            launch_config,
-            dual_dag_config=dual_dag_config,
-            runtime_result_path=runtime_result_path,
+    context = multiprocessing.get_context()
+    status_queue = context.Queue()
+    process = context.Process(
+        target=_runtime_process_entry,
+        args=(launch_config, dual_dag_config, str(runtime_result_path), status_queue),
+    )
+    process.start()
+    process.join(timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None)
+    if process.is_alive():
+        partial_before_termination = _read_json(runtime_result_path, default={})
+        process_metadata = _terminate_runtime_process(
+            process,
+            grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
         )
-
-    timeout_triggered = {"value": False}
-
-    def _timeout_handler(signum, frame):
-        timeout_triggered["value"] = True
+        if partial_before_termination and not runtime_result_path.exists():
+            _write_runtime_checkpoint(runtime_result_path, partial_before_termination)
+        status_queue.close()
         raise MinecraftExecuteTimeoutError(
-            f"Minecraft execute mode timed out after {timeout_seconds} seconds"
+            f"Minecraft execute mode timed out after {timeout_seconds} seconds",
+            process_metadata=process_metadata,
         )
 
-    previous_handler = signal.getsignal(signal.SIGALRM)
-    signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    process_metadata = {
+        "exit_code": process.exitcode,
+        "terminated": False,
+        "killed": False,
+    }
+    child_status = _read_child_status(status_queue)
+    status_queue.close()
+    if child_status.get("status") == "error":
+        raise MinecraftRuntimeChildError(
+            child_status.get("error", "Minecraft runtime child failed"),
+            error_type=child_status.get("error_type", "RuntimeError"),
+            process_metadata=process_metadata,
+        )
+    if process.exitcode not in (0, None):
+        raise MinecraftRuntimeChildError(
+            f"Minecraft runtime child exited with code {process.exitcode}",
+            error_type="ChildProcessError",
+            process_metadata=process_metadata,
+        )
+    result = _read_json(runtime_result_path, default={})
+    result["runtime_process"] = process_metadata
+    return result
+
+
+def _runtime_process_entry(
+    launch_config: dict,
+    dual_dag_config: dict,
+    runtime_result_path: str,
+    status_queue,
+) -> None:
     try:
-        return _execute_real_runtime(
+        result = _execute_real_runtime(
             launch_config,
             dual_dag_config=dual_dag_config,
-            runtime_result_path=runtime_result_path,
-        )
-    except RuntimeError as exc:
-        # env.run() is a contextmanager that logs and swallows exceptions raised
-        # before its first yield; contextlib then surfaces ``generator didn't
-        # yield``. Preserve the original timeout classification for reports.
-        if timeout_triggered["value"] and str(exc) == "generator didn't yield":
-            raise MinecraftExecuteTimeoutError(
-                f"Minecraft execute mode timed out after {timeout_seconds} seconds"
-            ) from exc
-        raise
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
+            runtime_result_path=Path(runtime_result_path),
+        ) or {}
+        result_path = Path(runtime_result_path)
+        if result or not result_path.exists():
+            _write_runtime_checkpoint(result_path, result)
+        status_queue.put({"status": "completed"})
+    except BaseException as exc:
+        partial = _read_json(Path(runtime_result_path), default={})
+        partial["error"] = str(exc)
+        _write_runtime_checkpoint(Path(runtime_result_path), partial)
+        status_queue.put({
+            "status": "error",
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        })
+
+
+def _terminate_runtime_process(process, *, grace_seconds: float) -> dict:
+    process.terminate()
+    process.join(grace_seconds)
+    killed = False
+    if process.is_alive():
+        process.kill()
+        process.join()
+        killed = True
+    return {
+        "exit_code": process.exitcode,
+        "terminated": True,
+        "killed": killed,
+    }
+
+
+def _read_child_status(status_queue) -> dict:
+    try:
+        return status_queue.get(timeout=0.5)
+    except queue.Empty:
+        return {}
+
+
+def _write_runtime_checkpoint(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary_path, path)
 
 
 def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, RuntimeTaskDAGStore]:

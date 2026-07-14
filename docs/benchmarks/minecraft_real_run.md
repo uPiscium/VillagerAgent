@@ -36,6 +36,8 @@ python -m benchmarks.minecraft.experiment \
 
 Each execute run checkpoints partial state under its own `<output_dir>/.runtime/runtime_result.json`. The checkpoint is atomically replaced and removed after normalized artifacts are written. Add `--retain-runtime-result` only when the internal checkpoint is needed for debugging.
 
+The real runtime runs in a child process. The parent waits up to `--execute-timeout-seconds`, reads any completed partial checkpoint, sends terminate, waits for a grace period, and uses kill as a fallback before generating timeout artifacts. A timeout therefore cannot leave controller/executor threads in the parent process or continue Minecraft actions from the child.
+
 For a matrix run, pass the same bound to `benchmarks.minecraft.matrix`:
 
 ```bash
@@ -65,6 +67,10 @@ Timeout metadata is recorded in `summary.json`:
 - `timed_out`
 - `snapshot_source`
 - `task_state_source`
+- `runtime_process_isolated`
+- `runtime_process_exit_code`
+- `runtime_process_terminated`
+- `runtime_process_killed`
 
 In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_runtime` when the harness recovers a runtime task DAG snapshot from `start_with_config.run()` or the run-local `.runtime/runtime_result.json`. If no real runtime snapshot exists, the harness falls back to the config fixture snapshot for artifact completeness.
 

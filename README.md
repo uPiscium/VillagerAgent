@@ -158,6 +158,8 @@ Dry-run is the default if `--execute` is omitted. Dry-run does not require a Min
 
 Execute checkpoints are isolated under each run directory and cleaned after normalized artifacts are written. Use `--retain-runtime-result` only to keep the internal `.runtime/runtime_result.json` checkpoint for debugging.
 
+Execute mode runs the Minecraft runtime in a child process. The parent owns the wall-clock timeout and terminates, then kills if necessary, the complete child runtime before writing timeout artifacts; it does not rely on `SIGALRM` to interrupt controller threads.
+
 Config field details are documented in [docs/configuration.md](docs/configuration.md).
 
 ## Run A Dry Matrix

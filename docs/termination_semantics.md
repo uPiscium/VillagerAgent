@@ -28,6 +28,7 @@ Termination state is not the same as benchmark success. A run can terminate and 
 
 - Condition: bounded execute mode exceeds `--execute-timeout-seconds`.
 - Harness representation: `timed_out == true`, `error_type == "timeout"`, and `execute_timeout_seconds` set in `summary.json`.
+- Process representation: `runtime_process_isolated == true`, `runtime_process_terminated == true`, and `runtime_process_killed` records whether the kill fallback was required. The child has been joined before artifacts are written.
 - Artifacts: partial artifacts are preserved.
 - Comparison: diagnostic unless timeout policy is part of the benchmark protocol.
 

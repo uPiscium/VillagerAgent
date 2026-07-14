@@ -6,6 +6,7 @@ import pytest
 
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
+    _terminate_runtime_process,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
 )
@@ -325,6 +326,8 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     assert summary["error"] == "server unavailable"
     assert summary["error_type"] == "RuntimeError"
     assert summary["timed_out"] is False
+    assert summary["runtime_process_isolated"] is True
+    assert summary["runtime_process_exit_code"] == 0
     assert (output_dir / "summary.json").exists()
     assert (output_dir / "metrics.json").exists()
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
@@ -351,6 +354,9 @@ def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
     assert summary["snapshot_source"] == "real_runtime"
     assert runtime_snapshot["snapshot_source"] == "real_runtime"
     assert runtime_snapshot["nodes"][0]["lifecycle"]["status"] == "success"
+    assert summary["runtime_process_isolated"] is True
+    assert summary["runtime_process_exit_code"] == 0
+    assert summary["runtime_process_terminated"] is False
 
 
 def test_runtime_task_snapshot_adapter_restores_tasks_edges_and_lifecycle_metadata():
@@ -497,12 +503,52 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     output_dir = tmp_path / "result" / "execute_timeout"
     assert summary["error_type"] == "timeout"
     assert summary["timed_out"] is True
+    assert summary["runtime_process_isolated"] is True
+    assert summary["runtime_process_terminated"] is True
     assert "timed out after 0.01 seconds" in summary["error"]
     assert (output_dir / "action_log.json").exists()
     persisted = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert persisted["timed_out"] is True
     common_rows = summarize_inputs([output_dir])
     assert common_rows[0]["error_type"] == "timeout"
+
+
+def test_minecraft_execute_timeout_stops_child_activity(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    late_marker = tmp_path / "late_child_activity.txt"
+
+    def slow_then_write(*args, **kwargs):
+        time.sleep(0.2)
+        late_marker.write_text("still running", encoding="utf-8")
+        return {}
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", slow_then_write)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="child_stops",
+        execute=True,
+        execute_timeout_seconds=0.01,
+    )
+    time.sleep(0.3)
+
+    assert summary["timed_out"] is True
+    assert summary["runtime_process_terminated"] is True
+    assert not late_marker.exists()
+
+
+def test_runtime_process_termination_uses_kill_fallback():
+    process = _StubbornProcess()
+
+    metadata = _terminate_runtime_process(process, grace_seconds=0.01)
+
+    assert process.calls == ["terminate", ("join", 0.01), "kill", ("join", None)]
+    assert metadata == {
+        "exit_code": -9,
+        "terminated": True,
+        "killed": True,
+    }
 
 
 def test_minecraft_execute_timeout_uses_partial_runtime_snapshot(tmp_path, monkeypatch):
@@ -560,10 +606,13 @@ def test_minecraft_execute_timeout_survives_contextmanager_generator_error(tmp_p
 
 def test_minecraft_execute_uses_unique_per_run_result_paths_and_cleans_up(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
-    observed_paths = []
 
     def runtime_result(*args, **kwargs):
-        observed_paths.append(Path(kwargs["runtime_result_path"]))
+        runtime_result_path = Path(kwargs["runtime_result_path"])
+        (runtime_result_path.parent.parent / "child_runtime_path.txt").write_text(
+            str(runtime_result_path),
+            encoding="utf-8",
+        )
         return _runtime_result_snapshot(status="success")
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
@@ -581,13 +630,17 @@ def test_minecraft_execute_uses_unique_per_run_result_paths_and_cleans_up(tmp_pa
         execute=True,
     )
 
-    assert observed_paths == [
+    expected_paths = [
         tmp_path / "result" / "run_a" / ".runtime" / "runtime_result.json",
         tmp_path / "result" / "run_b" / ".runtime" / "runtime_result.json",
     ]
+    assert [
+        Path(first["output_dir"]).joinpath("child_runtime_path.txt").read_text(encoding="utf-8"),
+        Path(second["output_dir"]).joinpath("child_runtime_path.txt").read_text(encoding="utf-8"),
+    ] == [str(path) for path in expected_paths]
     assert first["runtime_result_retained"] is False
     assert second["runtime_result_retained"] is False
-    assert all(not path.exists() for path in observed_paths)
+    assert all(not path.exists() for path in expected_paths)
     assert (tmp_path / "result" / "run_a" / "runtime_dual_dag_snapshot.json").exists()
     assert (tmp_path / "result" / "run_b" / "runtime_dual_dag_snapshot.json").exists()
 
@@ -684,6 +737,28 @@ def _write_minecraft_config(tmp_path):
         encoding="utf-8",
     )
     return config_path
+
+
+class _StubbornProcess:
+    def __init__(self):
+        self.calls = []
+        self.exitcode = None
+        self._alive = True
+
+    def terminate(self):
+        self.calls.append("terminate")
+
+    def join(self, timeout=None):
+        self.calls.append(("join", timeout))
+        if timeout is None:
+            self._alive = False
+            self.exitcode = -9
+
+    def is_alive(self):
+        return self._alive
+
+    def kill(self):
+        self.calls.append("kill")
 
 
 def _runtime_result_snapshot(status="success"):
