@@ -92,6 +92,52 @@ def test_minecraft_matrix_accepts_selected_indices_and_default_run_names(tmp_pat
     assert (tmp_path / "matrix" / "runs" / "config_1_second_task" / "summary.json").exists()
 
 
+def test_minecraft_matrix_can_compare_task_selection_policies(tmp_path):
+    base_config = _config("policy_compare", 0)
+    base_config["agent_num"] = 2
+    base_config["smoke_tasks"] = [
+        {
+            "id": "open_locked_door",
+            "description": "Open locked door",
+            "candidate_agents": ["Alice"],
+            "assigned_agents": ["Alice"],
+        },
+        {"id": "find_chest", "description": "Find chest", "candidate_agents": ["Bob"]},
+    ]
+    base_config["smoke_action_log"] = {
+        "Alice": [{
+            "action": "openContainer",
+            "kwargs": {"player_name": "Alice", "item_name": "door"},
+            "result": {"status": False, "message": "door is locked"},
+        }],
+        "Bob": [{
+            "action": "talkTo",
+            "kwargs": {
+                "player_name": "Bob",
+                "entity_name": "Alice",
+                "message": "The chest is north of the door.",
+            },
+            "result": {"status": True},
+        }],
+    }
+    original = dict(base_config, task_name="policy_original", task_selection_policy="original")
+    dual_dag = dict(base_config, task_name="policy_dual_dag", task_selection_policy="dual-dag")
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps([original, dual_dag]), encoding="utf-8")
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["original", "dual_dag"],
+    )
+
+    assert [run["task_selection_policy"] for run in summary["runs"]] == ["original", "dual-dag"]
+    original_summary = json.loads((tmp_path / "matrix" / "runs" / "original" / "summary.json").read_text(encoding="utf-8"))
+    dual_dag_summary = json.loads((tmp_path / "matrix" / "runs" / "dual_dag" / "summary.json").read_text(encoding="utf-8"))
+    assert original_summary["task_order"] == original_summary["ranked_task_order"]
+    assert dual_dag_summary["ranked_task_order"][0]["description"] == "Find chest"
+
+
 def test_minecraft_matrix_rejects_mismatched_run_names(tmp_path):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(json.dumps([_config("first", 0), _config("second", 1)]), encoding="utf-8")
