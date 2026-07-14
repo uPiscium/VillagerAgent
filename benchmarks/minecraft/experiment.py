@@ -20,7 +20,6 @@ from type_define.graph import Graph, Task
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
 TASK_SELECTION_POLICIES = ("dual-dag", "original")
-RUNTIME_RESULT_PATH = Path(".cache/minecraft_runtime_result.json")
 
 
 class MinecraftExecuteTimeoutError(TimeoutError):
@@ -37,6 +36,7 @@ def run_minecraft_experiment(
     task_selection_policy: str | None = None,
     execute: bool = False,
     execute_timeout_seconds: float | None = None,
+    retain_runtime_result: bool = False,
     command_text: str | None = None,
 ) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
@@ -63,15 +63,16 @@ def run_minecraft_experiment(
     error = None
     error_type = ""
     timed_out = False
+    runtime_result_path = output_dir / ".runtime" / "runtime_result.json"
 
     if execute:
-        if RUNTIME_RESULT_PATH.exists():
-            RUNTIME_RESULT_PATH.unlink()
+        _remove_runtime_result(runtime_result_path)
         try:
             runtime_result = _execute_real_runtime_bounded(
                 launch_config,
                 dual_dag_config=dual_dag_config,
                 timeout_seconds=execute_timeout_seconds,
+                runtime_result_path=runtime_result_path,
             ) or {}
         except MinecraftExecuteTimeoutError as exc:
             error = str(exc)
@@ -80,7 +81,7 @@ def run_minecraft_experiment(
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
             error_type = exc.__class__.__name__
-        persisted_runtime_result = _read_json(RUNTIME_RESULT_PATH, default={})
+        persisted_runtime_result = _read_json(runtime_result_path, default={})
         runtime_result = runtime_result or persisted_runtime_result
         action_log = runtime_result.get("action_log") or _read_json(Path("data/action_log.json"), default={})
         score = runtime_result.get("score") or _read_json(Path("data/score.json"), default={})
@@ -158,6 +159,7 @@ def run_minecraft_experiment(
         "error": error,
         "error_type": error_type,
         "timed_out": timed_out,
+        "runtime_result_retained": bool(execute and retain_runtime_result and runtime_result_path.exists()),
     }
     metrics = build_minecraft_metrics(
         summary=summary,
@@ -181,6 +183,8 @@ def run_minecraft_experiment(
         resolved_config=sanitize_public_value(launch_config),
         environment_notes="real_environment_execute=" + str(bool(execute)).lower(),
     )
+    if execute and not retain_runtime_result:
+        _remove_runtime_result(runtime_result_path)
     return summary
 
 
@@ -195,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-dual-dag-task-selection", action="store_true", help="Deprecated compatibility flag; equivalent to --task-selection-policy original")
     parser.add_argument("--execute", action="store_true", help="Run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
+    parser.add_argument("--retain-runtime-result", action="store_true", help="Keep the per-run internal runtime result after normalized artifacts are written")
     args = parser.parse_args(argv)
 
     summary = run_minecraft_experiment(
@@ -206,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         task_selection_policy=_policy_from_args(args),
         execute=args.execute,
         execute_timeout_seconds=args.execute_timeout_seconds,
+        retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
     )
     print(json.dumps(summary, indent=2))
@@ -274,7 +280,12 @@ def _required_int(config: dict, field: str, *, context: str) -> int:
         raise ValueError(f"{context}.{field} must be an integer") from exc
 
 
-def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> dict:
+def _execute_real_runtime(
+    launch_config: dict,
+    *,
+    dual_dag_config: dict,
+    runtime_result_path: Path,
+) -> dict:
     from start_with_config import run
     from model.ollama_config import make_ollama_llm_config
 
@@ -298,7 +309,7 @@ def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> dict
         [llm_config.get("api_key_list", [])],
         document,
         minecraft_dual_dag_config=dual_dag_config,
-        runtime_result_path=str(RUNTIME_RESULT_PATH),
+        runtime_result_path=str(runtime_result_path),
     )
 
 
@@ -307,9 +318,14 @@ def _execute_real_runtime_bounded(
     *,
     dual_dag_config: dict,
     timeout_seconds: float | None,
+    runtime_result_path: Path,
 ) -> dict:
     if timeout_seconds is None or timeout_seconds <= 0:
-        return _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+        return _execute_real_runtime(
+            launch_config,
+            dual_dag_config=dual_dag_config,
+            runtime_result_path=runtime_result_path,
+        )
 
     timeout_triggered = {"value": False}
 
@@ -323,7 +339,11 @@ def _execute_real_runtime_bounded(
     signal.signal(signal.SIGALRM, _timeout_handler)
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
-        return _execute_real_runtime(launch_config, dual_dag_config=dual_dag_config)
+        return _execute_real_runtime(
+            launch_config,
+            dual_dag_config=dual_dag_config,
+            runtime_result_path=runtime_result_path,
+        )
     except RuntimeError as exc:
         # env.run() is a contextmanager that logs and swallows exceptions raised
         # before its first yield; contextlib then surfaces ``generator didn't
@@ -543,6 +563,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.append("--execute")
     if args.execute_timeout_seconds is not None:
         parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
+    if args.retain_runtime_result:
+        parts.append("--retain-runtime-result")
     return " ".join(parts)
 
 
@@ -551,6 +573,15 @@ def _read_json(path: Path, *, default):
         return default
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _remove_runtime_result(path: Path) -> None:
+    for candidate in (path, path.with_suffix(path.suffix + ".tmp")):
+        if candidate.exists():
+            candidate.unlink()
+    runtime_dir = path.parent
+    if runtime_dir.exists() and not any(runtime_dir.iterdir()):
+        runtime_dir.rmdir()
 
 
 def _write_json(path: Path, payload) -> None:

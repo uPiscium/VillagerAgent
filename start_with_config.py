@@ -45,9 +45,13 @@ def _write_runtime_result(path: str | None, payload: dict) -> None:
     if not path:
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary_path, path)
 
 print(f"pipeline Time taken: {time.time() - start_time}")
 start_time = time.time()

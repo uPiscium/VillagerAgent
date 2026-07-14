@@ -23,6 +23,7 @@ def run_minecraft_matrix(
     task_selection_policy: str = "dual-dag",
     execute: bool = False,
     execute_timeout_seconds: float | None = None,
+    retain_runtime_result: bool = False,
     command_text: str | None = None,
 ) -> dict[str, Any]:
     """Run a CI-safe Minecraft benchmark matrix and write a matrix summary.
@@ -61,6 +62,7 @@ def run_minecraft_matrix(
             task_selection_policy=configs[config_index].get("task_selection_policy", task_selection_policy),
             execute=execute,
             execute_timeout_seconds=execute_timeout_seconds,
+            retain_runtime_result=retain_runtime_result,
             command_text=command_text or _command_text(),
         )
         run_dir = Path(summary["output_dir"])
@@ -79,6 +81,7 @@ def run_minecraft_matrix(
             "task_idx": summary.get("task_idx"),
             "progress": summary.get("progress"),
             "task_selection_policy": summary.get("task_selection_policy", ""),
+            "runtime_result_retained": bool(summary.get("runtime_result_retained", False)),
             "metrics": metrics,
             "common_report": common_row,
         }
@@ -97,6 +100,7 @@ def run_minecraft_matrix(
         ),
         "task_selection_policy": task_selection_policy,
         "execute_timeout_seconds": execute_timeout_seconds,
+        "runtime_result_retained": any(run["runtime_result_retained"] for run in results),
         "aggregate": aggregate_rows(common_rows),
         "runs": results,
     }
@@ -115,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         task_selection_policy=args.task_selection_policy,
         execute=args.execute,
         execute_timeout_seconds=args.execute_timeout_seconds,
+        retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
     )
     print(json.dumps(summary, indent=2))
@@ -132,6 +137,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-dual-dag-task-selection", action="store_true", help="Deprecated compatibility flag; equivalent to --task-selection-policy original")
     parser.add_argument("--execute", action="store_true", help="Explicitly run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
+    parser.add_argument("--retain-runtime-result", action="store_true", help="Keep each run's internal runtime result after artifact normalization")
     args = parser.parse_args(argv)
     if args.no_dual_dag_task_selection:
         args.task_selection_policy = "original"
@@ -192,6 +198,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.append("--execute")
     if args.execute_timeout_seconds is not None:
         parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
+    if args.retain_runtime_result:
+        parts.append("--retain-runtime-result")
     return " ".join(parts)
 
 

@@ -34,6 +34,8 @@ python -m benchmarks.minecraft.experiment \
   --execute-timeout-seconds 600
 ```
 
+Each execute run checkpoints partial state under its own `<output_dir>/.runtime/runtime_result.json`. The checkpoint is atomically replaced and removed after normalized artifacts are written. Add `--retain-runtime-result` only when the internal checkpoint is needed for debugging.
+
 For a matrix run, pass the same bound to `benchmarks.minecraft.matrix`:
 
 ```bash
@@ -64,7 +66,7 @@ Timeout metadata is recorded in `summary.json`:
 - `snapshot_source`
 - `task_state_source`
 
-In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_runtime` when the harness recovers a runtime task DAG snapshot from `start_with_config.run()` or `.cache/minecraft_runtime_result.json`. If no real runtime snapshot exists, the harness falls back to the config fixture snapshot for artifact completeness.
+In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_runtime` when the harness recovers a runtime task DAG snapshot from `start_with_config.run()` or the run-local `.runtime/runtime_result.json`. If no real runtime snapshot exists, the harness falls back to the config fixture snapshot for artifact completeness.
 
 `task_state_source` applies the same provenance to `dual_dag_artifact.json`, `decision_support.json`, summary task order, and post-hoc ranking. When it is `real_runtime`, those outputs are reconstructed from the runtime task nodes and `precedes_task` edges rather than the pre-run fixture. `runtime_selected_task_ids` contains only selection history explicitly returned by the runtime; `posthoc_ranked_task_order` is analysis performed after the run and is not runtime history.
 

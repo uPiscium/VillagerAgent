@@ -92,6 +92,33 @@ def test_minecraft_matrix_accepts_selected_indices_and_default_run_names(tmp_pat
     assert (tmp_path / "matrix" / "runs" / "config_1_second_task" / "summary.json").exists()
 
 
+def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1)]),
+        encoding="utf-8",
+    )
+    observed_paths = []
+
+    def runtime_result(*args, **kwargs):
+        observed_paths.append(kwargs["runtime_result_path"])
+        return {}
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
+
+    run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first_run", "second_run"],
+        execute=True,
+    )
+
+    assert observed_paths == [
+        tmp_path / "matrix" / "runs" / "first_run" / ".runtime" / "runtime_result.json",
+        tmp_path / "matrix" / "runs" / "second_run" / ".runtime" / "runtime_result.json",
+    ]
+
+
 def test_minecraft_matrix_can_compare_task_selection_policies(tmp_path):
     base_config = _config("policy_compare", 0)
     base_config["agent_num"] = 2
