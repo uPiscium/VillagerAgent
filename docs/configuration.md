@@ -21,6 +21,7 @@ Example:
     "port": 40000,
     "task_name": "minecraft_smoke",
     "role": "same",
+    "task_scenario": "move",
     "evaluation_arg": {}
   }
 ]
@@ -38,7 +39,8 @@ Fields:
 - `port`: Minecraft server port.
 - `task_name`: run name used for cache, result, and artifact paths.
 - `role`: role layout selector. `same` uses the same tool set for all agents; some `farming` runs support `different`.
-- `evaluation_arg`: metadata passed into `document` for `meta` tasks.
+- `task_scenario`: required meta-judger scenario selector, such as `move`, `craft`, or `interact`.
+- `evaluation_arg`: required scenario-specific metadata passed to the meta judger and into the task document.
 - `dig_needed`: optional flag for construction tasks.
 - `smoke_tasks`: optional dry-run fixture tasks used by benchmark tests and matrix runs.
 - `smoke_action_log`: optional dry-run fixture action log.

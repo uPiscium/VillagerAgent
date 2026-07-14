@@ -854,13 +854,16 @@ def handle(this):
                 # 至少得等到所有的action都执行完了，有记录了再结束吧
                 if not os.path.exists("result/" + task_name):
                     os.mkdir(os.path.join("result/", task_name))
+                score_payload = {
+                    "score": score,
+                    "use_time": calculate_action_time(),
+                    "end_reason": "task completed",
+                    "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
+                }
                 with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                    json.dump({
-                        "score": score,
-                        "use_time": calculate_action_time(),
-                        "end_reason": "task completed",
-                        "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                    }, f, indent=4)
+                    json.dump(score_payload, f, indent=4)
+                with open("data/score.json", "w") as f:
+                    json.dump(score_payload, f, indent=4)
                 with open(os.path.join(os.path.join("result", task_name), "config.json"), "w") as f:
                     json.dump(config, f, indent=4)
                 with open(".cache/load_status.cache", "w") as f:
