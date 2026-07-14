@@ -33,5 +33,5 @@ dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["benchmarks/common/tests", "benchmarks/craft/tests", "tests"]
+testpaths = ["benchmarks/common/tests", "benchmarks/craft/tests", "benchmarks/cwah/tests", "tests"]
 norecursedirs = ["external"]
