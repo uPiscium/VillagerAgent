@@ -76,6 +76,8 @@ In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_
 
 `task_state_source` applies the same provenance to `dual_dag_artifact.json`, `decision_support.json`, summary task order, and post-hoc ranking. When it is `real_runtime`, those outputs are reconstructed from the runtime task nodes and `precedes_task` edges rather than the pre-run fixture. `runtime_selected_task_ids` contains only selection history explicitly returned by the runtime; `posthoc_ranked_task_order` is analysis performed after the run and is not runtime history.
 
+Mutation metadata separates four concerns. `mutates_environment` is `true` for execute mode, including failed and timed-out attempts, and `false` for dry-run. `artifact_generation_mutates_runtime` is `false` because normalized artifact and decision-support builders are read-only. `task_selection_mutates_order` reports whether the selected policy can reorder tasks (`false` for `original`, `true` for `dual-dag`), while `task_order_changed` reports whether the ranked task IDs actually differ from their input order. The deprecated `mutates_runtime: false` field is retained for compatibility with consumers of the old read-only projection metadata and must not be interpreted as environment mutation.
+
 ## Connectivity Smoke Check
 
 When server access is available, start with `env_type.none` before running a judged task. This checks the bridge and a non-destructive action without measuring benchmark success.

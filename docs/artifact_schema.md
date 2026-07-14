@@ -27,7 +27,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public compatibility projection of canonical runtime task DAG state.
-- Required fields: `mutates_runtime`, `tasks`, `edges`.
+- Required fields: `artifact_generation_mutates_runtime`, deprecated `mutates_runtime`, `tasks`, and `edges`. Projection generation is read-only, so both mutation fields are `false`.
 
 ## `runtime_dual_dag_snapshot.json`
 
@@ -50,7 +50,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public analysis projection.
-- Required fields include `schema_version`, `schema`, `nodes`, `edges`, `summary`, and `task_state_source`.
+- Required fields include `schema_version`, `schema`, `nodes`, `edges`, `summary`, `task_state_source`, and `artifact_generation_mutates_runtime` (`false`).
 - `task_state_source` is `config_fixture` for dry-run and `real_runtime` when execute mode recovers a runtime task snapshot. Runtime task lifecycle/provenance is projected into task nodes before action-log analysis.
 
 ## `decision_support.json`
@@ -60,7 +60,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public read-only recommendation context.
-- Required fields include `mode`, `mutates_runtime`, `recommended_task_id`, `recommended_description`, `candidates`, and `task_state_source`. Candidate tasks use the same source as `dual_dag_artifact.json`.
+- Required fields include `mode`, `artifact_generation_mutates_runtime`, deprecated `mutates_runtime`, `recommended_task_id`, `recommended_description`, `candidates`, and `task_state_source`. Candidate tasks use the same source as `dual_dag_artifact.json`; recommendation generation is read-only.
 
 ## `metrics.json`
 
@@ -69,7 +69,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public metrics.
-- Fields include task counts, completion rate, action counts, failure counts, timing, recommendation adoption, `error`, `error_type`, and `timed_out`.
+- Fields include task counts, completion rate, action counts, failure counts, timing, recommendation adoption, `error`, `error_type`, `timed_out`, and the four explicit mutation fields copied from the run summary.
 
 ## `summary.json`
 
@@ -80,7 +80,9 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Classification: public run summary.
 - Task provenance fields include `snapshot_source` and `task_state_source` (`config_fixture` or `real_runtime`).
 - Selection fields distinguish `runtime_selection_policy`, recorded `runtime_selected_task_ids`, and `posthoc_ranked_task_order`. `ranked_task_order` remains a compatibility alias for the post-hoc order. In execute mode, `selected_task_id` and `selected_description` are empty unless runtime selection history was recorded; post-hoc ranking is never presented as runtime history.
-- Other fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `mutates_runtime`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
+- Mutation fields are `mutates_environment` (true for execute, false for dry-run), `artifact_generation_mutates_runtime` (always false), `task_selection_mutates_order` (whether the selected policy can reorder), and `task_order_changed` (whether ranked task IDs differ from their input order). A Dual-DAG policy can therefore report `task_selection_mutates_order: true` with `task_order_changed: false`.
+- `mutates_runtime` remains `false` as deprecated compatibility metadata for the read-only projection behavior. It does not describe Minecraft environment mutation; consumers must use the explicit fields above.
+- Other fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
 - Execute process fields are `runtime_process_isolated`, `runtime_process_exit_code`, `runtime_process_terminated`, and `runtime_process_killed`. Timeout summaries are written only after the child is no longer alive.
 
 ## Provenance Files

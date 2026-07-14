@@ -31,7 +31,11 @@ Each run directory contains:
 - `selected_task_id`: task selected after optional ranking.
 - `progress`: normalized final progress/score when available.
 - `error`: environment/runtime error string when available.
-- `mutates_runtime`: always `false` for normalized metric extraction.
+- `mutates_environment`: copied from the run summary; true for execute and false for dry-run.
+- `artifact_generation_mutates_runtime`: always `false` for normalized read-only artifact extraction.
+- `task_selection_mutates_order`: whether the selected policy can reorder tasks.
+- `task_order_changed`: whether ranked task IDs differ from their input order for this run.
+- `mutates_runtime`: deprecated compatibility field that remains `false`; use the explicit fields above.
 
 All normalized outputs are passed through the Minecraft public sanitizer, which drops underscore-prefixed fields and credential-like keys such as API keys, passwords, secrets, and tokens.
 

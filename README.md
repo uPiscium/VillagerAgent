@@ -158,6 +158,8 @@ python -m benchmarks.minecraft.experiment \
 
 Dry-run is the default if `--execute` is omitted. Dry-run does not require a Minecraft server, LLM, judger, or credentials.
 
+Run artifacts distinguish side effects explicitly: `mutates_environment` is true only for execute mode, while `artifact_generation_mutates_runtime` is always false for normalized read-only projections. `task_selection_mutates_order` records whether the selected policy can reorder tasks, and `task_order_changed` records whether the resulting order actually differs.
+
 Execute checkpoints are isolated under each run directory and cleaned after normalized artifacts are written. Use `--retain-runtime-result` only to keep the internal `.runtime/runtime_result.json` checkpoint for debugging.
 
 Execute mode runs the Minecraft runtime in a child process. The parent owns the wall-clock timeout and terminates, then kills if necessary, the complete child runtime before writing timeout artifacts; it does not rely on `SIGALRM` to interrupt controller threads.
