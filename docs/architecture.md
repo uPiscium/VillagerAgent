@@ -88,8 +88,9 @@ sequenceDiagram
     GC->>GC: select exactly required_agent_count eligible agents and reserve them
     GC->>TM: mark_task_running(task, agents)
     TM->>RTS: lifecycle.status = running; active_agents set
-    GC->>AG: execute selected task
-    AG-->>GC: success / failure feedback
+    GC->>AG: execute selected task once per assigned agent
+    AG-->>GC: per-agent futures and reflection results
+    GC->>GC: all agents success => success; any failure/timeout => failure
     GC->>TM: mark_task_status(task.id, success/failure, feedback)
     TM->>RTS: terminal status; active_agents cleared; last_assigned_agents preserved
 ```
@@ -102,6 +103,7 @@ Runnable conditions:
 - If `candidate_agents` is empty, all current free agents are candidates.
 - The controller selects only `required_agent_count` agents; extra candidates do not prevent assignment.
 - Accepted assignments update controller state immediately, allowing later independent tasks to use only the free agents that remain in the same scheduler iteration.
+- A multi-agent assignment is one execution group. All assigned agents execute the task, and the controller writes exactly one terminal status with per-agent results after the full group completes or times out.
 
 ## Runtime Task Node Schema
 

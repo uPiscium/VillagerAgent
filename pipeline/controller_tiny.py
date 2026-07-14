@@ -2,8 +2,8 @@ import sys
 import os
 import threading
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 from model.init_model import init_language_model
 
@@ -17,6 +17,15 @@ from pipeline.controller_prompt import *
 from env.env import VillagerBench
 from env.minecraft_dual_dag import rank_minecraft_runtime_tasks
 import logging
+
+
+@dataclass
+class TaskExecutionGroup:
+    task: Task
+    agents: list[BaseAgent]
+    futures: dict[str, Future] = field(default_factory=dict)
+    started_at: float | None = None
+    completed: bool = False
 
 
 class GlobalController:
@@ -152,7 +161,10 @@ class GlobalController:
             with self.task_list_lock:
                 self.task_manager.mark_task_running(task_instance, agent_names)
                 task_instance.status = Task.running
-                self.task_queue.append((agent_instances[0], task_instance))
+                self.task_queue.append(TaskExecutionGroup(
+                    task=task_instance,
+                    agents=list(agent_instances),
+                ))
         
             name_list = ", ".join(agent_names)
             self.logger.info(f"Agent(s) {name_list} assigned to do task {task_instance.description}")
@@ -162,6 +174,69 @@ class GlobalController:
             #     self.logger.warning(str(env_dict))
 
             task_instance.status = Task.running
+
+    def start_execution_group(self, group: TaskExecutionGroup) -> None:
+        group.started_at = time.time()
+        for agent in group.agents:
+            group.futures[agent.name] = self.executor.submit(agent.step, group.task)
+            self.logger.info(f"Agent {agent.name} is executing task now ...")
+        with self.result_list_lock:
+            self.result_queue.append(group)
+
+    def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
+        if group.completed:
+            return True
+        now = time.time() if now is None else now
+        timed_out = (
+            group.started_at is not None
+            and now - group.started_at > self.max_task_time
+            and not all(future.done() for future in group.futures.values())
+        )
+        if not timed_out and not all(future.done() for future in group.futures.values()):
+            return False
+
+        agent_results = {}
+        group_succeeded = not timed_out
+        for agent in group.agents:
+            future = group.futures[agent.name]
+            if timed_out and not future.done():
+                future.cancel()
+                agent_results[agent.name] = {
+                    "status": "timeout",
+                    "error": f"Task {group.task.description} timeout for agent {agent.name}",
+                }
+                group_succeeded = False
+                continue
+
+            try:
+                _, detail = future.result()
+                reflected_success = bool(agent.reflect(group.task, detail))
+                agent_results[agent.name] = {
+                    "status": "success" if reflected_success else "failure",
+                    "detail": detail,
+                }
+                if not reflected_success:
+                    group_succeeded = False
+            except Exception as exc:
+                self.logger.error(
+                    f"Task {group.task.description} failed for agent {agent.name} with exception: {exc}"
+                )
+                self.logger.exception(exc)
+                agent_results[agent.name] = {
+                    "status": "failure",
+                    "error": str(exc),
+                }
+                group_succeeded = False
+
+        status = Task.success if group_succeeded else Task.failure
+        if len(group.agents) == 1:
+            result = agent_results[group.agents[0].name]
+            feedback = result.get("detail", result.get("error"))
+        else:
+            feedback = {"agent_results": agent_results}
+        self.update_task_status(group.task, status, feedback)
+        group.completed = True
+        return True
 
     # worker
     def worker(self):
@@ -180,13 +255,8 @@ class GlobalController:
                     time.sleep(self.query_interval)
                     continue
                 while self.task_queue:
-                    agent_task = self.task_queue.pop(0)
-                    agent, task = agent_task
-
-                    future = self.executor.submit(agent.step, task)
-                    self.logger.info(f"Agent {agent.name} is executing task now ...")
-                    with self.result_list_lock:
-                        self.result_queue.append((future, agent, task, time.time()))
+                    group = self.task_queue.pop(0)
+                    self.start_execution_group(group)
                     # time.sleep(self.query_interval)
 
     def set_task_status(self, task_id, status, feedback):
@@ -240,29 +310,14 @@ class GlobalController:
 
             with self.result_list_lock:
                 result_list_copy = []
-                for future, agent, task, start_time in self.result_queue:
+                for group in self.result_queue:
 
                     if self.shutdown:
                         break
-                    # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
-                    if future.done():
-                        try:
-                            self.logger.info(f"Task {task.description} finished!")
-                            _, detail = future.result()
-                            self.update_feedback(task, agent, detail)
-
-                        except Exception as e: # 没有对于 collab 的处理 这个代码不正确
-                            traceback.print_exception(type(e), e, e.__traceback__)
-                            self.logger.error(f"Task {task.description} failed with exception: {e}\n{e.__traceback__}")
-                            self.logger.exception(e)
-                            self.update_task_status(task, Task.failure, f"Task {task.description} failed with exception: {e}\n{e.__traceback__}")                            
-                    
-                    elif time.time() - start_time > self.max_task_time: # 没有对于 collab 的处理 这个代码不正确
-                        self.logger.warning(f"Task {task.description} timeout!")
-                        self.update_task_status(task, Task.failure, f"Task {task.description} timeout!")
-                    
+                    if self.finalize_execution_group(group):
+                        self.logger.info(f"Task {group.task.description} finished!")
                     else:
-                        result_list_copy.append((future, agent, task, start_time))
+                        result_list_copy.append(group)
                     time.sleep(self.query_interval)
                 self.result_queue = result_list_copy
 

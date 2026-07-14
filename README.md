@@ -51,8 +51,9 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 2. `DataManager` stores and summarizes environment/agent/history information.
 3. `TaskManager` initializes the top-level task, decomposes it, and writes canonical task dependency/lifecycle state to `RuntimeTaskDAGStore`.
 4. `GlobalController` asks `TaskManager.query_runnable_subtasks()` for store-filtered runnable tasks, applies the configured selection policy, assigns exactly each task's required number of free candidate agents, and writes lifecycle updates back to the runtime task DAG. Independent tasks may be assigned to remaining free agents in the same scheduler iteration.
-5. `BaseAgent` queries state through `DataManager`, calls the LLM, executes Minecraft tools, and reflects on task success.
-6. Benchmark harnesses write normalized artifacts: `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, and `decision_support.json`.
+5. `GlobalController` executes a multi-agent task as one execution group: every assigned `BaseAgent` receives the task, and the task succeeds only when every future completes and every agent reflection succeeds.
+6. `BaseAgent` queries state through `DataManager`, calls the LLM, executes Minecraft tools, and returns per-agent detail for group reflection.
+7. Benchmark harnesses write normalized artifacts: `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, and `decision_support.json`.
 
 For code reading, start with `start_with_config.py`, then `pipeline/controller_tiny.py`, then `task_manager.py`, `data_manager.py`, and `agent.py`. See [Execution flow](docs/execution_flow.md) for the full processing path.
 
