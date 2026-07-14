@@ -18,6 +18,7 @@ from functools import wraps
 import os
 import random
 import platform
+from model.ollama_config import load_agent_api_key_list
 
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
@@ -1269,7 +1270,7 @@ if __name__ == "__main__":
 
     Agent.model = "deepseek-chat"
     Agent.base_url =  "https://api.deepseek.com"
-    Agent.api_key_list = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"]
+    Agent.api_key_list = load_agent_api_key_list()
     agent1 = Agent(name="Alice", local_port=5001, tools=[])
     Agent.launch(host="10.214.180.148", port=25565)
     time.sleep(5)

@@ -12,12 +12,9 @@ from pipeline.utils import document2string
 from concurrent.futures import ThreadPoolExecutor
 from model.ollama_config import OLLAMA_API_BASE, OLLAMA_API_KEY, OLLAMA_MODEL
 
-
-# os.environ["OPENAI_API_KEY"] = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"][0]
 os.environ["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", OLLAMA_API_KEY)
 
 
-# os.environ["OPENAI_API_KEY"] = json.load(open("/home/yubo/VillagerAgent-Minecraft-multiagent-framework/API_KEY_LIST", "r"))["AGENT_KEY"][0]
 # os.environ["OPENAI_API_BASE"] = "https://api.chatanywhere.tech/v1"
 os.environ["OPENAI_API_BASE"] = os.environ.get("OPENAI_API_BASE", OLLAMA_API_BASE)
 

@@ -5,6 +5,7 @@ from pipeline.data_manager import DataManager
 from pipeline.task_manager import TaskManager
 import json
 from model.init_model import init_language_model
+from model.ollama_config import load_agent_api_key_list
 import random
 import os
 import torch
@@ -93,7 +94,7 @@ def auto_gen_one_task(use_existing_task=False):
     # Agent.base_url = base_url
     # Agent.api_key_list = api_key_list
 
-    api_key_list = json.load(open("API_KEY_LIST", "r"))["AGENT_KEY"]
+    api_key_list = load_agent_api_key_list()
     base_url = "https://api.chatanywhere.tech/v1"
     llm_config = {
         "api_base": base_url,
