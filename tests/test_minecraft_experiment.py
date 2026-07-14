@@ -52,6 +52,10 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert summary["runtime_selection_policy"] == "dual-dag"
     assert summary["runtime_selected_task_ids"] == []
     assert summary["posthoc_ranked_task_order"] == summary["ranked_task_order"]
+    assert summary["mutates_environment"] is False
+    assert summary["artifact_generation_mutates_runtime"] is False
+    assert summary["task_selection_mutates_order"] is True
+    assert summary["task_order_changed"] is False
     assert summary["mutates_runtime"] is False
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
@@ -251,6 +255,10 @@ def test_minecraft_experiment_records_task_selection_policy_ablation(tmp_path):
     assert enabled["ranked_task_order"][0]["description"] == "Find chest"
     assert disabled["task_order"] == disabled["ranked_task_order"]
     assert enabled["task_order"] != enabled["ranked_task_order"]
+    assert disabled["task_selection_mutates_order"] is False
+    assert disabled["task_order_changed"] is False
+    assert enabled["task_selection_mutates_order"] is True
+    assert enabled["task_order_changed"] is True
     assert enabled["recommended_description"] == "Find chest"
 
 
@@ -273,6 +281,10 @@ def test_minecraft_metrics_extracts_representative_counts_without_secrets():
             "recommended_task_id": "minecraft:task:find_chest",
             "selected_task_id": "minecraft:task:find_chest",
             "progress": 0.5,
+            "mutates_environment": False,
+            "artifact_generation_mutates_runtime": False,
+            "task_selection_mutates_order": True,
+            "task_order_changed": True,
             "api_key": "secret",
         },
         action_log={
@@ -304,6 +316,10 @@ def test_minecraft_metrics_extracts_representative_counts_without_secrets():
     assert metrics["retry_replan_count"] == 1
     assert metrics["time_to_completion"] == 5.0
     assert metrics["recommendation_adopted_count"] == 1
+    assert metrics["mutates_environment"] is False
+    assert metrics["artifact_generation_mutates_runtime"] is False
+    assert metrics["task_selection_mutates_order"] is True
+    assert metrics["task_order_changed"] is True
     assert "api_key" not in json.dumps(metrics)
 
 
@@ -326,6 +342,8 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     output_dir = tmp_path / "result" / "execute_error"
     assert summary["mode"] == "execute"
     assert summary["execute_real_environment"] is True
+    assert summary["mutates_environment"] is True
+    assert summary["artifact_generation_mutates_runtime"] is False
     assert summary["execute_timeout_seconds"] == 30
     assert summary["error"] == "server unavailable"
     assert summary["error_type"] == "RuntimeError"
@@ -336,6 +354,7 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     assert (output_dir / "metrics.json").exists()
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["error"] == "server unavailable"
+    assert metrics["mutates_environment"] is True
 
 
 def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):

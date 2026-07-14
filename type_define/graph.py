@@ -319,7 +319,10 @@ class Graph:
             elif node.status == Task.failure:
                 description += f"id {idx} {node.description} is failed\n"
             else:
-                assert False, f"id {idx} {node.description} is waiting to be executed\n"
+                raise ValueError(
+                    f"Task '{node.description}' has unsupported status {node.status!r}; "
+                    f"expected one of: {Task.unknown}, {Task.running}, {Task.success}, {Task.failure}"
+                )
             idx += 1
 
             for successor in self.get_node_from(node):
@@ -392,7 +395,10 @@ class Graph:
         parent_list2 = node2.parent_task_list
         co_parent_list = []
         if len(parent_list1) == 0 or len(parent_list2) == 0:
-            assert False, f"node {node1.description} or node {node2.description} has no parent"
+            raise ValueError(
+                f"Cannot find common parents for '{node1.description}' and '{node2.description}': "
+                "both nodes must have at least one parent"
+            )
         if len(parent_list1) > len(parent_list2):
             parent_list1, parent_list2 = parent_list2, parent_list1
         for parent in parent_list1:

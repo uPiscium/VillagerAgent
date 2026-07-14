@@ -39,6 +39,12 @@ def build_minecraft_metrics(
         "selected_task_id": selected_task_id,
         "progress": summary.get("progress"),
         "error": summary.get("error"),
+        "mutates_environment": bool(summary.get("mutates_environment", False)),
+        "artifact_generation_mutates_runtime": bool(
+            summary.get("artifact_generation_mutates_runtime", False)
+        ),
+        "task_selection_mutates_order": bool(summary.get("task_selection_mutates_order", False)),
+        "task_order_changed": bool(summary.get("task_order_changed", False)),
         "mutates_runtime": False,
     }
     return sanitize_public_value(metrics)
