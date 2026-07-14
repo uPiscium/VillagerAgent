@@ -69,3 +69,4 @@ env_gen/*
 
 .direnv
 uv.lock
+.worktrees/
