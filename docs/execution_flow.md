@@ -20,7 +20,7 @@ This is the current Ollama-first flow used by `start_with_config.py` and the Min
 7. Enter `env.run(fast_api=True)`, which starts the FastAPI bridge path.
 8. Initialize `DataManager` from `env.get_init_state()`.
 9. Initialize `TaskManager` and attach its LLM.
-10. Create `GlobalController` with task manager, data manager, environment, tools, and optional Dual-DAG runtime config.
+10. Create `GlobalController` with task manager, data manager, environment, tools, and task selection policy config.
 11. Load optional task document data and call `TaskManager.init_task()`.
 12. Run `GlobalController.run()` until graph completion, task failure, shutdown, or timeout.
 13. Call `env.get_score()` and leave the environment context.
@@ -30,13 +30,15 @@ This is the current Ollama-first flow used by `start_with_config.py` and the Min
 `GlobalController` maintains assignment state, a task queue, and a result queue.
 
 1. Poll agent health with `env.agents_ping()`.
-2. Request open tasks from `TaskManager`.
-3. Optionally rank Minecraft tasks with Dual-DAG runtime selection.
-4. Validate that selected agents exist, are idle, and are candidates for the task.
-5. Mark tasks `running` and submit `BaseAgent.step()` to the worker pool.
-6. Collect completed futures.
-7. Reflect on task success through `BaseAgent.reflect()`.
-8. Write feedback back to `TaskManager.feedback_task()`.
+2. Request open tasks from `TaskManager` to detect completion.
+3. Compute free agent names.
+4. Request runnable tasks through `TaskManager.query_runnable_subtasks(free_agent_names)`, which delegates runnable filtering to `RuntimeTaskDAGStore`.
+5. Order runnable tasks with `task_selection_policy` (`dual-dag` or `original`).
+6. Validate that selected agents exist, are idle, and are candidates for the task.
+7. Mark tasks `running` and submit `BaseAgent.step()` to the worker pool.
+8. Collect completed futures.
+9. Reflect on task success through `BaseAgent.reflect()`.
+10. Write feedback back to `TaskManager.feedback_task()`.
 
 ## Agent Step
 
@@ -67,13 +69,14 @@ The task manager and agents query this state instead of reading raw bridge paylo
 - `launch_config.json`
 - `action_log.json`
 - `task_graph_snapshot.json`
+- `runtime_dual_dag_snapshot.json`
 - `dual_dag_artifact.json`
 - `decision_support.json`
 - `metrics.json`
 - `summary.json`
 - provenance files from `benchmarks.experiment_provenance`
 
-Dry-run builds these artifacts from fixture data in the config. Execute mode runs the real runtime first, then captures available `data/action_log.json` and `data/score.json`. If execute mode fails or times out, partial artifacts are still written with `error`, `error_type`, and `timed_out` in `summary.json`.
+Dry-run builds task artifacts from fixture data in the config and marks `runtime_dual_dag_snapshot.json` with `snapshot_source="config_fixture"`. Execute mode runs the real runtime first and uses the structured runtime result from `start_with_config.run()` or `.cache/minecraft_runtime_result.json` when available. Execute snapshots from the controller are marked `snapshot_source="real_runtime"`. If execute mode fails or times out, partial artifacts are still written with `error`, `error_type`, and `timed_out` in `summary.json`.
 
 ## Boundaries
 

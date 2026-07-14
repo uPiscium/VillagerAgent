@@ -42,6 +42,7 @@ Fields:
 - `dig_needed`: optional flag for construction tasks.
 - `smoke_tasks`: optional dry-run fixture tasks used by benchmark tests and matrix runs.
 - `smoke_action_log`: optional dry-run fixture action log.
+- `task_selection_policy`: optional runtime task ordering policy for benchmark harnesses. Supported values are `dual-dag` and `original`.
 
 ## LLM Defaults
 
@@ -97,7 +98,7 @@ python -m benchmarks.minecraft.experiment \
   --config-index 0
 ```
 
-Dual-DAG runtime task lifecycle and task selection are always enabled. `--dual-dag-task-selection` remains accepted as a compatibility no-op. Add `--execute` to mutate the real environment. Add `--execute-timeout-seconds N` to bound real runs and preserve artifacts on timeout.
+Runtime task DAG lifecycle is always enabled. Task ordering is controlled with `--task-selection-policy dual-dag` or `--task-selection-policy original`. `--dual-dag-task-selection` remains accepted as a deprecated compatibility flag for `dual-dag`; `--no-dual-dag-task-selection` maps to `original`. Add `--execute` to mutate the real environment. Add `--execute-timeout-seconds N` to bound real runs and preserve artifacts on timeout.
 
 Matrix dry-run:
 

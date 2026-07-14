@@ -1,6 +1,6 @@
 # Task Graph Structure
 
-VillagerAgent projects decomposed work into a directed task graph in `type_define/graph.py`. Runtime source-of-truth state lives in `pipeline.dual_dag_task_store.DualDAGTaskStore`; `Graph` is a compatibility projection.
+VillagerAgent projects decomposed work into a directed task graph in `type_define/graph.py`. Runtime task dependency/lifecycle source-of-truth state lives in `pipeline.dual_dag_task_store.RuntimeTaskDAGStore`; `Graph` is a compatibility projection.
 
 ## Task
 
@@ -15,7 +15,7 @@ VillagerAgent projects decomposed work into a directed task graph in `type_defin
 - `status`: one of `unknown`, `running`, `success`, or `failure`.
 - `candidate_list`: agent names that may execute the task.
 - `number`: minimum or assigned number of agents.
-- `available`: whether assignment logic can consider the task.
+- `available`: derived compatibility field. It is not canonical stored lifecycle state.
 - `reflect`: reflection feedback from agent execution.
 - `_pre_idxs`: LLM decomposition output for `required subtasks`. `TaskManager` converts these 1-based indexes to Dual-DAG `precedes_task` edges; `Graph.edge` mirrors that state as a projection.
 - `_agent`: agent names assigned by the controller and read by `BaseAgent` prompt construction.
@@ -44,13 +44,13 @@ Core operations include:
 
 ## Construction Flow
 
-`TaskManager.init_task()` asks the LLM to decompose the user goal into subtasks. Each generated subtask becomes a `Task` projection and a canonical Dual-DAG `runtime_task` node. The `required subtasks` field is stored in `_pre_idxs`, then `TaskManager` converts those predecessor indexes into Dual-DAG `precedes_task` edges.
+`TaskManager.init_task()` asks the LLM to decompose the user goal into subtasks. Each generated subtask becomes a `Task` projection and a canonical runtime task DAG `runtime_task` node. The `required subtasks` field is stored in `_pre_idxs`, then `TaskManager` converts those predecessor indexes into runtime task DAG `precedes_task` edges.
 
-If a generated task has no explicit predecessor and is not the first task, the Dual-DAG store links it after the previous task. Explicit parallelism must be represented by explicit `required subtasks` indexes. For example, `B requires A` and `C requires A` becomes `A -> B` and `A -> C`; a missing predecessor on `C` after `B` becomes `B -> C`.
+If a generated task has no explicit predecessor and is not the first task, the runtime task DAG store links it after the previous task. Explicit parallelism must be represented by explicit `required subtasks` indexes. Invalid indexes, self-loops, unknown-node edges, and cycles are rejected when loading the store.
 
 ## Runtime Semantics
 
-The controller asks `TaskManager.query_subtask_list()` for open work. `TaskManager` reads canonical state from `DualDAGTaskStore`, then returns projected `Task` objects. A runnable task is a task with `status == unknown`, no unfinished predecessor in `predecessor_task_list`, enough free candidate agents, and `available == True`. The returned tasks are ranked or filtered, then assigned to available agents. During execution the Dual-DAG lifecycle status moves through:
+The controller asks `TaskManager.query_subtask_list()` for open work and `TaskManager.query_runnable_subtasks(free_agent_names)` for runnable work. `TaskManager` reads canonical state from `RuntimeTaskDAGStore`, then returns projected `Task` objects. A runnable task has `status == unknown`, all transitive predecessors marked `success`, and enough free candidate agents. If the candidate list is empty, all current free agents are candidates. During execution the runtime task DAG lifecycle status moves through:
 
 ```text
 unknown -> running -> success
@@ -73,4 +73,4 @@ Projected graph state can be written as:
 
 - Mermaid markdown through `write_graph_to_md()` under `img/`.
 - JSON through `write_graph_to_json()` under `logs/`.
-- Benchmark snapshots as `task_graph_snapshot.json` and `dual_dag_artifact.json`.
+- Benchmark snapshots as `task_graph_snapshot.json`, `runtime_dual_dag_snapshot.json`, and `dual_dag_artifact.json`. `task_graph_snapshot.json` is compatibility projection; `runtime_dual_dag_snapshot.json` is the runtime task subgraph snapshot.

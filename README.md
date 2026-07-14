@@ -37,7 +37,7 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 ## Detailed Guides
 
 - [Minimal startup](docs/minimal_run.md): Ollama defaults, Minecraft smoke, and bounded execute.
-- [Architecture diagrams](docs/architecture.md): current Dual-DAG source-of-truth architecture, paper figure layout, and before/after diagrams.
+- [Architecture diagrams](docs/architecture.md): current runtime task DAG source-of-truth architecture, Dual-DAG boundary, paper figure layout, and before/after diagrams.
 - [Task graph structure](docs/graph_structure.md): `Task`, `Graph`, statuses, dependencies, and artifacts.
 - [Dual-DAG runtime boundary](docs/dual_dag_runtime.md): Task Graph, Epistemic DAG, Action Candidate DAG, and artifact responsibilities.
 - [Configuration](docs/configuration.md): Minecraft JSON fields, LLM defaults, API key fallback, and benchmark CLI options.
@@ -49,8 +49,8 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 
 1. `VillagerBench` starts the Minecraft bridge and exposes agent tools.
 2. `DataManager` stores and summarizes environment/agent/history information.
-3. `TaskManager` initializes the top-level task, decomposes it, and writes canonical task state to `DualDAGTaskStore`.
-4. `GlobalController` assigns runnable tasks to available agents and writes lifecycle updates back to Dual-DAG.
+3. `TaskManager` initializes the top-level task, decomposes it, and writes canonical task dependency/lifecycle state to `RuntimeTaskDAGStore`.
+4. `GlobalController` asks `TaskManager.query_runnable_subtasks()` for store-filtered runnable tasks, applies the configured selection policy, assigns agents, and writes lifecycle updates back to the runtime task DAG.
 5. `BaseAgent` queries state through `DataManager`, calls the LLM, executes Minecraft tools, and reflects on task success.
 6. Benchmark harnesses write normalized artifacts: `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, and `decision_support.json`.
 
@@ -166,7 +166,7 @@ python -m benchmarks.minecraft.matrix \
   --run-names run_a,run_b
 ```
 
-Dual-DAG runtime task lifecycle and task selection are always enabled.
+Runtime task DAG lifecycle is always enabled. Task selection policy is configurable with `--task-selection-policy dual-dag` or `--task-selection-policy original`.
 
 Generate a shared report:
 
