@@ -11,6 +11,8 @@ DUAL_DAG_NODE_TYPES = [
     "remove_block",
     "clarify",
     "wait_for_evidence",
+    "runtime_task",
+    "runtime_observation",
     "minecraft_task",
     "minecraft_action",
     "minecraft_observation",
@@ -38,6 +40,7 @@ DUAL_DAG_EDGE_TYPES = [
 
 DUAL_DAG_HYPOTHESIS_STATUSES = ["open", "supported", "conflicted", "resolved", "invalidated"]
 DUAL_DAG_ACTION_STATES = ["candidate", "executable", "waiting_for_evidence", "blocked", "invalidated", "executed"]
+DUAL_DAG_TASK_STATUSES = ["unknown", "running", "success", "failure", "blocked"]
 
 
 def dual_dag_schema_registry() -> dict:
@@ -48,6 +51,7 @@ def dual_dag_schema_registry() -> dict:
         "lifecycle_fields": {
             "hypothesis_statuses": DUAL_DAG_HYPOTHESIS_STATUSES,
             "action_candidate_states": DUAL_DAG_ACTION_STATES,
+            "task_statuses": DUAL_DAG_TASK_STATUSES,
             "coordination_action_types": ["clarify", "wait_for_evidence"],
         },
         "compatibility": {
