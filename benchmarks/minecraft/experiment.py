@@ -12,6 +12,7 @@ from env.minecraft_dual_dag import (
     rank_minecraft_runtime_tasks,
     sanitize_public_value,
 )
+from pipeline.dual_dag_task_store import DualDAGTaskStore
 from type_define.graph import Graph, Task
 
 
@@ -28,7 +29,7 @@ def run_minecraft_experiment(
     output_root: str | Path = DEFAULT_OUTPUT_ROOT,
     run_name: str | None = None,
     config_index: int = 0,
-    enable_dual_dag_task_selection: bool = False,
+    enable_dual_dag_task_selection: bool = True,
     execute: bool = False,
     execute_timeout_seconds: float | None = None,
     command_text: str | None = None,
@@ -46,7 +47,7 @@ def run_minecraft_experiment(
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     dual_dag_config = _dual_dag_config(enable_dual_dag_task_selection)
-    tasks, graph = _task_graph_from_config(launch_config)
+    tasks, graph, task_store = _task_graph_from_config(launch_config)
     action_log: dict = _fixture_action_log(launch_config)
     score: dict = {}
     error = None
@@ -95,7 +96,9 @@ def run_minecraft_experiment(
         "task_name": launch_config.get("task_name", ""),
         "task_type": launch_config.get("task_type", ""),
         "task_idx": launch_config.get("task_idx"),
-        "dual_dag_task_selection_enabled": enable_dual_dag_task_selection,
+        "dual_dag_runtime_enabled": True,
+        "dual_dag_task_selection_enabled": True,
+        "source_of_truth": "dual_dag",
         "execute_real_environment": bool(execute),
         "execute_timeout_seconds": execute_timeout_seconds,
         "mutates_runtime": False,
@@ -122,6 +125,7 @@ def run_minecraft_experiment(
     _write_json(output_dir / "launch_config.json", sanitize_public_value(launch_config))
     _write_json(output_dir / "action_log.json", sanitize_public_value(action_log))
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
+    _write_json(output_dir / "runtime_dual_dag_snapshot.json", task_store.snapshot())
     _write_json(output_dir / "dual_dag_artifact.json", artifact)
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
@@ -142,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--config-index", type=int, default=0)
-    parser.add_argument("--dual-dag-task-selection", action="store_true")
+    parser.add_argument("--dual-dag-task-selection", action="store_true", help="Compatibility flag; Dual-DAG runtime task selection is always enabled")
     parser.add_argument("--execute", action="store_true", help="Run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     args = parser.parse_args(argv)
@@ -234,7 +238,7 @@ def _execute_real_runtime_bounded(
         signal.signal(signal.SIGALRM, previous_handler)
 
 
-def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph]:
+def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, DualDAGTaskStore]:
     task_configs = config.get("smoke_tasks")
     if isinstance(task_configs, list) and task_configs:
         tasks = [_task_from_config(config, task_config) for task_config in task_configs]
@@ -242,10 +246,10 @@ def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph]:
         tasks = [_task_from_config(config, {
             "description": config.get("task_goal", config.get("task_name", "Minecraft task")),
         })]
-    graph = Graph()
-    for task in tasks:
-        graph.add_node(task)
-    return tasks, graph
+    task_store = DualDAGTaskStore()
+    task_store.load_tasks_from_decomposition(tasks)
+    graph = task_store.to_task_graph_projection()
+    return tasks, graph, task_store
 
 
 def _task_from_config(config: dict, task_config: dict) -> Task:
@@ -261,6 +265,7 @@ def _task_from_config(config: dict, task_config: dict) -> Task:
     task.candidate_list = task_config.get("candidate_agents") or _agent_names(agent_num)
     task._agent = task_config.get("assigned_agents", [])
     task.number = int(task_config.get("number", max(1, min(agent_num, 1))))
+    task._pre_idxs = [int(index) for index in task_config.get("required_subtasks", task_config.get("required subtasks", []))]
     return task
 
 
@@ -276,7 +281,7 @@ def _task_graph_snapshot(graph: Graph) -> dict:
 
 
 def _dual_dag_config(enabled: bool) -> dict:
-    return {"runtime_task_selection": {"enabled": enabled}}
+    return {"runtime_task_selection": {"enabled": True, "requested_enabled": bool(enabled)}}
 
 
 def _fixture_action_log(config: dict) -> dict:

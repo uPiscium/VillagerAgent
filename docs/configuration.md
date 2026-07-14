@@ -94,11 +94,10 @@ python -m benchmarks.minecraft.experiment \
   --config configs/minecraft/experiments/issue110_smoke.json \
   --output-root result/minecraft \
   --run-name local_smoke \
-  --config-index 0 \
-  --dual-dag-task-selection
+  --config-index 0
 ```
 
-Add `--execute` to mutate the real environment. Add `--execute-timeout-seconds N` to bound real runs and preserve artifacts on timeout.
+Dual-DAG runtime task lifecycle and task selection are always enabled. `--dual-dag-task-selection` remains accepted as a compatibility no-op. Add `--execute` to mutate the real environment. Add `--execute-timeout-seconds N` to bound real runs and preserve artifacts on timeout.
 
 Matrix dry-run:
 
@@ -106,6 +105,5 @@ Matrix dry-run:
 python -m benchmarks.minecraft.matrix \
   --config configs/minecraft/experiments/issue107_smoke_comparison.json \
   --output-dir result/minecraft_matrix \
-  --run-names run_a,run_b \
-  --dual-dag-task-selection
+  --run-names run_a,run_b
 ```

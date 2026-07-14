@@ -19,7 +19,7 @@ def run_minecraft_matrix(
     output_dir: str | Path = DEFAULT_MATRIX_OUTPUT_ROOT,
     config_indices: list[int] | None = None,
     run_names: list[str] | None = None,
-    enable_dual_dag_task_selection: bool = False,
+    enable_dual_dag_task_selection: bool = True,
     execute: bool = False,
     execute_timeout_seconds: float | None = None,
     command_text: str | None = None,
@@ -56,7 +56,7 @@ def run_minecraft_matrix(
             output_root=run_output_root,
             run_name=run_name,
             config_index=config_index,
-            enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+            enable_dual_dag_task_selection=True,
             execute=execute,
             execute_timeout_seconds=execute_timeout_seconds,
             command_text=command_text or _command_text(),
@@ -88,7 +88,8 @@ def run_minecraft_matrix(
         "matrix_output_dir": str(matrix_dir),
         "run_output_root": str(run_output_root),
         "run_count": len(results),
-        "dual_dag_task_selection_enabled": enable_dual_dag_task_selection,
+        "dual_dag_runtime_enabled": True,
+        "dual_dag_task_selection_enabled": True,
         "execute_timeout_seconds": execute_timeout_seconds,
         "aggregate": aggregate_rows(common_rows),
         "runs": results,
@@ -119,7 +120,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", default=str(DEFAULT_MATRIX_OUTPUT_ROOT))
     parser.add_argument("--config-indices", default="", help="Comma-separated config indices; defaults to all entries")
     parser.add_argument("--run-names", default="", help="Comma-separated run names matching selected config indices")
-    parser.add_argument("--dual-dag-task-selection", action="store_true")
+    parser.add_argument("--dual-dag-task-selection", action="store_true", help="Compatibility flag; Dual-DAG runtime task selection is always enabled")
     parser.add_argument("--execute", action="store_true", help="Explicitly run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     return parser.parse_args(argv)

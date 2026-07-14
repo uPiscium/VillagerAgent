@@ -29,6 +29,15 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Classification: public compatibility projection of canonical Dual-DAG task state.
 - Required fields: `mutates_runtime`, `tasks`, `edges`.
 
+## `runtime_dual_dag_snapshot.json`
+
+- Producer: `pipeline.dual_dag_task_store.DualDAGTaskStore.snapshot()`.
+- Timing: during normalized artifact generation.
+- Modes: dry-run and execute.
+- Failure behavior: written even on execute failure/timeout.
+- Classification: canonical public runtime task lifecycle artifact.
+- Required fields include `schema_version`, `runtime`, `source_of_truth`, `summary`, `nodes`, `edges`, and `schema`.
+
 ## `dual_dag_artifact.json`
 
 - Producer: `env.minecraft_dual_dag.build_minecraft_dual_dag_artifact()`.
@@ -63,7 +72,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public run summary.
-- Fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_task_selection_enabled`, `execute_real_environment`, `execute_timeout_seconds`, `mutates_runtime`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `ranked_task_order`, `selected_task_id`, `selected_description`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
+- Fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `mutates_runtime`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `ranked_task_order`, `selected_task_id`, `selected_description`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
 
 ## Provenance Files
 
