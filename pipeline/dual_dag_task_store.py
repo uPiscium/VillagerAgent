@@ -62,9 +62,9 @@ class RuntimeTaskDAGStore:
             "lifecycle": {
                 "status": getattr(task, "status", Task.unknown),
                 "candidate_agents": list(getattr(task, "candidate_list", []) or []),
-                "assigned_agents": list(getattr(task, "_agent", []) or []),
+                "active_agents": list(getattr(task, "_agent", []) or []) if getattr(task, "status", Task.unknown) == Task.running else [],
+                "last_assigned_agents": list(getattr(task, "_agent", []) or []),
                 "required_agent_count": int(getattr(task, "number", 1) or 1),
-                "available": bool(getattr(task, "available", True)),
             },
             "provenance": existing.get("provenance", {"source": "TaskManager.decomposition"}),
         }
@@ -123,7 +123,7 @@ class RuntimeTaskDAGStore:
         return runnable
 
     def mark_task_running(self, task_id: str, assigned_agents: list[str] | None = None) -> None:
-        self._set_task_lifecycle(task_id, status=Task.running, assigned_agents=assigned_agents)
+        self._set_task_lifecycle(task_id, status=Task.running, active_agents=assigned_agents)
 
     def mark_task_success(self, task_id: str, feedback=None) -> None:
         self._set_task_lifecycle(task_id, status=Task.success, reflect=feedback)
@@ -132,7 +132,7 @@ class RuntimeTaskDAGStore:
         self._set_task_lifecycle(task_id, status=Task.failure, reflect=feedback)
 
     def mark_task_status(self, task_id: str, status: str, feedback=None, assigned_agents: list[str] | None = None) -> None:
-        self._set_task_lifecycle(task_id, status=status, assigned_agents=assigned_agents, reflect=feedback)
+        self._set_task_lifecycle(task_id, status=status, active_agents=assigned_agents, reflect=feedback)
 
     def terminal_state(self) -> GraphState:
         node_ids = list(self._task_order)
@@ -175,7 +175,7 @@ class RuntimeTaskDAGStore:
                 "task_edge_count": sum(1 for edge in self.edges if edge.get("edge_type") == "precedes_task"),
                 "terminal_state": self.terminal_state().value,
             },
-            "nodes": [deepcopy(self.nodes[node_id]) for node_id in self._task_order],
+            "nodes": [self._snapshot_node(node_id) for node_id in self._task_order],
             "edges": deepcopy(self.edges),
             "schema": dual_dag_schema_registry(),
         }
@@ -258,14 +258,32 @@ class RuntimeTaskDAGStore:
         for node_id in self._task_order:
             visit(node_id, [node_id])
 
-    def _set_task_lifecycle(self, task_id: str, *, status: str, assigned_agents: list[str] | None = None, reflect=None) -> None:
+    def _set_task_lifecycle(self, task_id: str, *, status: str, active_agents: list[str] | None = None, reflect=None) -> None:
         node_id = self.task_node_id(task_id)
         node = self.nodes[node_id]
         node["lifecycle"]["status"] = status
-        if assigned_agents is not None:
-            node["lifecycle"]["assigned_agents"] = list(assigned_agents)
+        if active_agents is not None:
+            agents = list(active_agents)
+            node["lifecycle"]["active_agents"] = agents
+            if agents:
+                node["lifecycle"]["last_assigned_agents"] = agents
+        if status in (Task.success, Task.failure):
+            node["lifecycle"]["active_agents"] = []
         if reflect is not None:
             node["content"]["reflect"] = deepcopy(reflect)
+
+    def _snapshot_node(self, node_id: str) -> dict:
+        node = deepcopy(self.nodes[node_id])
+        predecessors = self.all_predecessor_ids(node_id)
+        node["derived"] = {
+            "dependency_ready": all(self._status(predecessor_id) == Task.success for predecessor_id in predecessors),
+            "blocked_by_tasks": [
+                predecessor_id
+                for predecessor_id in predecessors
+                if self._status(predecessor_id) in (Task.unknown, Task.running)
+            ],
+        }
+        return node
 
     def _project_task(self, node_id: str) -> Task:
         node = self.nodes[node_id]
@@ -277,10 +295,19 @@ class RuntimeTaskDAGStore:
         task.reflect = deepcopy(content.get("reflect"))
         task.status = lifecycle.get("status", Task.unknown)
         task.candidate_list = list(lifecycle.get("candidate_agents", []) or [])
-        task._agent = list(lifecycle.get("assigned_agents", []) or [])
+        active_agents = lifecycle.get("active_agents")
+        if active_agents is None:
+            active_agents = lifecycle.get("assigned_agents", [])
+        task._agent = list(active_agents or [])
         task.number = int(lifecycle.get("required_agent_count", 1) or 1)
-        task.available = bool(lifecycle.get("available", True))
+        task.available = self._is_dependency_ready(node_id) and task.status == Task.unknown
         return task
+
+    def _is_dependency_ready(self, node_id: str) -> bool:
+        return all(
+            self._status(predecessor_id) == Task.success
+            for predecessor_id in self.all_predecessor_ids(node_id)
+        )
 
     def _status(self, node_id: str) -> str:
         return self.nodes[node_id].get("lifecycle", {}).get("status", Task.unknown)
