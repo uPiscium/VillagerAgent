@@ -78,3 +78,24 @@ def test_write_normalized_artifacts(tmp_path):
     assert metrics_rows[0]["navigation_loop_count"] == "0"
     assert metrics_rows[0]["result_failures"] == "0"
     assert json.loads((tmp_path / "dual_dag_artifact.json").read_text(encoding="utf-8")) == dual_dag_snapshot
+
+
+def test_write_normalized_artifacts_redacts_secret_from_failure_text(tmp_path):
+    secret = "sentinel-secret-value-12345"
+
+    write_normalized_artifacts(
+        artifact_dir=tmp_path,
+        run_config={"env": "mock", "episode_id": "ep", "task_id": 0, "seed": 1},
+        events=[
+            {
+                "event": "policy_step",
+                "decision": {"action_id": "open:agent_0:20"},
+                "result": {"succeeded": False, "error": f"provider rejected {secret}"},
+            }
+        ],
+        metrics={"task_success": False},
+        secret_values=(secret,),
+    )
+
+    for artifact in tmp_path.iterdir():
+        assert secret not in artifact.read_text(encoding="utf-8")

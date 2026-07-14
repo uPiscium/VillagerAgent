@@ -8,6 +8,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
+from benchmarks.common.sanitization import sanitize_artifact_value
 from benchmarks.cwah.adapter import CWAHConfig, CWAHSymbolicAdapter
 from benchmarks.cwah.artifacts import write_normalized_artifacts
 from benchmarks.cwah.coela_env import coela_cwah_env_factory
@@ -32,7 +33,8 @@ def main() -> None:
         ),
         env_factory=mock_cwah_env_factory if args.env == "mock" else coela_cwah_env_factory,
     )
-    client = OpenAI(base_url=args.base_url, api_key=args.api_key)
+    api_key = os.environ.get("CWAH_LLM_API_KEY", "ollama")
+    client = OpenAI(base_url=args.base_url, api_key=api_key)
     episode = adapter.reset(episode_id=args.episode_id, seed=args.seed)
     max_policy_steps = args.max_steps if args.full_episode else args.max_policy_steps
     run_config = {
@@ -46,6 +48,7 @@ def main() -> None:
         "model": args.model,
         "prefer_physical_after_steps": args.prefer_physical_after_steps,
         "navigation_loop_threshold": args.navigation_loop_threshold,
+        "attempt_id": args.attempt_id or None,
     }
     events = [{"event": "episode_started", "episode": episode.__dict__, "run_config": run_config}]
     blocked_action_ids: set[str] = set()
@@ -129,7 +132,11 @@ def main() -> None:
     if args.output:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({"run_config": run_config, "events": events, "metrics": metrics}, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload = sanitize_artifact_value(
+            {"run_config": run_config, "events": events, "metrics": metrics},
+            secret_values=(api_key,),
+        )
+        output.write_text(json.dumps(payload, default=_json_default, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.artifact_dir:
         write_normalized_artifacts(
             artifact_dir=Path(args.artifact_dir),
@@ -137,6 +144,7 @@ def main() -> None:
             events=events,
             metrics=metrics,
             dual_dag_snapshot=adapter.dual_dag_snapshot(),
+            secret_values=(api_key,),
         )
     print(json.dumps({"passed": True, "env": args.env, "run_config": run_config, "metrics": metrics}, sort_keys=True))
 
@@ -491,7 +499,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefer-physical-after-steps", type=int, default=2, help="Prefer physical actions after this environment step; use -1 to disable.")
     parser.add_argument("--navigation-loop-threshold", type=int, default=12, help="Suppress repeated walktowards signatures after this many episode-local selections; use 0 to disable.")
     parser.add_argument("--base-url", default=os.environ.get("CWAH_LLM_BASE_URL", "http://ollama.arc.upiscium.dev/v1"))
-    parser.add_argument("--api-key", default=os.environ.get("CWAH_LLM_API_KEY", "ollama"))
     parser.add_argument("--model", default=os.environ.get("CWAH_LLM_MODEL", "gemma4:e4b"))
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=128)
@@ -501,6 +508,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")
     parser.add_argument("--base-port", type=int, default=6314)
+    parser.add_argument("--attempt-id", default="", help="Run attempt identifier supplied by an experiment harness")
     return parser.parse_args()
 
 

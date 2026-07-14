@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from benchmarks.common.sanitization import sanitize_artifact_value
+
 
 SUPPORTED_PROVIDERS = {"openai", "openai_compatible", "ollama", "ollama_native"}
 
@@ -115,7 +117,7 @@ def load_config(
 
     for model_name in ("director", "builder"):
         model_config = config.setdefault("models", {}).setdefault(model_name, {})
-        api_key_env = model_config.pop("api_key_env", None)
+        api_key_env = model_config.get("api_key_env")
         if api_key_env:
             api_key = os.environ.get(api_key_env)
             if not api_key and require_api_keys:
@@ -188,8 +190,9 @@ def output_dir_for_config(config: dict) -> Path:
 
 def save_resolved_config(config: dict, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    sanitized_config = sanitize_artifact_value(config)
     with (output_dir / "config.resolved.yaml").open("w", encoding="utf-8") as f:
-        yaml.safe_dump(config, f, sort_keys=False, allow_unicode=True)
+        yaml.safe_dump(sanitized_config, f, sort_keys=False, allow_unicode=True)
     with (output_dir / "config.resolved.json").open("w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+        json.dump(sanitized_config, f, indent=2)
         f.write("\n")

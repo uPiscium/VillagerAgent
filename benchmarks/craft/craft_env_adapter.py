@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from benchmarks.common.sanitization import (
+    collect_secret_values,
+    redact_text,
+    sanitize_artifact_value,
+    sanitize_command,
+)
 from benchmarks.craft.adapters.openai_compatible import OpenAICompatibleClient
 from benchmarks.craft.adapters.ollama_client import OllamaNativeClient
 from benchmarks.craft.craft_protocol import CraftPrivateView, CraftPublicState
@@ -96,7 +102,10 @@ class CraftEnvAdapter:
             )
             for structure_index in structures
         ]
-        raw_result = _aggregate_games(condition, games)
+        raw_result = sanitize_artifact_value(
+            _aggregate_games(condition, games),
+            secret_values=collect_secret_values(self.config),
+        )
         raw_dir = self.output_dir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
         with (raw_dir / "villageragent_directors.json").open("w", encoding="utf-8") as f:
@@ -303,7 +312,10 @@ class CraftEnvAdapter:
             )
             for structure_index in structures
         ]
-        raw_result = _aggregate_games(condition, games)
+        raw_result = sanitize_artifact_value(
+            _aggregate_games(condition, games),
+            secret_values=collect_secret_values(self.config),
+        )
         raw_result["official_craft_runner"] = {
             "repo_path": self.config["craft"]["repo_path"],
             "dataset_path": self.config["craft"]["dataset_path"],
@@ -353,11 +365,15 @@ class CraftEnvAdapter:
             condition=condition,
             requested_structures=structures,
         )
-        _sanitize_official_runner_outputs(runner_output)
-        raw_result = _aggregate_games(condition, games)
+        secret_values = collect_secret_values(self.config)
+        _sanitize_official_runner_outputs(runner_output, secret_values=secret_values)
+        raw_result = sanitize_artifact_value(
+            _aggregate_games(condition, games),
+            secret_values=secret_values,
+        )
         raw_result["official_craft_runner"] = {
             "mode": "external_cli",
-            "command": command,
+            "command": sanitize_command(command, secret_values=secret_values),
             "repo_path": craft["repo_path"],
             "dataset_path": craft["dataset_path"],
             "output_dir": str(runner_output),
@@ -367,8 +383,8 @@ class CraftEnvAdapter:
             "use_oracle": craft.get("use_oracle", False),
             "oracle_n": craft.get("oracle_n"),
             "builder_tool_use": craft.get("builder_tool_use", False),
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
+            "stdout": redact_text(completed.stdout, secret_values=secret_values),
+            "stderr": redact_text(completed.stderr, secret_values=secret_values),
         }
         raw_dir = self.output_dir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -1344,12 +1360,19 @@ def _load_official_runner_games(
     return [games_by_structure[index] for index in requested_structures]
 
 
-def _sanitize_official_runner_outputs(runner_output: Path) -> None:
+def _sanitize_official_runner_outputs(
+    runner_output: Path,
+    *,
+    secret_values: tuple[str, ...] = (),
+) -> None:
     forbidden_keys = set(OFFICIAL_RUNNER_HIDDEN_STATE_KEYS)
     for path in runner_output.glob("**/craft_structure_*.json"):
         with path.open("r", encoding="utf-8") as f:
             payload = json.load(f)
-        sanitized = _drop_hidden_keys(payload, forbidden_keys)
+        sanitized = sanitize_artifact_value(
+            _drop_hidden_keys(payload, forbidden_keys),
+            secret_values=secret_values,
+        )
         with path.open("w", encoding="utf-8") as f:
             json.dump(sanitized, f, ensure_ascii=False, indent=2)
 

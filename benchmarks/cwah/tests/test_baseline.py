@@ -34,9 +34,12 @@ def test_build_matrix_command_forwards_baseline_options(tmp_path):
     assert command[command.index("--port-stride") + 1] == "10"
     assert command[command.index("--navigation-loop-threshold") + 1] == "12"
     assert command[command.index("--coela-cwah-path") + 1] == "/tmp/coela/cwah"
+    assert "--api-key" not in command
+    assert "key" not in command
 
 
 def test_build_manifest_marks_mock_as_validation_not_performance_claim(tmp_path):
+    secret = "sentinel-secret-value-12345"
     args = argparse.Namespace(
         env="mock",
         tasks="0",
@@ -49,14 +52,15 @@ def test_build_manifest_marks_mock_as_validation_not_performance_claim(tmp_path)
         model="model",
         base_port=6314,
         port_stride=1,
+        api_key=secret,
     )
 
     manifest = build_manifest(
         args=args,
-        command=["python", "-m", "benchmarks.cwah.matrix"],
+        command=["python", "-m", "benchmarks.cwah.matrix", "--api-key", secret],
         matrix_returncode=0,
-        matrix_stdout=json.dumps({"runs": 1}),
-        matrix_stderr="",
+        matrix_stdout=json.dumps({"runs": 1, "error": secret}),
+        matrix_stderr=f"provider rejected {secret}",
         output_dir=tmp_path / "matrix",
         report_dir=tmp_path / "report",
         common_rows=[{"run_name": "task_0_seed_0"}],
@@ -66,3 +70,6 @@ def test_build_manifest_marks_mock_as_validation_not_performance_claim(tmp_path)
     assert manifest["performance_claim"] is False
     assert manifest["runs"] == 1
     assert manifest["outputs"]["common_report_json"].endswith("common_report.json")
+    serialized = json.dumps(manifest)
+    assert secret not in serialized
+    assert manifest["command"][-1] == "[REDACTED]"

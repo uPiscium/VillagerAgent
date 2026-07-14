@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.common.run_artifacts import (
+    COMPLETION_MARKER_FILE,
+    RunDirectoryExistsError,
+)
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
     _terminate_runtime_process,
@@ -720,6 +724,57 @@ def test_minecraft_execute_can_retain_internal_result_explicitly(tmp_path, monke
     assert runtime_result_path.exists()
     assert not runtime_result_path.with_suffix(".json.tmp").exists()
     assert json.loads(runtime_result_path.read_text(encoding="utf-8"))["runtime_task_dag_snapshot"]
+
+
+def test_minecraft_run_rejects_reuse_and_allows_explicit_overwrite(tmp_path):
+    config_path = _write_minecraft_config(tmp_path)
+    first = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="rerun",
+    )
+
+    with pytest.raises(RunDirectoryExistsError, match="not empty"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            run_name="rerun",
+        )
+
+    second = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="rerun",
+        overwrite=True,
+    )
+    run_dir = tmp_path / "result" / "rerun"
+
+    assert second["attempt_id"] != first["attempt_id"]
+    assert (run_dir / COMPLETION_MARKER_FILE).read_text(encoding="utf-8").strip() == second["attempt_id"]
+    assert json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))["attempt_id"] == second["attempt_id"]
+    assert json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "completed"
+
+
+def test_minecraft_failed_run_has_no_completion_marker(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("runtime failed")),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="failed_bundle",
+        execute=True,
+    )
+    run_dir = tmp_path / "result" / "failed_bundle"
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+
+    assert summary["error_type"] == "RuntimeError"
+    assert manifest["attempt_id"] == summary["attempt_id"]
+    assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 
 
 def _write_minecraft_config(tmp_path):

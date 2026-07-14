@@ -57,6 +57,12 @@ chmod +x external/CoELA/executable/linux_exec.v2.3.0.x86_64
 
 ## Smoke Run
 
+Set non-placeholder LLM credentials through the environment. C-WAH runners intentionally do not accept API keys on the command line because commands and process arguments may be recorded:
+
+```bash
+export CWAH_LLM_API_KEY="..."
+```
+
 Run a bounded real CoELA smoke from the repository root:
 
 ```bash
@@ -104,6 +110,8 @@ The matrix runner writes per-run artifacts plus:
 
 - `matrix_summary.json`
 - `matrix_metrics.csv`
+
+Run and matrix directories must be new or empty. Use `--overwrite` only when the complete previous bundle should be replaced with a new attempt ID.
 
 ## Troubleshooting
 

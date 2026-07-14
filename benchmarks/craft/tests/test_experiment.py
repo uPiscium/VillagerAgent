@@ -4,6 +4,7 @@ import json
 import pytest
 import yaml
 
+from benchmarks.common.run_artifacts import RunDirectoryExistsError
 from benchmarks.craft.config import repo_root
 from benchmarks.craft.experiment import (
     ExperimentConfigError,
@@ -304,15 +305,34 @@ def test_run_experiment_dry_run_creates_run_output(tmp_path):
     resolved_config = yaml.safe_load((output / "config.resolved.yaml").read_text())
     command_text = (output / "command.txt").read_text()
     provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
+    first_attempt = json.loads((output / "attempt.json").read_text(encoding="utf-8"))["attempt_id"]
     assert resolved_config["run"]["structures"] == [0]
     assert resolved_config["run"]["turns"] == 1
     assert resolved_config["run"]["seed"] == 9
+    assert resolved_config["models"]["director"]["api_key"] == "[REDACTED]"
+    assert resolved_config["models"]["builder"]["api_key"] == "[REDACTED]"
     assert "--run-name-suffix _smoke" in command_text
     assert provenance["benchmark"] == "craft"
     assert provenance["schema_version"] == "1.0.0"
 
+    with pytest.raises(RunDirectoryExistsError, match="not empty"):
+        run_experiment(
+            str(manifest_path),
+            dry_run=True,
+            overrides={"structures": [0], "turns": 1, "seed": 9, "run_name_suffix": "_smoke"},
+        )
+    run_experiment(
+        str(manifest_path),
+        dry_run=True,
+        overrides={"structures": [0], "turns": 1, "seed": 9, "run_name_suffix": "_smoke"},
+        overwrite=True,
+    )
+    second_attempt = json.loads((output / "attempt.json").read_text(encoding="utf-8"))["attempt_id"]
+    assert second_attempt != first_attempt
+
 
 def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkeypatch):
+    secret = "sentinel-secret-value-12345"
     root = repo_root()
     dataset_path = write_minimal_structures_dataset(tmp_path / "structures_dataset_20.json")
     config_path = tmp_path / "ollama.yaml"
@@ -338,13 +358,13 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
                     "provider": "openai_compatible",
                     "model": "missing-model",
                     "base_url": "https://ollama.invalid/v1",
-                    "api_key": "ollama",
+                    "api_key": secret,
                 },
                 "builder": {
                     "provider": "openai_compatible",
                     "model": "missing-model",
                     "base_url": "https://ollama.invalid/v1",
-                    "api_key": "ollama",
+                    "api_key": secret,
                 },
             },
         }),
@@ -372,7 +392,7 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
     )
 
     def fail_run(*args, **kwargs):
-        raise RuntimeError("model unavailable")
+        raise RuntimeError(f"model unavailable with {secret}")
 
     monkeypatch.setattr("benchmarks.craft.experiment.run_config", fail_run)
 
@@ -383,7 +403,10 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
     assert rows[0]["error_type"] == "RuntimeError"
     normalized = tmp_path / "results" / "craft_failed_model" / "normalized"
     failure_summary = json.loads((normalized / "summary.json").read_text(encoding="utf-8"))
-    assert failure_summary["failure"]["message"] == "model unavailable"
+    assert failure_summary["failure"]["message"] == "model unavailable with [REDACTED]"
+    for artifact in (tmp_path / "results" / "craft_failed_model").rglob("*"):
+        if artifact.is_file():
+            assert secret not in artifact.read_text(encoding="utf-8")
     with (tmp_path / "summary.csv").open("r", encoding="utf-8", newline="") as f:
         summary_rows = list(csv.DictReader(f))
     assert summary_rows[0]["status"] == "failed"

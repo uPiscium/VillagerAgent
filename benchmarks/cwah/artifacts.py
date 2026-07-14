@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from benchmarks.common.sanitization import sanitize_artifact_value
 from benchmarks.cwah.failure_diagnostics import failure_reason_counts_from_messages
 
 
@@ -15,14 +16,25 @@ def write_normalized_artifacts(
     events: list[dict[str, Any]],
     metrics: dict[str, Any],
     dual_dag_snapshot: dict[str, Any] | None = None,
+    secret_values: tuple[str, ...] = (),
 ) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    summary = build_summary(run_config=run_config, events=events, metrics=metrics)
+    sanitized_run_config = sanitize_artifact_value(run_config, secret_values=secret_values)
+    sanitized_events = sanitize_artifact_value(events, secret_values=secret_values)
+    sanitized_metrics = sanitize_artifact_value(metrics, secret_values=secret_values)
+    summary = build_summary(
+        run_config=sanitized_run_config,
+        events=sanitized_events,
+        metrics=sanitized_metrics,
+    )
     _write_json(artifact_dir / "summary.json", summary)
-    _write_turns(artifact_dir / "turns.jsonl", events)
+    _write_turns(artifact_dir / "turns.jsonl", sanitized_events)
     _write_metrics(artifact_dir / "metrics.csv", summary)
     if dual_dag_snapshot is not None:
-        _write_json(artifact_dir / "dual_dag_artifact.json", dual_dag_snapshot)
+        _write_json(
+            artifact_dir / "dual_dag_artifact.json",
+            sanitize_artifact_value(dual_dag_snapshot, secret_values=secret_values),
+        )
 
 
 def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], metrics: dict[str, Any]) -> dict[str, Any]:

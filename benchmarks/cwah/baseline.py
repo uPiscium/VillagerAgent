@@ -2,22 +2,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 from benchmarks.common.report import summarize_inputs, write_csv_report, write_json_report
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory, read_attempt_id
+from benchmarks.common.sanitization import redact_text, sanitize_command
 
 
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
     report_dir = Path(args.report_dir or output_dir / "common_report")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
 
     command = build_matrix_command(args=args, output_dir=output_dir)
     completed = subprocess.run(command, cwd=Path.cwd(), text=True, capture_output=True, check=False)
+    secret_values = (os.environ.get("CWAH_LLM_API_KEY", ""),)
+    report_attempt_id = prepare_run_directory(
+        report_dir,
+        producer="benchmarks.cwah.baseline",
+        overwrite=args.overwrite,
+    )
 
     rows = []
     csv_path = report_dir / "common_report.csv"
@@ -31,14 +38,22 @@ def main() -> None:
         args=args,
         command=command,
         matrix_returncode=completed.returncode,
-        matrix_stdout=completed.stdout.strip(),
-        matrix_stderr=completed.stderr.strip(),
+        matrix_stdout=redact_text(completed.stdout.strip(), secret_values=secret_values),
+        matrix_stderr=redact_text(completed.stderr.strip(), secret_values=secret_values),
         output_dir=output_dir,
         report_dir=report_dir,
         common_rows=rows,
+        attempt_id=report_attempt_id,
+        matrix_attempt_id=read_attempt_id(output_dir) if (output_dir / "attempt.json").exists() else None,
     )
     manifest_path = report_dir / "baseline_manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    finalize_run_directory(
+        report_dir,
+        attempt_id=report_attempt_id,
+        producer="benchmarks.cwah.baseline",
+        status="completed" if completed.returncode == 0 else "failed",
+    )
     print(json.dumps({"passed": completed.returncode == 0, "manifest": str(manifest_path), "runs": len(rows)}, sort_keys=True))
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
@@ -67,8 +82,6 @@ def build_matrix_command(*, args: argparse.Namespace, output_dir: Path) -> list[
         str(args.navigation_loop_threshold),
         "--base-url",
         args.base_url,
-        "--api-key",
-        args.api_key,
         "--model",
         args.model,
         "--base-port",
@@ -84,6 +97,8 @@ def build_matrix_command(*, args: argparse.Namespace, output_dir: Path) -> list[
         command.extend(["--dataset-path", args.dataset_path])
     if args.executable_file:
         command.extend(["--executable-file", args.executable_file])
+    if getattr(args, "overwrite", False):
+        command.append("--overwrite")
     return command
 
 
@@ -97,9 +112,17 @@ def build_manifest(
     output_dir: Path,
     report_dir: Path,
     common_rows: list[dict],
+    attempt_id: str | None = None,
+    matrix_attempt_id: str | None = None,
 ) -> dict:
+    secret_values = (
+        getattr(args, "api_key", ""),
+        os.environ.get("CWAH_LLM_API_KEY", ""),
+    )
     return {
         "schema_version": 1,
+        "attempt_id": attempt_id,
+        "matrix_attempt_id": matrix_attempt_id,
         "benchmark": "cwah",
         "baseline_type": "real_coela" if args.env == "coela" else "mock_validation",
         "performance_claim": False,
@@ -117,10 +140,10 @@ def build_manifest(
             "base_port": args.base_port,
             "port_stride": args.port_stride,
         },
-        "command": command,
+        "command": sanitize_command(command, secret_values=secret_values),
         "matrix_returncode": matrix_returncode,
-        "matrix_stdout": matrix_stdout,
-        "matrix_stderr": matrix_stderr,
+        "matrix_stdout": redact_text(matrix_stdout, secret_values=secret_values),
+        "matrix_stderr": redact_text(matrix_stderr, secret_values=secret_values),
         "outputs": {
             "matrix_dir": str(output_dir),
             "matrix_summary": str(output_dir / "matrix_summary.json"),
@@ -146,13 +169,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefer-physical-after-steps", type=int, default=0)
     parser.add_argument("--navigation-loop-threshold", type=int, default=12)
     parser.add_argument("--base-url", default="http://ollama.arc.upiscium.dev/v1")
-    parser.add_argument("--api-key", default="ollama")
     parser.add_argument("--model", default="gemma4:e4b")
     parser.add_argument("--coela-cwah-path", default="")
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")
     parser.add_argument("--base-port", type=int, default=6314)
     parser.add_argument("--port-stride", type=int, default=1)
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace existing matrix and report directories")
     return parser.parse_args()
 
 

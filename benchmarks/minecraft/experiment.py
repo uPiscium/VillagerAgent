@@ -7,6 +7,7 @@ import queue
 import time
 from pathlib import Path
 
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 from benchmarks.experiment_provenance import standard_run_name, write_provenance
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from env.minecraft_dual_dag import (
@@ -52,6 +53,7 @@ def run_minecraft_experiment(
     execute_timeout_seconds: float | None = None,
     retain_runtime_result: bool = False,
     command_text: str | None = None,
+    overwrite: bool = False,
 ) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
 
@@ -62,7 +64,11 @@ def run_minecraft_experiment(
     launch_config = _load_config(config_path, config_index=config_index)
     selected_run_name = standard_run_name(run_name or launch_config.get("task_name") or _default_run_name(config_path))
     output_dir = Path(output_root) / selected_run_name
-    output_dir.mkdir(parents=True, exist_ok=True)
+    attempt_id = prepare_run_directory(
+        output_dir,
+        producer="benchmarks.minecraft.experiment",
+        overwrite=overwrite,
+    )
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     selected_policy = _task_selection_policy(
@@ -144,6 +150,7 @@ def run_minecraft_experiment(
     if not execute and ranked_tasks:
         selected_task = ranked_tasks[0]
     summary = {
+        "attempt_id": attempt_id,
         "run_name": selected_run_name,
         "mode": "execute" if execute else "dry_run",
         "started_at": started_at,
@@ -210,6 +217,12 @@ def run_minecraft_experiment(
     )
     if execute and not retain_runtime_result:
         _remove_runtime_result(runtime_result_path)
+    finalize_run_directory(
+        output_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.minecraft.experiment",
+        status="failed" if error else "completed",
+    )
     return summary
 
 
@@ -225,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute", action="store_true", help="Run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     parser.add_argument("--retain-runtime-result", action="store_true", help="Keep the per-run internal runtime result after normalized artifacts are written")
+    parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing non-empty run directory")
     args = parser.parse_args(argv)
 
     summary = run_minecraft_experiment(
@@ -238,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         execute_timeout_seconds=args.execute_timeout_seconds,
         retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
+        overwrite=args.overwrite,
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary.get("error") is None else 1
@@ -658,6 +673,8 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.extend(["--execute-timeout-seconds", str(args.execute_timeout_seconds)])
     if args.retain_runtime_result:
         parts.append("--retain-runtime-result")
+    if getattr(args, "overwrite", False):
+        parts.append("--overwrite")
     return " ".join(parts)
 
 
