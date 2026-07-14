@@ -10,6 +10,9 @@ from env.utils import init_logger
 import logging
 
 
+LOAD_WAIT_SECONDS = 160
+
+
 class env_type:
     none = -1
     construction = 0
@@ -310,7 +313,22 @@ class VillagerBench:
             subprocess.Popen(["python", "env/auto_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name, "--op_path", self.op_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.logger.debug(f"python env/auto_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name} --op_path {self.op_path}")
         elif self.env_type == env_type.meta:
-            subprocess.Popen(["python", "env/meta_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            command = ["python", "env/meta_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name]
+            os.makedirs("data", exist_ok=True)
+            stdout_path = "data/meta_judger.stdout.log"
+            stderr_path = "data/meta_judger.stderr.log"
+            with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+                judger_process = subprocess.Popen(command, stdout=stdout, stderr=stderr)
+            diagnostics = {
+                "command": command,
+                "pid": judger_process.pid,
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+                "load_status_history": [],
+                "exit_code": None,
+                "timeout_reason": None,
+            }
+            self._write_meta_judger_diagnostics(diagnostics)
             self.logger.debug(f"python env/meta_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
         elif self.env_type == env_type.gen:
             subprocess.Popen(["python", "env/llm_gen_judger.py", "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -320,24 +338,49 @@ class VillagerBench:
             return
         else:
             raise ValueError(f"Unsupported environment type: {self.env_type!r}")
-        max_wait_num = 160
+        max_wait_num = LOAD_WAIT_SECONDS
+        loaded = False
         while max_wait_num:
             time.sleep(1)
+            max_wait_num -= 1
             try:
                 if max_wait_num % 30 == 0 and max_wait_num != 120:
                     self.logger.info(f"waiting for server to start, guess the server is starting this task for the first time, please wait")
                 if not os.path.exists(".cache/load_status.cache"):
+                    if self.env_type == env_type.meta:
+                        diagnostics["load_status_history"].append({"status": "missing", "time": time.time()})
+                        diagnostics["exit_code"] = judger_process.poll()
+                        self._write_meta_judger_diagnostics(diagnostics)
+                        if diagnostics["exit_code"] is not None:
+                            raise RuntimeError(f"meta judger exited before loading with code {diagnostics['exit_code']}")
                     continue
                 with open(".cache/load_status.cache", "r") as f:
                     status_data = json.load(f)
+                if self.env_type == env_type.meta:
+                    diagnostics["load_status_history"].append({"status": status_data.get("status"), "time": time.time()})
+                    diagnostics["exit_code"] = judger_process.poll()
+                    self._write_meta_judger_diagnostics(diagnostics)
+                    if diagnostics["exit_code"] is not None and status_data.get("status") != "loaded":
+                        raise RuntimeError(f"meta judger exited before loading with code {diagnostics['exit_code']}")
                 if status_data["status"] == "loaded":
                     self.logger.info("server started in background")
+                    loaded = True
                     break
-            except:
-                raise Exception("server failed to start")
-            max_wait_num -= 1
-        if max_wait_num == 0:
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                raise Exception("server failed to start") from exc
+        if not loaded:
+            if self.env_type == env_type.meta:
+                diagnostics["exit_code"] = judger_process.poll()
+                diagnostics["timeout_reason"] = f"load_status did not reach loaded within {LOAD_WAIT_SECONDS} seconds"
+                self._write_meta_judger_diagnostics(diagnostics)
             raise Exception("server failed to start")
+
+    @staticmethod
+    def _write_meta_judger_diagnostics(diagnostics):
+        with open("data/meta_judger_diagnostics.json", "w", encoding="utf-8") as f:
+            json.dump(diagnostics, f, indent=4)
     
     def get_msg(self, agent_name: str):
         '''
@@ -421,6 +464,9 @@ class VillagerBench:
             with open(f"data/score.json") as f:
                 score = json.load(f)
             return score
+        if self.env_type == env_type.meta:
+            with open("data/score.json") as f:
+                return json.load(f)
 
 
 if __name__ == "__main__":
