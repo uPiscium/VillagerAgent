@@ -283,6 +283,14 @@ class TaskManager:
         self.sync_graph_from_dual_dag()
         return task_list
 
+    def query_runnable_subtasks(self, free_agent_names: list[str]) -> list[Task]:
+        while self.status == TaskManager.running:
+            time.sleep(TASK_MANAGER_WAIT_TIME)
+
+        task_list = self.runtime_task_store.query_runnable_tasks(free_agent_names=free_agent_names)
+        self.sync_graph_from_dual_dag()
+        return task_list
+
 
     def get_graph_strategy(self, task:Task) -> {str: Union[str, int, list]}:
         '''

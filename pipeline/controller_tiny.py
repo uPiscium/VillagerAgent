@@ -250,26 +250,10 @@ class GlobalController:
 
                 
     def check_task_list_available(self):
-        available_task_list = []
-        for task in self.task_list:
-            task.available = True
-            if len(task.candidate_list) == 0:
-                task.candidate_list = [agent.name for agent in self.agent_list]
-            if len(task.predecessor_task_list) > 0 or task.status != Task.unknown:
-                task.available = False
-                continue
-            free_candidate = 0
-            for agent in self.agent_list:
-                if agent.name in task.candidate_list and self.assignment.get(agent.name) is None:
-                    free_candidate += 1
-            if free_candidate < task.number:
-                task.available = False
-        
-        for task in self.task_list:
-            if task.available:
-                available_task_list.append(task)
-        
-        return available_task_list
+        return [
+            task for task in self.task_list
+            if task.available and task.status == Task.unknown
+        ]
     # 生产者
     def execute_tasks(self):
         try:
@@ -283,12 +267,18 @@ class GlobalController:
                     self.shutdown = True
                     break
 
-                self.task_list = self.task_manager.query_subtask_list()
-                self.task_list = self._rank_task_list_with_minecraft_dual_dag(self.task_list)
-                if self.task_list == []:
+                open_task_list = self.task_manager.query_subtask_list()
+                if open_task_list == []:
                     self.logger.info("all assigned tasks are finished ...")
                     self.shutdown = True
                     break
+
+                free_agent_names = [
+                    agent.name for agent in self.agent_list
+                    if self.assignment.get(agent.name) is None
+                ]
+                self.task_list = self.task_manager.query_runnable_subtasks(free_agent_names)
+                self.task_list = self._rank_task_list_with_minecraft_dual_dag(self.task_list)
                 # 写到 logs/task_list.json 中
                 agent_states = []
                 for agent in self.agent_list:
