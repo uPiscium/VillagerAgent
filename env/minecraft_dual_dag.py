@@ -253,6 +253,14 @@ def _runtime_task_selection_config(config: dict) -> dict:
 
 
 def _task_node(task) -> MinecraftDAGNode:
+    task_metadata = getattr(task, "content", {})
+    runtime_snapshot = task_metadata.get("runtime_snapshot", {}) if isinstance(task_metadata, dict) else {}
+    provenance = {"source": "type_define.graph.Task"}
+    if runtime_snapshot:
+        provenance = {
+            "source": "runtime_task_dag_snapshot",
+            "runtime_provenance": sanitize_public_value(runtime_snapshot.get("provenance", {})),
+        }
     content = {
         "description": getattr(task, "description", ""),
         "status": getattr(task, "status", "unknown"),
@@ -260,13 +268,14 @@ def _task_node(task) -> MinecraftDAGNode:
         "reflect": sanitize_public_value(getattr(task, "reflect", None)),
         "candidate_agents": sanitize_public_value(getattr(task, "candidate_list", [])),
         "assigned_agents": sanitize_public_value(getattr(task, "_agent", [])),
+        "last_assigned_agents": sanitize_public_value(runtime_snapshot.get("last_assigned_agents", [])),
         "metadata": sanitize_public_value(getattr(task, "content", {})),
     }
     return MinecraftDAGNode(
         node_id=_task_node_id(task),
         node_type="minecraft_task",
         content=content,
-        provenance={"source": "type_define.graph.Task"},
+        provenance=provenance,
     )
 
 
@@ -450,7 +459,13 @@ def _task_node_id(task) -> str:
 def _tasks_by_agent(tasks: list) -> dict[str, list]:
     by_agent: dict[str, list] = {}
     for task in tasks:
-        for agent_name in getattr(task, "_agent", []) or []:
+        agent_names = list(getattr(task, "_agent", []) or [])
+        task_metadata = getattr(task, "content", {})
+        if not agent_names and isinstance(task_metadata, dict):
+            runtime_snapshot = task_metadata.get("runtime_snapshot", {})
+            if isinstance(runtime_snapshot, dict):
+                agent_names = list(runtime_snapshot.get("last_assigned_agents", []) or [])
+        for agent_name in agent_names:
             by_agent.setdefault(agent_name, []).append(task)
     return by_agent
 

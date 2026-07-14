@@ -53,7 +53,7 @@ English documentation: [README.md](README.md)
 4. `GlobalController` が `TaskManager.query_runnable_subtasks()` から store-filtered runnable task を受け取り、設定された selection policy を適用し、各taskの必要人数ちょうどのfree candidate agentを割り当てて、lifecycle updateをruntime task DAGへ書き戻す。同じscheduler iteration内で、残りのfree agentには別の独立taskを割り当てられる。
 5. `GlobalController` がmulti-agent taskを1つのexecution groupとして実行し、割り当てられた全`BaseAgent`へtaskを渡す。全futureが完了し、全agentのreflectionが成功した場合だけtaskをsuccessにする。
 6. `BaseAgent` が `DataManager` から状態を取得し、LLM を呼び、Minecraft tool を実行し、group reflection用のagent別detailを返す。
-7. Benchmark harness が `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, `decision_support.json` を保存する。
+7. Benchmark harness が `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, `decision_support.json` を保存する。dry-runのtask artifactはconfig fixture、executeのtask artifactは取得できたreal runtime task DAG snapshotを使用する。
 
 コードを読むなら、`start_with_config.py`、`pipeline/controller_tiny.py`、`task_manager.py`、`data_manager.py`、`agent.py` の順が分かりやすいです。全体処理は [docs/execution_flow.md](docs/execution_flow.md) にまとめています。
 

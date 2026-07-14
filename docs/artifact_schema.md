@@ -48,7 +48,8 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public analysis projection.
-- Required fields include `schema_version`, `schema`, `nodes`, `edges`, and `summary`.
+- Required fields include `schema_version`, `schema`, `nodes`, `edges`, `summary`, and `task_state_source`.
+- `task_state_source` is `config_fixture` for dry-run and `real_runtime` when execute mode recovers a runtime task snapshot. Runtime task lifecycle/provenance is projected into task nodes before action-log analysis.
 
 ## `decision_support.json`
 
@@ -57,7 +58,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public read-only recommendation context.
-- Required fields include `mode`, `mutates_runtime`, `recommended_task_id`, `recommended_description`, and `candidates`.
+- Required fields include `mode`, `mutates_runtime`, `recommended_task_id`, `recommended_description`, `candidates`, and `task_state_source`. Candidate tasks use the same source as `dual_dag_artifact.json`.
 
 ## `metrics.json`
 
@@ -75,7 +76,9 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
 - Classification: public run summary.
-- Fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `snapshot_source`, `execute_real_environment`, `execute_timeout_seconds`, `mutates_runtime`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `ranked_task_order`, `selected_task_id`, `selected_description`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
+- Task provenance fields include `snapshot_source` and `task_state_source` (`config_fixture` or `real_runtime`).
+- Selection fields distinguish `runtime_selection_policy`, recorded `runtime_selected_task_ids`, and `posthoc_ranked_task_order`. `ranked_task_order` remains a compatibility alias for the post-hoc order. In execute mode, `selected_task_id` and `selected_description` are empty unless runtime selection history was recorded; post-hoc ranking is never presented as runtime history.
+- Other fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `mutates_runtime`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
 
 ## Provenance Files
 
