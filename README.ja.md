@@ -37,6 +37,7 @@ English documentation: [README.md](README.md)
 ## 詳細ガイド
 
 - [Minimal startup](docs/minimal_run.md): Ollama 既定値、Minecraft smoke、bounded execute。
+- [Architecture diagrams](docs/architecture.md): 現在の Dual-DAG source-of-truth architecture、論文用 figure layout、Before/After 図。
 - [Task graph structure](docs/graph_structure.md): `Task`, `Graph`, status、依存関係、artifact。
 - [Dual-DAG runtime boundary](docs/dual_dag_runtime.md): Task Graph、Epistemic DAG、Action Candidate DAG、artifact の責務境界。
 - [Configuration](docs/configuration.md): Minecraft JSON field、LLM 既定値、API key fallback、benchmark CLI option。
@@ -48,8 +49,8 @@ English documentation: [README.md](README.md)
 
 1. `VillagerBench` が Minecraft bridge を起動し、agent tool を公開する。
 2. `DataManager` が環境状態、agent 状態、履歴、経験を保持・要約する。
-3. `TaskManager` がトップレベルタスクを初期化し、分解し、タスクグラフを管理する。
-4. `GlobalController` が実行可能なタスクを利用可能な agent に割り当てる。
+3. `TaskManager` がトップレベルタスクを初期化・分解し、canonical task state を `DualDAGTaskStore` に書き込む。
+4. `GlobalController` が実行可能なタスクを利用可能な agent に割り当て、lifecycle update を Dual-DAG に書き戻す。
 5. `BaseAgent` が `DataManager` から状態を取得し、LLM を呼び、Minecraft tool を実行し、成功/失敗を reflection する。
 6. Benchmark harness が `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, `decision_support.json` を保存する。
 
