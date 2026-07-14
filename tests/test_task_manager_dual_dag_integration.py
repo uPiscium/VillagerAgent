@@ -16,7 +16,8 @@ def test_task_manager_uses_dual_dag_store_as_task_source_of_truth():
 
     node = manager.dual_dag_store.nodes[manager.dual_dag_store.task_node_id(task_a)]
     assert node["lifecycle"]["status"] == Task.running
-    assert node["lifecycle"]["assigned_agents"] == ["Alice"]
+    assert node["lifecycle"]["active_agents"] == ["Alice"]
+    assert node["lifecycle"]["last_assigned_agents"] == ["Alice"]
     assert manager.graph.vertex[0].status == Task.running
     assert manager.graph.vertex[0]._agent == ["Alice"]
 

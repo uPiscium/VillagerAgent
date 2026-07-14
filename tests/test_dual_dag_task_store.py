@@ -105,6 +105,35 @@ def test_store_task_graph_projection_reflects_canonical_dual_dag_state():
     assert graph.vertex[0]._agent == ["Alice"]
 
 
+def test_store_lifecycle_tracks_active_and_last_assigned_agents():
+    store, tasks = _store_with_chain(1)
+    node_id = store.task_node_id(tasks[0])
+
+    assert store.nodes[node_id]["lifecycle"]["active_agents"] == []
+    assert store.nodes[node_id]["lifecycle"]["last_assigned_agents"] == []
+
+    store.mark_task_running(tasks[0].id, assigned_agents=["Alice"])
+    assert store.nodes[node_id]["lifecycle"]["active_agents"] == ["Alice"]
+    assert store.nodes[node_id]["lifecycle"]["last_assigned_agents"] == ["Alice"]
+
+    store.mark_task_success(tasks[0].id, feedback={"ok": True})
+    assert store.nodes[node_id]["lifecycle"]["active_agents"] == []
+    assert store.nodes[node_id]["lifecycle"]["last_assigned_agents"] == ["Alice"]
+    assert store.nodes[node_id]["content"]["reflect"] == {"ok": True}
+
+
+def test_store_lifecycle_clears_active_agents_on_failure():
+    store, tasks = _store_with_chain(1)
+    node_id = store.task_node_id(tasks[0])
+
+    store.mark_task_running(tasks[0].id, assigned_agents=["Alice"])
+    store.mark_task_failure(tasks[0].id, feedback="failed")
+
+    assert store.nodes[node_id]["lifecycle"]["active_agents"] == []
+    assert store.nodes[node_id]["lifecycle"]["last_assigned_agents"] == ["Alice"]
+    assert store.nodes[node_id]["content"]["reflect"] == "failed"
+
+
 def test_store_snapshot_is_canonical_dual_dag_artifact():
     store, _ = _store_with_chain(1)
 
@@ -114,6 +143,11 @@ def test_store_snapshot_is_canonical_dual_dag_artifact():
     assert snapshot["source_of_truth"] == "runtime_task_dag"
     assert snapshot["summary"]["task_node_count"] == 1
     assert snapshot["nodes"][0]["node_type"] == "runtime_task"
+    assert "available" not in snapshot["nodes"][0]["lifecycle"]
+    assert snapshot["nodes"][0]["derived"] == {
+        "dependency_ready": True,
+        "blocked_by_tasks": [],
+    }
     assert "runtime_task" in snapshot["schema"]["node_types"]
     assert "task_statuses" in snapshot["schema"]["lifecycle_fields"]
 
