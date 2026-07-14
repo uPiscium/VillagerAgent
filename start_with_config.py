@@ -18,6 +18,7 @@ import json
 
 def _task_graph_snapshot(graph) -> dict:
     return {
+        "artifact_generation_mutates_runtime": False,
         "mutates_runtime": False,
         "projection": "type_define.Graph compatibility projection",
         "tasks": [task.to_json() for task in getattr(graph, "vertex", [])],

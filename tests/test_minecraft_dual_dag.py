@@ -29,6 +29,7 @@ def test_minecraft_dual_dag_maps_tasks_actions_and_observations():
     artifact = build_minecraft_dual_dag_artifact(action_log=action_log, tasks=[task])
 
     assert artifact["schema_version"] == "1.0.0"
+    assert artifact["artifact_generation_mutates_runtime"] is False
     assert "minecraft_task" in artifact["schema"]["node_types"]
     assert "task_invokes_action" in artifact["schema"]["edge_types"]
     assert artifact["summary"] == {
@@ -176,6 +177,7 @@ def test_minecraft_runtime_decision_support_uses_artifact_context_without_mutati
     )
 
     assert support["mode"] == "dry_run"
+    assert support["artifact_generation_mutates_runtime"] is False
     assert support["mutates_runtime"] is False
     assert support["recommended_task_id"] == f"minecraft:task:{claim_supported_task.id}"
     assert support["candidates"][0]["recommendation"] == "retry_or_replan"
@@ -227,8 +229,36 @@ def test_minecraft_runtime_task_ranking_is_config_gated_and_read_only():
 
     assert disabled["enabled"] is False
     assert disabled["tasks"] == original_tasks
+    assert disabled["task_selection_mutates_order"] is False
+    assert disabled["task_order_changed"] is False
     assert enabled["enabled"] is True
     assert enabled["tasks"][0] is claim_supported_task
+    assert enabled["task_selection_mutates_order"] is True
+    assert enabled["task_order_changed"] is True
     assert enabled["decision_support"]["recommended_task_id"] == f"minecraft:task:{claim_supported_task.id}"
     assert graph.edge == before_edges
     assert [task.status for task in original_tasks] == before_statuses
+
+
+def test_minecraft_runtime_task_ranking_reports_capability_without_order_change():
+    task = Task("Only runnable task", {})
+
+    ranked = rank_minecraft_runtime_tasks(
+        [task],
+        config={"runtime_task_selection": {"enabled": True}},
+    )
+
+    assert ranked["enabled"] is True
+    assert ranked["task_selection_mutates_order"] is True
+    assert ranked["task_order_changed"] is False
+
+
+def test_minecraft_runtime_task_ranking_reports_capability_without_tasks():
+    ranked = rank_minecraft_runtime_tasks(
+        [],
+        config={"runtime_task_selection": {"enabled": True}},
+    )
+
+    assert ranked["enabled"] is True
+    assert ranked["task_selection_mutates_order"] is True
+    assert ranked["task_order_changed"] is False

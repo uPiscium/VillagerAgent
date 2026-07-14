@@ -161,6 +161,10 @@ def run_minecraft_experiment(
         "task_state_source": task_state_source,
         "execute_real_environment": bool(execute),
         "execute_timeout_seconds": execute_timeout_seconds,
+        "mutates_environment": bool(execute),
+        "artifact_generation_mutates_runtime": False,
+        "task_selection_mutates_order": ranked["task_selection_mutates_order"],
+        "task_order_changed": ranked["task_order_changed"],
         "mutates_runtime": False,
         "artifact_summary": artifact.get("summary", {}),
         "recommended_task_id": decision_support.get("recommended_task_id", ""),
@@ -542,6 +546,7 @@ def _task_from_config(config: dict, task_config: dict) -> Task:
 
 def _task_graph_snapshot(graph: Graph) -> dict:
     return {
+        "artifact_generation_mutates_runtime": False,
         "mutates_runtime": False,
         "tasks": [sanitize_public_value(task.to_json()) for task in graph.vertex],
         "edges": [

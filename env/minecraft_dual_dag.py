@@ -108,6 +108,7 @@ def build_minecraft_dual_dag_artifact(
     return {
         "schema_version": DUAL_DAG_SCHEMA_VERSION,
         "runtime": "minecraft_dual_dag_artifact",
+        "artifact_generation_mutates_runtime": False,
         "summary": {
             "node_count": len(nodes),
             "edge_count": len(edges),
@@ -158,6 +159,7 @@ def build_minecraft_runtime_decision_support(
     recommended = max(scored, key=lambda row: row["score"]) if scored else {}
     return {
         "mode": "dry_run",
+        "artifact_generation_mutates_runtime": False,
         "mutates_runtime": False,
         "recommended_task_id": recommended.get("task_id", ""),
         "recommended_description": recommended.get("description", ""),
@@ -181,11 +183,22 @@ def rank_minecraft_runtime_tasks(
     selection_config = _runtime_task_selection_config(config or {})
     enabled = bool(selection_config.get("enabled", False))
     original_tasks = list(tasks or [])
-    if not enabled or not original_tasks:
+    if not enabled:
         return {
             "enabled": False,
             "tasks": original_tasks,
             "decision_support": {},
+            "task_selection_mutates_order": False,
+            "task_order_changed": False,
+            "mutates_runtime": False,
+        }
+    if not original_tasks:
+        return {
+            "enabled": True,
+            "tasks": [],
+            "decision_support": {},
+            "task_selection_mutates_order": True,
+            "task_order_changed": False,
             "mutates_runtime": False,
         }
 
@@ -207,10 +220,17 @@ def rank_minecraft_runtime_tasks(
         key=lambda task: score_by_id.get(_task_node_id(task), 0.0),
         reverse=True,
     )
+    task_order_changed = [
+        _task_node_id(task) for task in original_tasks
+    ] != [
+        _task_node_id(task) for task in ranked_tasks
+    ]
     return {
         "enabled": True,
         "tasks": ranked_tasks,
         "decision_support": support,
+        "task_selection_mutates_order": True,
+        "task_order_changed": task_order_changed,
         "mutates_runtime": False,
     }
 
