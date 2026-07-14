@@ -40,7 +40,7 @@ Core operations include:
 - `get_open_task_list()` to compute unfinished tasks and direct open prerequisites.
 - `get_terminal_state()` to distinguish `RUNNING`, `SUCCESS`, `FAILURE`, `BLOCKED`, and `EMPTY`.
 - `check_graph_completion()` as a backward-compatible wrapper that returns true for every non-`RUNNING` terminal state.
-- `merge_at()`, `replace_node()`, and `remove_node_merge_edge()` for graph updates.
+- `merge_at()`, `replace_node()`, and `remove_node_merge_edge()` remain compatibility projection helpers. Runtime replanning does not use them as canonical edit APIs.
 
 ## Construction Flow
 
@@ -57,7 +57,7 @@ unknown -> running -> success
 unknown -> running -> failure
 ```
 
-Feedback can trigger `TaskManager.feedback_task()`, which may update, merge, or refine the graph depending on task-manager mode.
+Feedback can trigger `TaskManager.feedback_task()`, which may update, merge, or refine the plan depending on task-manager mode. Merge-mode changes call the validated `RuntimeTaskDAGStore` editing APIs first, preserve retained lifecycle/history, and regenerate the Graph projection afterward. A failed edit rolls back nodes, edges, order, and mutation history.
 
 Terminal graph states:
 

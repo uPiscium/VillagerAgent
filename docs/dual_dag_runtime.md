@@ -33,6 +33,15 @@ The Task Graph projection preserves compatibility with existing `Task`, `Graph`,
 - `GlobalController` computes free agents, requests runnable tasks, applies the configured selection policy, then writes running/success/failure state through `TaskManager`.
 - `TaskManager.graph` mirrors the latest runtime task DAG projection.
 
+Replanning is store-first. `RuntimeTaskDAGStore` provides validated replace, insert-after, move-after, delete, and replace-with-subgraph operations. Each edit runs transactionally, validates the resulting DAG, records mutation provenance, and then `TaskManager` regenerates `graph`. The deprecated `sync_dual_dag_from_graph()` compatibility method is not used by runtime replanning.
+
+Identity and history policy:
+
+- Replace and move preserve the runtime task ID. Replace resets status to `unknown` for the new plan while preserving reflect and `last_assigned_agents`; provenance records the previous status.
+- Insert creates a new ID.
+- Decompose deletes the parent node, creates new subtask IDs, and copies parent status, reflect, and assignment history into child provenance. No `decomposed` lifecycle status is introduced.
+- Delete removes the ID and reconnects predecessors to successors.
+
 ## Epistemic DAG
 
 The Epistemic DAG models information state for benchmark adapters and policy analysis:
@@ -71,7 +80,7 @@ Supported policies:
 
 ## Artifacts
 
-- `runtime_dual_dag_snapshot.json`: canonical runtime task subgraph snapshot. The filename is retained for compatibility; read it as runtime task DAG state. It includes `snapshot_source` as `config_fixture` or `real_runtime`.
+- `runtime_dual_dag_snapshot.json`: canonical runtime task subgraph snapshot. The filename is retained for compatibility; read it as runtime task DAG state. It includes `snapshot_source` as `config_fixture` or `real_runtime` and additive `mutation_history` entries for store edits.
 - `task_graph_snapshot.json`: compatibility projection of runtime tasks and edges.
 - `dual_dag_artifact.json`: public analysis projection of tasks, actions, observations, and claims.
 - `decision_support.json`: public read-only recommendation context derived from artifacts.
