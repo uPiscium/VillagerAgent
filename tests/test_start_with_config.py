@@ -115,3 +115,43 @@ def test_main_returns_failure_for_harness_error_summary(monkeypatch, tmp_path, c
 
     assert start_with_config.main(["--config", str(config_path)]) == 1
     assert json.loads(capsys.readouterr().out)["error"] == "runtime failed"
+
+
+def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
+    class StopAfterMetaSetting(Exception):
+        pass
+
+    class FakeEnvironment:
+        def agent_register(self, **_kwargs):
+            pass
+
+        def run(self, **_kwargs):
+            raise StopAfterMetaSetting
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(start_with_config, "VillagerBench", lambda **_kwargs: FakeEnvironment())
+    monkeypatch.setattr(start_with_config, "load_agent_api_key_list", lambda: [])
+    monkeypatch.setattr(start_with_config, "configure_ollama_agent", lambda *_args, **_kwargs: None)
+
+    evaluation_arg = {"action": "move", "x": 1, "y": 2, "z": 3}
+    with pytest.raises(StopAfterMetaSetting):
+        start_with_config.run(
+            "model",
+            "http://localhost:11434/v1",
+            "meta",
+            0,
+            1,
+            False,
+            1,
+            "move safely",
+            "",
+            "127.0.0.1",
+            25565,
+            "meta-smoke",
+            document=evaluation_arg,
+            task_scenario="move",
+        )
+
+    setting = json.loads((tmp_path / ".cache" / "meta_setting.json").read_text(encoding="utf-8"))
+    assert setting["task_scenario"] == "move"
+    assert setting["evaluation_arg"] == evaluation_arg

@@ -1,9 +1,16 @@
+import importlib
+import json
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
 
 import env.env as env_module
-from env.env import VillagerBench
+from env.env import VillagerBench, env_type
+from env.minecraft_client import Agent
+from env.minecraft_define import MinecraftEvent
+from pipeline.agent import BaseAgent
 from pipeline.task_manager import TaskManager
 from pipeline.utils import dict2document
 from type_define.graph import Graph, Task
@@ -72,6 +79,170 @@ def test_environment_reset_rejects_unsupported_type(monkeypatch):
         environment.reset()
 
 
+def test_meta_reset_bounds_missing_load_status_and_persists_diagnostics(monkeypatch, tmp_path):
+    class FakeProcess:
+        pid = 4321
+
+        @staticmethod
+        def poll():
+            return None
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / ".cache").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(env_module, "LOAD_WAIT_SECONDS", 2)
+    monkeypatch.setattr(env_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(env_module.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    environment = _meta_environment()
+
+    with pytest.raises(Exception, match="server failed to start"):
+        environment.reset()
+
+    diagnostics = json.loads((tmp_path / "data" / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["pid"] == 4321
+    assert diagnostics["exit_code"] is None
+    assert diagnostics["timeout_reason"] == "load_status did not reach loaded within 2 seconds"
+    assert [entry["status"] for entry in diagnostics["load_status_history"]] == ["missing", "missing"]
+    assert (tmp_path / "data" / "meta_judger.stdout.log").exists()
+    assert (tmp_path / "data" / "meta_judger.stderr.log").exists()
+
+
+def test_meta_reset_reports_judger_exit_before_loading(monkeypatch, tmp_path):
+    process = SimpleNamespace(pid=123, poll=lambda: 7)
+    (tmp_path / "data").mkdir()
+    (tmp_path / ".cache").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(env_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(env_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    with pytest.raises(RuntimeError, match="meta judger exited before loading with code 7"):
+        _meta_environment().reset()
+
+    diagnostics = json.loads((tmp_path / "data" / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["exit_code"] == 7
+
+
+def test_meta_get_score_reads_runtime_score_path(monkeypatch, tmp_path):
+    (tmp_path / "data").mkdir()
+    score = {"score": 100, "end_reason": "task completed"}
+    (tmp_path / "data" / "score.json").write_text(json.dumps(score), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    environment = object.__new__(VillagerBench)
+    environment.env_type = env_type.meta
+    environment.task_name = "meta-smoke"
+
+    assert environment.get_score() == score
+
+
+def _meta_environment():
+    environment = object.__new__(VillagerBench)
+    environment.running = True
+    environment._virtual_debug = False
+    environment.logger = SimpleNamespace(info=lambda *_: None, debug=lambda *_: None)
+    environment.agent_pool = []
+    environment.env_type = env_type.meta
+    environment.task_id = 0
+    environment.host = "127.0.0.1"
+    environment.port = 25565
+    environment.task_name = "meta-smoke"
+    return environment
+
+
 def test_dict2document_rejects_unsupported_database():
     with pytest.raises(ValueError, match="Unsupported database name 'unknown'"):
         dict2document({}, "unknown")
+
+
+def test_rl_step_rejects_invalid_model_action_index():
+    agent = object.__new__(BaseAgent)
+    agent.name = "Alice"
+    agent.data_manager = SimpleNamespace(
+        query_env_with_task=lambda *_args, **_kwargs: "environment"
+    )
+    agent.env = SimpleNamespace(agents_ping=lambda: {"status": True})
+    agent.rl_model = SimpleNamespace(take_action=lambda _state: 2)
+    agent.rl_env = SimpleNamespace(available_actions=["move", "mine"])
+
+    task = SimpleNamespace(description="Mine stone", milestones=[], content={})
+
+    with pytest.raises(ValueError, match="invalid action index 2.*integer from 0 to 1"):
+        agent.rl_step(task)
+
+
+def test_entity_query_rejects_unsupported_query_type(monkeypatch):
+    env_api = _import_env_api_with_fake_javascript(monkeypatch)
+
+    with pytest.raises(ValueError, match="Unsupported entity query type 'display_name'"):
+        env_api.get_entity_by("display_name", {"entities": {}}, "villager")
+
+
+def test_unequip_rejects_unsupported_destination(monkeypatch):
+    env_api = _import_env_api_with_fake_javascript(monkeypatch)
+    bot = SimpleNamespace(unequip=lambda _destination: pytest.fail("bot should not be called"))
+
+    with pytest.raises(ValueError, match="Invalid unequip destination 'back'"):
+        env_api.unequip(bot, "back")
+
+
+@pytest.mark.parametrize("method_name", ["step", "run"])
+def test_minecraft_agent_requires_api_keys(monkeypatch, method_name):
+    monkeypatch.setattr(Agent, "api_key_list", [])
+    agent = Agent("nobody")
+
+    with pytest.raises(RuntimeError, match=rf"set Agent\.api_key_list before calling '{method_name}\(\)'"):
+        getattr(agent, method_name)("test instruction")
+
+
+@pytest.mark.parametrize("method_name", ["step", "run"])
+def test_minecraft_agent_rejects_unsupported_model(monkeypatch, method_name):
+    monkeypatch.setattr(Agent, "api_key_list", ["test-key"])
+    agent = Agent("nobody", model="unknown-model")
+
+    with pytest.raises(ValueError, match=rf"Unsupported Minecraft Agent model 'unknown-model' for '{method_name}\(\)'"):
+        getattr(agent, method_name)("test instruction")
+
+
+class _EventBot:
+    def blockAt(self, _position):
+        return SimpleNamespace(
+            name="stone",
+            position=SimpleNamespace(x=0, y=0, z=0),
+            type=1,
+            _properties={
+                "open": None,
+                "facing": None,
+                "face": None,
+                "axis": None,
+                "part": None,
+                "hinge": None,
+                "powered": None,
+            },
+        )
+
+
+def test_minecraft_event_rejects_unsupported_activation_mode():
+    condition = [{"position": [0, 0, 0], "activate_mode": "edge"}]
+
+    with pytest.raises(ValueError, match="Unsupported Minecraft event activate_mode 'edge'"):
+        MinecraftEvent(_EventBot(), lambda *position: position, condition, [])
+
+
+def test_minecraft_event_reports_mutated_activation_mode():
+    condition = [{"position": [0, 0, 0], "activate_mode": "level"}]
+    event = MinecraftEvent(_EventBot(), lambda *position: position, condition, [])
+    condition[0]["activate_mode"] = "edge"
+
+    with pytest.raises(RuntimeError, match="condition has invalid activate_mode 'edge'"):
+        event.event_update()
+
+
+def _import_env_api_with_fake_javascript(monkeypatch):
+    original_stdout = sys.stdout
+    fake_javascript = types.ModuleType("javascript")
+    fake_javascript.require = lambda *args, **kwargs: None
+    fake_javascript.On = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "javascript", fake_javascript)
+    monkeypatch.delitem(sys.modules, "env.env_api", raising=False)
+    module = importlib.import_module("env.env_api")
+    monkeypatch.setattr(sys, "stdout", original_stdout)
+    return module

@@ -65,13 +65,14 @@ start_time = time.time()
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None):
     start_time = time.time()
 
+    if task_type == "meta" and not task_scenario:
+        raise ValueError("meta task requires task_scenario")
     api_key_list = load_agent_api_key_list()
     os.makedirs(".cache", exist_ok=True)
-    with open(".cache/meta_setting.json", "w") as f:
-        json.dump({
+    meta_setting = {
             "api_model": api_model,
             "api_base": api_base,
             "task_type": task_type,
@@ -85,7 +86,12 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             "port": port,
             "task_name": task_name,
             "role": role,
-        }, f, indent=4)
+        }
+    if task_type == "meta":
+        meta_setting["task_scenario"] = task_scenario
+        meta_setting["evaluation_arg"] = document
+    with open(".cache/meta_setting.json", "w") as f:
+        json.dump(meta_setting, f, indent=4)
 
     # Agent.base_url = "https://api.deepseek.com/v1"
     # Agent.model = "deepseek-chat"
