@@ -695,7 +695,10 @@ def random_walk(bot, Vec3, pathfinder, RANGE_GOAL):
 def get_entity_by(qtype, env_info, name, username=""):
     name = name.lower()
     get_entities = []
-    assert qtype in ['name', 'uuid', 'type', 'username']
+    if qtype not in ['name', 'uuid', 'type', 'username']:
+        raise ValueError(
+            f"Unsupported entity query type {qtype!r}; expected one of: name, uuid, type, username"
+        )
     for id in env_info['entities']:
         if env_info['entities'][int(id)] and env_info['entities'][int(id)][qtype]:
             pass
@@ -2228,7 +2231,11 @@ def equip(bot, item_name, destination='hand'):
 
 
 def unequip(bot, destination='hand'):
-    assert destination in ['hand', "head", "torso", "legs", "feet", "off-hand"]
+    if destination not in ['hand', "head", "torso", "legs", "feet", "off-hand"]:
+        raise ValueError(
+            f"Invalid unequip destination {destination!r}; expected one of: "
+            "hand, head, torso, legs, feet, off-hand"
+        )
 
     try:
         bot.unequip(destination)

@@ -59,7 +59,10 @@ if __name__ == '__main__':
 
     with open("data/farm_setting.json", "r") as f:
         settings = json.load(f)
-    assert args.idx < len(settings), "idx out of range, please make sure idx is in [0, 99]"
+    if not 0 <= args.idx < len(settings):
+        raise ValueError(
+            f"Farming task index {args.idx} is out of range; expected 0 <= idx < {len(settings)}"
+        )
     task_data = settings[args.idx]
 
     # 计算复杂度
@@ -614,4 +617,3 @@ if __name__ == '__main__':
                         inventory[i] = {"name": name, "count": count}
 
                 score, cooperation = calculate_score(agent_name, inventory)
-

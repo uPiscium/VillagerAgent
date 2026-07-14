@@ -155,7 +155,11 @@ class BaseAgent:
                     self.logger.info("Some agents are offline!")
                     break 
                 rl_action = self.rl_model.take_action(current_context)
-                assert rl_action < len(self.rl_env.available_actions) and rl_action >= 0, f"{rl_action} must in 0-{len(self.rl_env.available_actions)}"
+                if not isinstance(rl_action, (int, np.integer)) or not 0 <= rl_action < len(self.rl_env.available_actions):
+                    raise ValueError(
+                        f"RL model returned invalid action index {rl_action!r}; expected an integer from 0 "
+                        f"to {len(self.rl_env.available_actions) - 1}"
+                    )
                 rl_api = self.rl_env._get_available_actions()[rl_action]
                 print(f"{rl_action} - {rl_api}")
                 
