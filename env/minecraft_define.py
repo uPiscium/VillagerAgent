@@ -261,7 +261,11 @@ class MinecraftEvent():
         for condition in self.condition:
             if "activate_mode" not in condition.keys():
                 condition["activate_mode"] = "level"
-            assert condition["activate_mode"] in ["level", "pulse"], "activate_mode must be one of level, pulse"
+            if condition["activate_mode"] not in ["level", "pulse"]:
+                raise ValueError(
+                    f"Unsupported Minecraft event activate_mode {condition['activate_mode']!r}; "
+                    "expected one of: level, pulse"
+                )
 
             if condition["activate_mode"] == "pulse":
                 # 设定持续判定时间
@@ -318,7 +322,10 @@ class MinecraftEvent():
                             self.time_dict[str(condition["position"])] = time.time()
                             satisty_num += 1
             else:
-                assert False, "activate_mode must be one of level, pulse"
+                raise RuntimeError(
+                    f"Minecraft event condition has invalid activate_mode {condition['activate_mode']!r}; "
+                    "expected one of: level, pulse"
+                )
         
         if satisty_num > self.current_max_satisfy_num:
             self.current_max_satisfy_num = satisty_num

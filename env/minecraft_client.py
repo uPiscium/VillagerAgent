@@ -1021,7 +1021,10 @@ class Agent():
 
     def step(self, instruction: str, actions=[], observations=[], player_name_list=[], max_try_turn=2, max_iterations=1, tools=[], recommended_actions=[]):
         # return the (action, observation), details.
-        assert len(self.api_key_list) > 0, "Please set the api_key_list in Agent class."
+        if not self.api_key_list:
+            raise RuntimeError(
+                "Minecraft Agent has no API keys configured; set Agent.api_key_list before calling 'step()'"
+            )
         if 'qwen' in self.model:
             from langchain_community.chat_models.tongyi import ChatTongyi
             self.llm = ChatTongyi(model=self.model, temperature=0, max_tokens=256, dashscope_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url,model_kwargs={"enable_thinking": False})
@@ -1040,6 +1043,11 @@ class Agent():
         elif "glm" in self.model:
             from zhipu import ChatZhipuAI
             self.llm = ChatZhipuAI(model_name=self.model, temperature=0.01, api_key=random.choice(Agent.api_key_list))
+        else:
+            raise ValueError(
+                f"Unsupported Minecraft Agent model {self.model!r} for 'step()'; "
+                "expected qwen, default, deepseek, instruct-gpt, gpt, or glm"
+            )
         # elif "default" in self.model:
         #     from openai import OpenAI
         #     self.llm = OpenAI(model=self.model, openai_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url, model_kwargs={"encoding": "utf-8"})
@@ -1121,7 +1129,10 @@ class Agent():
 
     def run(self, instruction: str, player_name_list=[], max_try_turn=10, max_iterations=5, tools=[]):
         # print(f"Your name is {self.name}. \n{instruction}")
-        assert len(self.api_key_list) > 0, "Please set the api_key_list in Agent class."
+        if not self.api_key_list:
+            raise RuntimeError(
+                "Minecraft Agent has no API keys configured; set Agent.api_key_list before calling 'run()'"
+            )
         # dynamic api key
 
         if getattr(Agent, "provider", "") == "ollama":
@@ -1149,7 +1160,10 @@ class Agent():
             from langchain.chat_models import ChatOpenAI
             self.llm = ChatOpenAI(model=self.model, temperature=0,  max_tokens=256, openai_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url)
         else:
-            raise NotImplementedError(f"Model {self.model} not implemented.")
+            raise ValueError(
+                f"Unsupported Minecraft Agent model {self.model!r} for 'run()'; expected ollama provider "
+                "or a qwen, default, instruct-gpt, gpt, NAS, llama, gemini, glm, or deepseek model"
+            )
         # 这个地方是定义的agent的类型，初始化位置的agent没有被使用
         while max_try_turn > 0:
             random.shuffle(self.tools)
