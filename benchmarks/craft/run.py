@@ -132,7 +132,7 @@ def run_config(
                 raw_result=raw_result,
                 output_dir=output_dir,
             )
-    except Exception:
+    except BaseException:
         finalize_run_directory(
             output_dir,
             attempt_id=attempt_id,

@@ -67,15 +67,14 @@ def finalize_run_directory(
     (run_dir / ARTIFACT_MANIFEST_FILE).unlink(missing_ok=True)
     (run_dir / COMPLETION_MARKER_FILE).unlink(missing_ok=True)
 
-    artifact_paths = _stamp_artifacts(run_dir, attempt_id=attempt_id, nested=stamp_nested)
+    _stamp_artifacts(run_dir, attempt_id=attempt_id, nested=stamp_nested)
     _write_json_atomic(run_dir / ATTEMPT_FILE, {
         "schema_version": 1,
         "attempt_id": attempt_id,
         "producer": producer,
         "status": status,
     })
-    if run_dir / ATTEMPT_FILE not in artifact_paths:
-        artifact_paths.append(run_dir / ATTEMPT_FILE)
+    artifact_paths = _artifact_files(run_dir)
 
     manifest = {
         "schema_version": 1,
@@ -89,7 +88,8 @@ def finalize_run_directory(
                 "sha256": _sha256(path),
             }
             for path in sorted(set(artifact_paths))
-            if path.exists() and path.name not in {ARTIFACT_MANIFEST_FILE, COMPLETION_MARKER_FILE}
+            if path.exists()
+            and path not in {run_dir / ARTIFACT_MANIFEST_FILE, run_dir / COMPLETION_MARKER_FILE}
         ],
     }
     _write_json_atomic(run_dir / ARTIFACT_MANIFEST_FILE, manifest)
@@ -118,14 +118,28 @@ def validate_run_attempt(
         raise RunArtifactValidationError(
             f"Artifact manifest attempt mismatch in {run_dir}: expected {attempt_id}, got {manifest.get('attempt_id')}"
         )
-    for artifact in manifest.get("artifacts", []):
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise RunArtifactValidationError(f"Artifact manifest has no artifact list: {run_dir}")
+    manifested_paths = set()
+    for artifact in artifacts:
         if not isinstance(artifact, dict) or not artifact.get("path"):
             raise RunArtifactValidationError(f"Invalid artifact manifest entry in {run_dir}")
-        artifact_path = run_dir / str(artifact["path"])
+        relative_path = Path(str(artifact["path"]))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise RunArtifactValidationError(f"Unsafe artifact manifest path: {relative_path}")
+        artifact_path = run_dir / relative_path
+        if relative_path in manifested_paths:
+            raise RunArtifactValidationError(f"Duplicate artifact manifest path: {relative_path}")
+        manifested_paths.add(relative_path)
+        if not artifact_path.resolve().is_relative_to(run_dir.resolve()) or _contains_symlink(run_dir, artifact_path):
+            raise RunArtifactValidationError(f"Artifact path escapes run directory: {artifact_path}")
         if not artifact_path.exists():
             raise RunArtifactValidationError(f"Missing manifested artifact: {artifact_path}")
         if artifact_path.stat().st_size != artifact.get("size") or _sha256(artifact_path) != artifact.get("sha256"):
             raise RunArtifactValidationError(f"Artifact checksum mismatch: {artifact_path}")
+    if Path(ATTEMPT_FILE) not in manifested_paths:
+        raise RunArtifactValidationError(f"Artifact manifest does not include {ATTEMPT_FILE}: {run_dir}")
     if require_completed:
         marker = run_dir / COMPLETION_MARKER_FILE
         if manifest.get("status") != "completed" or not marker.exists():
@@ -137,7 +151,12 @@ def validate_run_attempt(
 
 def _stamp_artifacts(run_dir: Path, *, attempt_id: str, nested: bool) -> list[Path]:
     candidates = run_dir.rglob("*") if nested else run_dir.glob("*")
-    paths = [path for path in candidates if path.is_file()]
+    paths = []
+    for path in candidates:
+        if path.is_symlink():
+            raise RunArtifactValidationError(f"Run artifacts must not contain symlinks: {path}")
+        if path.is_file():
+            paths.append(path)
     for path in paths:
         if path.name in {ARTIFACT_MANIFEST_FILE, COMPLETION_MARKER_FILE, ATTEMPT_FILE}:
             continue
@@ -150,6 +169,28 @@ def _stamp_artifacts(run_dir: Path, *, attempt_id: str, nested: bool) -> list[Pa
         elif path.suffix in {".yaml", ".yml"}:
             _stamp_yaml(path, attempt_id)
     return paths
+
+
+def _artifact_files(run_dir: Path) -> list[Path]:
+    paths = []
+    for path in run_dir.rglob("*"):
+        if path.is_symlink():
+            raise RunArtifactValidationError(f"Run artifacts must not contain symlinks: {path}")
+        if path.is_file() and path not in {
+            run_dir / ARTIFACT_MANIFEST_FILE,
+            run_dir / COMPLETION_MARKER_FILE,
+        }:
+            paths.append(path)
+    return paths
+
+
+def _contains_symlink(run_dir: Path, artifact_path: Path) -> bool:
+    current = artifact_path
+    while current != run_dir:
+        if current.is_symlink():
+            return True
+        current = current.parent
+    return run_dir.is_symlink()
 
 
 def _stamp_json(path: Path, attempt_id: str) -> None:

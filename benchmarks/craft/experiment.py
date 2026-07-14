@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from benchmarks.common.run_artifacts import (
+    RunDirectoryExistsError,
     finalize_run_directory,
     prepare_run_directory,
     read_attempt_id,
@@ -96,6 +97,8 @@ def run_experiment(
                 completed_run_dir,
                 attempt_id=read_attempt_id(completed_run_dir),
             )
+        except RunDirectoryExistsError:
+            raise
         except Exception as exc:
             if dry_run or not continue_on_error:
                 raise

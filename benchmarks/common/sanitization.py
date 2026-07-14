@@ -47,7 +47,11 @@ def sanitize_artifact_value(value: Any, *, secret_values: Iterable[str] = ()) ->
         for key, child in value.items():
             key_text = str(key)
             if _is_credential_source_key(key_text):
-                sanitized[key] = redact_text(child, secret_values=secrets) if isinstance(child, str) else child
+                sanitized[key] = (
+                    redact_text(child, secret_values=secrets)
+                    if isinstance(child, str)
+                    else sanitize_artifact_value(child, secret_values=secrets)
+                )
             elif _is_sensitive_key(key_text):
                 sanitized[key] = REDACTED
             else:
@@ -140,4 +144,4 @@ def _is_sensitive_key(key: str) -> bool:
 
 def _should_redact_literal(secret: str) -> bool:
     stripped = secret.strip()
-    return len(stripped) >= 8 and stripped.lower() not in _NON_SECRET_PLACEHOLDERS
+    return bool(stripped) and stripped.lower() not in _NON_SECRET_PLACEHOLDERS

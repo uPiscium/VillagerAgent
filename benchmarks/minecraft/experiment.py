@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
+from benchmarks.common.sanitization import collect_secret_values, sanitize_artifact_value
 from benchmarks.experiment_provenance import standard_run_name, write_provenance
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from env.minecraft_dual_dag import (
@@ -55,6 +56,48 @@ def run_minecraft_experiment(
     command_text: str | None = None,
     overwrite: bool = False,
 ) -> dict:
+    attempt_state: dict = {}
+    try:
+        return _run_minecraft_experiment_attempt(
+            config_path=config_path,
+            output_root=output_root,
+            run_name=run_name,
+            config_index=config_index,
+            enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+            task_selection_policy=task_selection_policy,
+            execute=execute,
+            execute_timeout_seconds=execute_timeout_seconds,
+            retain_runtime_result=retain_runtime_result,
+            command_text=command_text,
+            overwrite=overwrite,
+            attempt_state=attempt_state,
+        )
+    except BaseException:
+        if attempt_state:
+            finalize_run_directory(
+                attempt_state["output_dir"],
+                attempt_id=attempt_state["attempt_id"],
+                producer="benchmarks.minecraft.experiment",
+                status="failed",
+            )
+        raise
+
+
+def _run_minecraft_experiment_attempt(
+    *,
+    config_path: str | Path,
+    output_root: str | Path,
+    run_name: str | None,
+    config_index: int,
+    enable_dual_dag_task_selection: bool,
+    task_selection_policy: str | None,
+    execute: bool,
+    execute_timeout_seconds: float | None,
+    retain_runtime_result: bool,
+    command_text: str | None,
+    overwrite: bool,
+    attempt_state: dict,
+) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
 
     Dry-run is the default so CI and local development can validate artifact capture
@@ -62,6 +105,7 @@ def run_minecraft_experiment(
     runtime and then captures the same public artifact set from the run outputs.
     """
     launch_config = _load_config(config_path, config_index=config_index)
+    secret_values = collect_secret_values(launch_config)
     selected_run_name = standard_run_name(run_name or launch_config.get("task_name") or _default_run_name(config_path))
     output_dir = Path(output_root) / selected_run_name
     attempt_id = prepare_run_directory(
@@ -69,6 +113,7 @@ def run_minecraft_experiment(
         producer="benchmarks.minecraft.experiment",
         overwrite=overwrite,
     )
+    attempt_state.update({"output_dir": output_dir, "attempt_id": attempt_id})
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     selected_policy = _task_selection_policy(
@@ -78,6 +123,7 @@ def run_minecraft_experiment(
     dual_dag_config = _dual_dag_config(selected_policy)
     tasks, graph, task_store = _task_graph_from_config(launch_config)
     action_log: dict = _fixture_action_log(launch_config)
+    action_log_available = "smoke_action_log" in launch_config
     score: dict = {}
     runtime_result: dict = {}
     error = None
@@ -110,8 +156,9 @@ def run_minecraft_experiment(
         persisted_runtime_result = _read_json(runtime_result_path, default={})
         runtime_result = runtime_result or persisted_runtime_result
         runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
-        action_log = runtime_result.get("action_log") or _read_json(Path("data/action_log.json"), default={})
-        score = runtime_result.get("score") or _read_json(Path("data/score.json"), default={})
+        action_log_available = isinstance(runtime_result.get("action_log"), dict)
+        action_log = runtime_result.get("action_log") if action_log_available else {}
+        score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
 
     runtime_task_dag_snapshot = _runtime_task_dag_snapshot(
         runtime_result=runtime_result,
@@ -196,6 +243,7 @@ def run_minecraft_experiment(
         "runtime_process_exit_code": runtime_process.get("exit_code"),
         "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
         "runtime_process_killed": bool(runtime_process.get("killed", False)),
+        "action_log_available": action_log_available,
     }
     metrics = build_minecraft_metrics(
         summary=summary,
@@ -204,8 +252,19 @@ def run_minecraft_experiment(
         decision_support=decision_support,
     )
 
-    _write_json(output_dir / "launch_config.json", sanitize_public_value(launch_config))
-    _write_json(output_dir / "action_log.json", sanitize_public_value(action_log))
+    sanitized_launch_config = sanitize_artifact_value(
+        sanitize_public_value(launch_config),
+        secret_values=secret_values,
+    )
+    action_log = sanitize_artifact_value(action_log, secret_values=secret_values)
+    task_graph_snapshot = sanitize_artifact_value(task_graph_snapshot, secret_values=secret_values)
+    runtime_task_dag_snapshot = sanitize_artifact_value(runtime_task_dag_snapshot, secret_values=secret_values)
+    artifact = sanitize_artifact_value(artifact, secret_values=secret_values)
+    decision_support = sanitize_artifact_value(decision_support, secret_values=secret_values)
+    metrics = sanitize_artifact_value(metrics, secret_values=secret_values)
+    summary = sanitize_artifact_value(summary, secret_values=secret_values)
+    _write_json(output_dir / "launch_config.json", sanitized_launch_config)
+    _write_json(output_dir / "action_log.json", action_log)
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
     _write_json(output_dir / "runtime_dual_dag_snapshot.json", runtime_task_dag_snapshot)
     _write_json(output_dir / "dual_dag_artifact.json", artifact)
@@ -216,7 +275,7 @@ def run_minecraft_experiment(
         output_dir,
         benchmark="minecraft",
         command=command_text or _command_text(),
-        resolved_config=sanitize_public_value(launch_config),
+        resolved_config=sanitized_launch_config,
         environment_notes="real_environment_execute=" + str(bool(execute)).lower(),
     )
     if execute and not retain_runtime_result:

@@ -174,6 +174,25 @@ def test_matrix_rejects_summary_from_another_attempt(tmp_path, monkeypatch):
     assert manifest["status"] == "failed"
 
 
+def test_matrix_child_exception_finalizes_failed_attempt(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "benchmarks.cwah.matrix.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("launch failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="launch failed"):
+        run_matrix_item(
+            args=_matrix_args(),
+            output_dir=tmp_path,
+            run=MatrixRun(index=0, task_id=0, seed=0),
+        )
+    run_dir = tmp_path / "task_0_seed_0"
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["status"] == "failed"
+    assert not (run_dir / "_COMPLETED").exists()
+
+
 def _matrix_args():
     return argparse.Namespace(
         env="mock",

@@ -674,6 +674,13 @@ def test_minecraft_execute_ignores_stale_global_runtime_result(tmp_path, monkeyp
     stale_path = tmp_path / ".cache" / "minecraft_runtime_result.json"
     stale_path.parent.mkdir(parents=True)
     stale_path.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "action_log.json").write_text(
+        json.dumps({"Alice": [{"action": "staleAction", "result": {"status": True}}]}),
+        encoding="utf-8",
+    )
+    (data_dir / "score.json").write_text(json.dumps({"progress": 1.0}), encoding="utf-8")
     monkeypatch.setattr(
         "benchmarks.minecraft.experiment._execute_real_runtime",
         lambda *args, **kwargs: {},
@@ -687,6 +694,12 @@ def test_minecraft_execute_ignores_stale_global_runtime_result(tmp_path, monkeyp
     )
 
     assert summary["snapshot_source"] == "config_fixture"
+    assert summary["progress"] is None
+    assert summary["action_log_available"] is False
+    action_log = json.loads(
+        (tmp_path / "result" / "ignore_stale" / "action_log.json").read_text(encoding="utf-8")
+    )
+    assert "Alice" not in action_log
     assert stale_path.exists()
 
 
@@ -792,6 +805,51 @@ def test_minecraft_failed_run_has_no_completion_marker(tmp_path, monkeypatch):
 
     assert summary["error_type"] == "RuntimeError"
     assert manifest["attempt_id"] == summary["attempt_id"]
+    assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
+def test_minecraft_runtime_error_redacts_secret_literals(tmp_path, monkeypatch):
+    secret = "tiny"
+    config_path = _write_minecraft_config(tmp_path)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["api_key"] = secret
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError(f"rejected {secret}")),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="secret_error",
+        execute=True,
+    )
+    run_dir = tmp_path / "result" / "secret_error"
+
+    assert summary["error"] == "rejected [REDACTED]"
+    for artifact in run_dir.rglob("*"):
+        if artifact.is_file():
+            assert secret not in artifact.read_text(encoding="utf-8", errors="ignore")
+
+
+def test_minecraft_unexpected_artifact_error_finalizes_failed_attempt(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.build_minecraft_dual_dag_artifact",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("artifact failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="artifact failed"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            run_name="unexpected_failure",
+        )
+    run_dir = tmp_path / "result" / "unexpected_failure"
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+
     assert manifest["status"] == "failed"
     assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 

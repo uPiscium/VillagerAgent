@@ -169,6 +169,10 @@ def test_summarizes_existing_craft_run_without_changing_craft_schema(tmp_path):
         writer = csv.DictWriter(f, fieldnames=["leakage_passed", "physical_action_count", "place_action_count", "clarify_count"])
         writer.writeheader()
         writer.writerow({"leakage_passed": "True", "physical_action_count": "3", "place_action_count": "2", "clarify_count": "1"})
+    (normalized / "turns.jsonl").write_text(
+        '{"turn": 1}\n{"turn": 2}\n',
+        encoding="utf-8",
+    )
 
     rows = summarize_inputs([run_dir])
 
@@ -178,6 +182,7 @@ def test_summarizes_existing_craft_run_without_changing_craft_schema(tmp_path):
     assert rows[0]["successes"] == 1
     assert rows[0]["success_rate"] == 0.5
     assert rows[0]["mean_progress"] == 0.75
+    assert rows[0]["mean_steps"] == 1.0
     assert rows[0]["physical_action_count"] == 3
     assert rows[0]["communication_action_count"] == 1
     assert rows[0]["failed_action_counts"] == "{}"
@@ -280,6 +285,9 @@ def test_summarizes_minecraft_summary_file_without_craft_fallback(tmp_path):
 
     assert rows[0]["benchmark"] == "minecraft"
     assert rows[0]["run_name"] == "minecraft_summary_file"
+    assert rows[0]["action_log_available"] is False
+    assert rows[0]["mean_steps"] is None
+    assert rows[0]["physical_action_count"] is None
 
 
 def test_minecraft_run_success_is_separate_from_task_completion(tmp_path):

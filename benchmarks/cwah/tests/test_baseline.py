@@ -1,8 +1,12 @@
 import argparse
 import json
+import subprocess
 import sys
 
-from benchmarks.cwah.baseline import build_manifest, build_matrix_command
+import pytest
+
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
+from benchmarks.cwah.baseline import build_manifest, build_matrix_command, main
 
 
 def test_build_matrix_command_forwards_baseline_options(tmp_path):
@@ -73,3 +77,71 @@ def test_build_manifest_marks_mock_as_validation_not_performance_claim(tmp_path)
     serialized = json.dumps(manifest)
     assert secret not in serialized
     assert manifest["command"][-1] == "[REDACTED]"
+
+
+def test_failed_matrix_launch_does_not_reuse_stale_summary(tmp_path, monkeypatch):
+    output_dir = tmp_path / "matrix"
+    stale_attempt = prepare_run_directory(output_dir, producer="stale")
+    (output_dir / "matrix_summary.json").write_text(
+        json.dumps({
+            "attempt_id": stale_attempt,
+            "runs": [{"run_name": "stale", "passed": True, "metrics": {"task_success": True}}],
+        }),
+        encoding="utf-8",
+    )
+    finalize_run_directory(
+        output_dir,
+        attempt_id=stale_attempt,
+        producer="stale",
+        status="completed",
+        stamp_nested=False,
+    )
+    args = _baseline_args(output_dir=output_dir, report_dir=tmp_path / "report")
+    monkeypatch.setattr("benchmarks.cwah.baseline.parse_args", lambda: args)
+    monkeypatch.setattr(
+        "benchmarks.cwah.baseline.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, stdout="", stderr="not empty"),
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        main()
+
+    manifest = json.loads(
+        (tmp_path / "report" / "baseline_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["runs"] == 0
+    assert manifest["matrix_attempt_id"] is None
+
+
+def test_baseline_rejects_report_directory_containing_matrix(tmp_path, monkeypatch):
+    args = _baseline_args(
+        output_dir=tmp_path / "report" / "matrix",
+        report_dir=tmp_path / "report",
+    )
+    monkeypatch.setattr("benchmarks.cwah.baseline.parse_args", lambda: args)
+
+    with pytest.raises(ValueError, match="must not equal or contain"):
+        main()
+
+
+def _baseline_args(*, output_dir, report_dir):
+    return argparse.Namespace(
+        env="mock",
+        tasks="0",
+        seeds="0",
+        output_dir=str(output_dir),
+        report_dir=str(report_dir),
+        max_steps=1,
+        max_policy_steps=1,
+        full_episode=False,
+        prefer_physical_after_steps=0,
+        navigation_loop_threshold=12,
+        base_url="http://example.test/v1",
+        model="model",
+        coela_cwah_path="",
+        dataset_path="",
+        executable_file="",
+        base_port=6314,
+        port_stride=1,
+        overwrite=False,
+    )

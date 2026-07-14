@@ -40,7 +40,7 @@ def main() -> None:
         for run in runs:
             results.append(run_matrix_item(args=args, output_dir=output_dir, run=run))
         write_matrix_summary(output_dir=output_dir, results=results, attempt_id=attempt_id)
-    except Exception:
+    except BaseException:
         finalize_run_directory(
             output_dir,
             attempt_id=attempt_id,
@@ -87,12 +87,39 @@ def matrix_port(*, base_port: int, run: MatrixRun, port_stride: int) -> int:
 
 
 def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRun) -> dict[str, Any]:
+    attempt_state: dict = {}
+    try:
+        return _run_matrix_item_attempt(
+            args=args,
+            output_dir=output_dir,
+            run=run,
+            attempt_state=attempt_state,
+        )
+    except BaseException:
+        if attempt_state:
+            finalize_run_directory(
+                attempt_state["run_dir"],
+                attempt_id=attempt_state["attempt_id"],
+                producer="benchmarks.cwah.matrix.run",
+                status="failed",
+            )
+        raise
+
+
+def _run_matrix_item_attempt(
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+    run: MatrixRun,
+    attempt_state: dict,
+) -> dict[str, Any]:
     run_name = f"task_{run.task_id}_seed_{run.seed}"
     run_dir = output_dir / run_name
     attempt_id = prepare_run_directory(
         run_dir,
         producer="benchmarks.cwah.matrix.run",
     )
+    attempt_state.update({"run_dir": run_dir, "attempt_id": attempt_id})
     raw_output = run_dir / "raw.json"
     artifact_dir = run_dir / "normalized"
     command = [

@@ -417,3 +417,13 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
     assert json.loads((tmp_path / "variance.json").read_text(encoding="utf-8"))["groups"][0][
         "failed_run_count"
     ] == 1
+
+    run_dir = tmp_path / "results" / "craft_failed_model"
+    manifest_before = (run_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.run_config",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RunDirectoryExistsError("not empty")),
+    )
+    with pytest.raises(RunDirectoryExistsError, match="not empty"):
+        run_experiment(str(manifest_path))
+    assert (run_dir / "artifact_manifest.json").read_text(encoding="utf-8") == manifest_before

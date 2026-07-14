@@ -199,7 +199,9 @@ def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
     status = row.get("status", "completed")
     episodes = int(row.get("num_games") or 0)
     completion_rate = _as_optional_float(row.get("completion_rate"))
-    action_log_available = (run_dir / "normalized" / "metrics.csv").exists()
+    action_log_available = _craft_action_metrics_available(run_dir)
+    observed_turn_count = _jsonl_record_count(run_dir / "normalized" / "turns.jsonl")
+    mean_steps = observed_turn_count / episodes if observed_turn_count is not None and episodes else None
     action_counts = {
         "place": int(row.get("place_action_count") or 0),
         "remove": int(row.get("remove_action_count") or 0),
@@ -223,8 +225,8 @@ def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
         "task_completion_rate": None,
         "mean_progress": _as_optional_float(row.get("mean_final_progress")),
         "progress_available": row.get("mean_final_progress") not in (None, ""),
-        "mean_steps": _as_optional_float(row.get("turns")),
-        "steps_available": row.get("turns") not in (None, ""),
+        "mean_steps": mean_steps,
+        "steps_available": mean_steps is not None,
         "failed_runs": 0 if status == "completed" else 1,
         "action_log_available": action_log_available,
         "physical_action_count": int(row.get("physical_action_count") or 0) if action_log_available else None,
@@ -250,7 +252,7 @@ def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = N
     summary = summary or _read_json(run_dir / "summary.json")
     metrics = _read_json(run_dir / "metrics.json")
     action_log_path = run_dir / "action_log.json"
-    action_log_available = action_log_path.exists()
+    action_log_available = bool(summary.get("action_log_available", action_log_path.exists()))
     action_log = _read_optional_json(action_log_path)
     action_counts = _minecraft_action_counts(action_log)
     failed_action_counts = _minecraft_failed_action_counts(action_log)
@@ -505,6 +507,32 @@ def _minecraft_actions(action_log: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         actions.extend(entry for entry in entries if isinstance(entry, dict))
     return actions
+
+
+def _craft_action_metrics_available(run_dir: Path) -> bool:
+    if (_jsonl_record_count(run_dir / "normalized" / "turns.jsonl") or 0) > 0:
+        return True
+    metrics_path = run_dir / "normalized" / "metrics.csv"
+    if not metrics_path.exists():
+        return False
+    with metrics_path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    action_fields = {
+        "physical_action_count",
+        "place_action_count",
+        "remove_action_count",
+        "clarify_count",
+        "wait_count",
+        "no_op_count",
+        "invalid_action_count",
+    }
+    return any(row.get(field) not in (None, "") for row in rows for field in action_fields)
+
+
+def _jsonl_record_count(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
 
 
 def _minecraft_physical_action_count(action_counts: dict[str, int]) -> int:

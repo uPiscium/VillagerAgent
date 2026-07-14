@@ -35,6 +35,20 @@ def test_sanitize_artifact_value_redacts_nested_credentials_and_literal_leaks():
     assert sanitized["error"] == f"provider rejected {REDACTED}"
 
 
+def test_sanitizer_handles_nested_credential_sources_and_short_secrets():
+    sanitized = sanitize_artifact_value({
+        "credential_sources": {
+            "api_key_env": "SHORT_KEY_ENV",
+            "api_key": "tiny",
+        },
+        "error": "rejected tiny",
+    })
+
+    assert sanitized["credential_sources"]["api_key_env"] == "SHORT_KEY_ENV"
+    assert sanitized["credential_sources"]["api_key"] == REDACTED
+    assert sanitized["error"] == f"rejected {REDACTED}"
+
+
 def test_command_sanitizers_hide_flags_and_known_secret_literals():
     secrets = (SENTINEL_SECRET,)
 

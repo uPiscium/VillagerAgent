@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 
 from benchmarks.common.report import summarize_inputs, write_csv_report, write_json_report
-from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory, read_attempt_id
+from benchmarks.common.run_artifacts import (
+    finalize_run_directory,
+    prepare_run_directory,
+    read_attempt_id,
+    validate_run_attempt,
+)
 from benchmarks.common.sanitization import redact_text, sanitize_command
 
 
@@ -16,6 +21,10 @@ def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
     report_dir = Path(args.report_dir or output_dir / "common_report")
+    output_resolved = output_dir.resolve()
+    report_resolved = report_dir.resolve()
+    if output_resolved == report_resolved or output_resolved.is_relative_to(report_resolved):
+        raise ValueError("C-WAH report directory must not equal or contain the matrix output directory")
 
     command = build_matrix_command(args=args, output_dir=output_dir)
     completed = subprocess.run(command, cwd=Path.cwd(), text=True, capture_output=True, check=False)
@@ -27,9 +36,13 @@ def main() -> None:
     )
 
     rows = []
+    matrix_attempt_id = None
     csv_path = report_dir / "common_report.csv"
     json_path = report_dir / "common_report.json"
-    if (output_dir / "matrix_summary.json").exists():
+    if completed.returncode == 0 and (output_dir / "attempt.json").exists():
+        matrix_attempt_id = read_attempt_id(output_dir)
+        validate_run_attempt(output_dir, attempt_id=matrix_attempt_id)
+    if matrix_attempt_id and (output_dir / "matrix_summary.json").exists():
         rows = summarize_inputs([output_dir])
         write_csv_report(rows, csv_path)
         write_json_report(rows, json_path)
@@ -44,7 +57,7 @@ def main() -> None:
         report_dir=report_dir,
         common_rows=rows,
         attempt_id=report_attempt_id,
-        matrix_attempt_id=read_attempt_id(output_dir) if (output_dir / "attempt.json").exists() else None,
+        matrix_attempt_id=matrix_attempt_id,
     )
     manifest_path = report_dir / "baseline_manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -52,8 +65,16 @@ def main() -> None:
         report_dir,
         attempt_id=report_attempt_id,
         producer="benchmarks.cwah.baseline",
-        status="completed" if completed.returncode == 0 else "failed",
+        status="completed" if completed.returncode == 0 and matrix_attempt_id else "failed",
     )
+    if matrix_attempt_id:
+        finalize_run_directory(
+            output_dir,
+            attempt_id=matrix_attempt_id,
+            producer="benchmarks.cwah.matrix",
+            status="completed",
+            stamp_nested=False,
+        )
     print(json.dumps({"passed": completed.returncode == 0, "manifest": str(manifest_path), "runs": len(rows)}, sort_keys=True))
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)

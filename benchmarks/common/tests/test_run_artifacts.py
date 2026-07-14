@@ -91,3 +91,69 @@ def test_validation_rejects_artifact_modified_after_manifest(tmp_path):
 
     with pytest.raises(RunArtifactValidationError, match="checksum mismatch"):
         validate_run_attempt(run_dir, attempt_id=attempt_id)
+
+
+def test_validation_rejects_unsafe_or_empty_manifest_entries(tmp_path):
+    run_dir = tmp_path / "unsafe"
+    attempt_id = prepare_run_directory(run_dir, producer="test")
+    finalize_run_directory(
+        run_dir,
+        attempt_id=attempt_id,
+        producer="test",
+        status="completed",
+    )
+    manifest_path = run_dir / ARTIFACT_MANIFEST_FILE
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"] = [{"path": "../../outside", "size": 0, "sha256": ""}]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RunArtifactValidationError, match="Unsafe artifact"):
+        validate_run_attempt(run_dir, attempt_id=attempt_id)
+
+    manifest["artifacts"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RunArtifactValidationError, match="no artifact list"):
+        validate_run_attempt(run_dir, attempt_id=attempt_id)
+
+
+def test_finalization_rejects_symlinked_artifacts(tmp_path):
+    run_dir = tmp_path / "symlink"
+    attempt_id = prepare_run_directory(run_dir, producer="test")
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"safe": true}', encoding="utf-8")
+    (run_dir / "linked.json").symlink_to(outside)
+
+    with pytest.raises(RunArtifactValidationError, match="symlinks"):
+        finalize_run_directory(
+            run_dir,
+            attempt_id=attempt_id,
+            producer="test",
+            status="completed",
+        )
+    assert outside.read_text(encoding="utf-8") == '{"safe": true}'
+
+
+def test_parent_manifest_hashes_nested_child_manifest(tmp_path):
+    parent = tmp_path / "matrix"
+    parent_attempt = prepare_run_directory(parent, producer="matrix")
+    child = parent / "runs" / "child"
+    child_attempt = prepare_run_directory(child, producer="child")
+    (child / "summary.json").write_text('{"status": "ok"}', encoding="utf-8")
+    finalize_run_directory(
+        child,
+        attempt_id=child_attempt,
+        producer="child",
+        status="completed",
+    )
+    manifest = finalize_run_directory(
+        parent,
+        attempt_id=parent_attempt,
+        producer="matrix",
+        status="completed",
+        stamp_nested=False,
+    )
+
+    paths = {artifact["path"] for artifact in manifest["artifacts"]}
+    assert "runs/child/artifact_manifest.json" in paths
+    assert "runs/child/summary.json" in paths
+    validate_run_attempt(parent, attempt_id=parent_attempt)

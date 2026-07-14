@@ -61,6 +61,8 @@ The harness preserves normalized artifacts even when the runtime raises or times
 - `decision_support.json`
 - provenance files
 
+Execute mode consumes action logs and scores only from the current run-local runtime result. Repository-global `data/action_log.json` and `data/score.json` files are not fallback inputs because they may belong to an earlier attempt.
+
 Timeout metadata is recorded in `summary.json`:
 
 - `execute_timeout_seconds`

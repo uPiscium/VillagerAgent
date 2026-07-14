@@ -32,6 +32,49 @@ def run_minecraft_matrix(
     command_text: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
+    attempt_state: dict = {}
+    try:
+        return _run_minecraft_matrix_attempt(
+            config_path=config_path,
+            output_dir=output_dir,
+            config_indices=config_indices,
+            run_names=run_names,
+            enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+            task_selection_policy=task_selection_policy,
+            execute=execute,
+            execute_timeout_seconds=execute_timeout_seconds,
+            retain_runtime_result=retain_runtime_result,
+            command_text=command_text,
+            overwrite=overwrite,
+            attempt_state=attempt_state,
+        )
+    except BaseException:
+        if attempt_state:
+            finalize_run_directory(
+                attempt_state["output_dir"],
+                attempt_id=attempt_state["attempt_id"],
+                producer="benchmarks.minecraft.matrix",
+                status="failed",
+                stamp_nested=False,
+            )
+        raise
+
+
+def _run_minecraft_matrix_attempt(
+    *,
+    config_path: str | Path,
+    output_dir: str | Path,
+    config_indices: list[int] | None,
+    run_names: list[str] | None,
+    enable_dual_dag_task_selection: bool,
+    task_selection_policy: str,
+    execute: bool,
+    execute_timeout_seconds: float | None,
+    retain_runtime_result: bool,
+    command_text: str | None,
+    overwrite: bool,
+    attempt_state: dict,
+) -> dict[str, Any]:
     """Run a CI-safe Minecraft benchmark matrix and write a matrix summary.
 
     Dry-run remains the default. ``execute=True`` is explicit and preserves the
@@ -51,6 +94,7 @@ def run_minecraft_matrix(
         producer="benchmarks.minecraft.matrix",
         overwrite=overwrite,
     )
+    attempt_state.update({"output_dir": matrix_dir, "attempt_id": attempt_id})
     run_output_root.mkdir(parents=True, exist_ok=True)
 
     results = []
