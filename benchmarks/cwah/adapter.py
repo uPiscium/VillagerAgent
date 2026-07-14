@@ -9,6 +9,7 @@ from benchmarks.common.decision import BudgetState, DecisionContext, TraceEvent
 from benchmarks.common.episode import AgentCapabilities, EpisodeContext
 from benchmarks.common.observation import ObservationRecord
 from benchmarks.common.visibility import Visibility
+from benchmarks.cwah.dual_dag import CWAHDualDAGRuntime
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class CWAHSymbolicAdapter:
         self._terminal = False
         self._progress: float | None = None
         self._task_goal_hints: dict[int, tuple[dict[str, Any], ...]] = {}
+        self.dual_dag = CWAHDualDAGRuntime(episode_id=self.episode_id)
 
     def reset(self, *, episode_id: str, seed: int) -> EpisodeContext:
         self.episode_id = episode_id
@@ -47,6 +49,7 @@ class CWAHSymbolicAdapter:
         self._last_info = {}
         self._terminal = False
         self._progress = None
+        self.dual_dag = CWAHDualDAGRuntime(episode_id=episode_id)
         self.env = self.env_factory(self.config)
         seed_fn = getattr(self.env, "seed", None)
         if callable(seed_fn):
@@ -151,14 +154,19 @@ class CWAHSymbolicAdapter:
         return tuple(actions)
 
     def decision_context(self, agent_id: str) -> DecisionContext:
+        observations = self.get_observation(agent_id)
+        public_observations = self.get_public_observation()
+        legal_actions = self.get_legal_actions(agent_id)
+        self.dual_dag.update_observations((*observations, *public_observations))
+        self.dual_dag.update_action_candidates(agent_id=agent_id, actions=legal_actions)
         context = DecisionContext(
             benchmark=self.benchmark_name,
             episode_id=self.episode_id,
             step=self.step_index,
             actor_id=agent_id,
-            visible_epistemic_nodes=tuple(record.__dict__ for record in self.get_observation(agent_id)),
-            visible_candidates=tuple(_candidate_from_action(action) for action in self.get_legal_actions(agent_id)),
-            legal_actions=self.get_legal_actions(agent_id),
+            visible_epistemic_nodes=self.dual_dag.visible_epistemic_nodes(agent_id),
+            visible_candidates=self.dual_dag.visible_action_candidates(agent_id),
+            legal_actions=legal_actions,
             remaining_budget=BudgetState(remaining_steps=max(self.config.max_steps - self.step_index, 0)),
             recent_public_events=tuple(self._public_events[-10:]),
         )
@@ -173,13 +181,20 @@ class CWAHSymbolicAdapter:
                 parameters=action.parameters,
                 information_subtype="send_message",
             ))
-        return self._step({ _agent_index(agent_id): _action_to_cwah_string(action) })
+        result = self._step({_agent_index(agent_id): _action_to_cwah_string(action)})
+        self.dual_dag.record_action_outcome(agent_id=agent_id, action=action, result=result)
+        return result
 
     def execute_information_action(self, agent_id: str, action: InformationActionSpec) -> StepResult:
         message = str(action.parameters.get("message", ""))
         if not message:
             message = "I need more information."
-        return self._step({_agent_index(agent_id): f"[send_message] <{message}>"})
+        result = self._step({_agent_index(agent_id): f"[send_message] <{message}>"})
+        self.dual_dag.record_action_outcome(agent_id=agent_id, action=action, result=result)
+        return result
+
+    def dual_dag_snapshot(self) -> dict[str, Any]:
+        return self.dual_dag.snapshot()
 
     def is_terminal(self) -> bool:
         return self._terminal
@@ -269,16 +284,6 @@ def _record_from_goal_hint(agent_id: str, episode_id: str, step: int, index: int
         confidence=1.0,
         grounding={"task_goal_hint": hint},
     )
-
-
-def _candidate_from_action(action: ActionSpec) -> dict[str, Any]:
-    return {
-        "candidate_id": action.action_id,
-        "action_type": action.action_type,
-        "parameters": dict(action.parameters),
-        "state": "ready",
-        "confidence": 1.0,
-    }
 
 
 def _visible_object_names(observation: dict[str, Any]) -> dict[Any, str]:

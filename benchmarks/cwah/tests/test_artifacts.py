@@ -44,6 +44,12 @@ def test_build_summary_counts_actions_and_overrides():
 
 
 def test_write_normalized_artifacts(tmp_path):
+    dual_dag_snapshot = {
+        "schema_version": 1,
+        "benchmark": "cwah",
+        "epistemic_dag": {"nodes": [], "edges": []},
+        "action_candidate_dag": {"nodes": [], "edges": []},
+    }
     write_normalized_artifacts(
         artifact_dir=tmp_path,
         run_config={"env": "mock", "episode_id": "ep", "task_id": 0, "seed": 1},
@@ -53,6 +59,7 @@ def test_write_normalized_artifacts(tmp_path):
             {"event": "episode_completed"},
         ],
         metrics={"task_success": True, "normalized_progress": 1.0, "episode_steps": 1},
+        dual_dag_snapshot=dual_dag_snapshot,
     )
 
     summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
@@ -70,3 +77,4 @@ def test_write_normalized_artifacts(tmp_path):
     assert metrics_rows[0]["open_failure_records"] == "0"
     assert metrics_rows[0]["navigation_loop_count"] == "0"
     assert metrics_rows[0]["result_failures"] == "0"
+    assert json.loads((tmp_path / "dual_dag_artifact.json").read_text(encoding="utf-8")) == dual_dag_snapshot

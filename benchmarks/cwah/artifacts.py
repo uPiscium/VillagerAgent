@@ -8,12 +8,21 @@ from typing import Any
 from benchmarks.cwah.failure_diagnostics import failure_reason_counts_from_messages
 
 
-def write_normalized_artifacts(*, artifact_dir: Path, run_config: dict[str, Any], events: list[dict[str, Any]], metrics: dict[str, Any]) -> None:
+def write_normalized_artifacts(
+    *,
+    artifact_dir: Path,
+    run_config: dict[str, Any],
+    events: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    dual_dag_snapshot: dict[str, Any] | None = None,
+) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     summary = build_summary(run_config=run_config, events=events, metrics=metrics)
     _write_json(artifact_dir / "summary.json", summary)
     _write_turns(artifact_dir / "turns.jsonl", events)
     _write_metrics(artifact_dir / "metrics.csv", summary)
+    if dual_dag_snapshot is not None:
+        _write_json(artifact_dir / "dual_dag_artifact.json", dual_dag_snapshot)
 
 
 def build_summary(*, run_config: dict[str, Any], events: list[dict[str, Any]], metrics: dict[str, Any]) -> dict[str, Any]:
