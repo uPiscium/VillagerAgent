@@ -165,7 +165,7 @@ def test_minecraft_experiment_rejects_invalid_smoke_fixture_shape(tmp_path):
         run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result")
 
 
-def test_minecraft_experiment_records_always_on_task_reordering(tmp_path):
+def test_minecraft_experiment_records_task_selection_policy_ablation(tmp_path):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(
         json.dumps({
@@ -212,24 +212,38 @@ def test_minecraft_experiment_records_always_on_task_reordering(tmp_path):
     disabled = run_minecraft_experiment(
         config_path=config_path,
         output_root=tmp_path / "result",
-        run_name="disabled",
+        run_name="original",
+        task_selection_policy="original",
     )
     enabled = run_minecraft_experiment(
         config_path=config_path,
         output_root=tmp_path / "result",
-        run_name="enabled",
-        enable_dual_dag_task_selection=True,
+        run_name="dual_dag",
+        task_selection_policy="dual-dag",
     )
 
     assert disabled["dual_dag_runtime_enabled"] is True
-    assert disabled["dual_dag_task_selection_enabled"] is True
+    assert disabled["dual_dag_task_selection_enabled"] is False
+    assert disabled["task_selection_policy"] == "original"
     assert disabled["source_of_truth"] == "runtime_task_dag"
-    assert disabled["ranked_task_order"][0]["description"] == "Find chest"
+    assert disabled["ranked_task_order"][0]["description"] == "Open locked door"
+    assert enabled["dual_dag_task_selection_enabled"] is True
+    assert enabled["task_selection_policy"] == "dual-dag"
     assert enabled["ranked_task_order"][0]["description"] == "Find chest"
-    assert disabled["task_order"] != disabled["ranked_task_order"]
+    assert disabled["task_order"] == disabled["ranked_task_order"]
     assert enabled["task_order"] != enabled["ranked_task_order"]
-    assert disabled["ranked_task_order"] == enabled["ranked_task_order"]
     assert enabled["recommended_description"] == "Find chest"
+
+
+def test_minecraft_experiment_rejects_unknown_task_selection_policy(tmp_path):
+    config_path = _write_minecraft_config(tmp_path)
+
+    with pytest.raises(ValueError, match="Unsupported task_selection_policy"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            task_selection_policy="bad-policy",
+        )
 
 
 def test_minecraft_metrics_extracts_representative_counts_without_secrets():

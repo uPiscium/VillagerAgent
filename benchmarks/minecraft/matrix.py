@@ -7,7 +7,7 @@ from typing import Any
 
 from benchmarks.common.report import aggregate_rows, summarize_minecraft_run
 from benchmarks.experiment_provenance import standard_run_name
-from benchmarks.minecraft.experiment import run_minecraft_experiment, validate_minecraft_config
+from benchmarks.minecraft.experiment import TASK_SELECTION_POLICIES, run_minecraft_experiment, validate_minecraft_config
 
 
 DEFAULT_MATRIX_OUTPUT_ROOT = Path("result/minecraft_matrix")
@@ -20,6 +20,7 @@ def run_minecraft_matrix(
     config_indices: list[int] | None = None,
     run_names: list[str] | None = None,
     enable_dual_dag_task_selection: bool = True,
+    task_selection_policy: str = "dual-dag",
     execute: bool = False,
     execute_timeout_seconds: float | None = None,
     command_text: str | None = None,
@@ -56,7 +57,8 @@ def run_minecraft_matrix(
             output_root=run_output_root,
             run_name=run_name,
             config_index=config_index,
-            enable_dual_dag_task_selection=True,
+            enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+            task_selection_policy=configs[config_index].get("task_selection_policy", task_selection_policy),
             execute=execute,
             execute_timeout_seconds=execute_timeout_seconds,
             command_text=command_text or _command_text(),
@@ -76,6 +78,7 @@ def run_minecraft_matrix(
             "task_type": summary.get("task_type", ""),
             "task_idx": summary.get("task_idx"),
             "progress": summary.get("progress"),
+            "task_selection_policy": summary.get("task_selection_policy", ""),
             "metrics": metrics,
             "common_report": common_row,
         }
@@ -89,7 +92,10 @@ def run_minecraft_matrix(
         "run_output_root": str(run_output_root),
         "run_count": len(results),
         "dual_dag_runtime_enabled": True,
-        "dual_dag_task_selection_enabled": True,
+        "dual_dag_task_selection_enabled": any(
+            run.get("task_selection_policy") == "dual-dag" for run in results
+        ),
+        "task_selection_policy": task_selection_policy,
         "execute_timeout_seconds": execute_timeout_seconds,
         "aggregate": aggregate_rows(common_rows),
         "runs": results,
@@ -106,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         config_indices=_parse_indices(args.config_indices),
         run_names=_parse_run_names(args.run_names),
         enable_dual_dag_task_selection=args.dual_dag_task_selection,
+        task_selection_policy=args.task_selection_policy,
         execute=args.execute,
         execute_timeout_seconds=args.execute_timeout_seconds,
         command_text=_command_text(args),
@@ -120,10 +127,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", default=str(DEFAULT_MATRIX_OUTPUT_ROOT))
     parser.add_argument("--config-indices", default="", help="Comma-separated config indices; defaults to all entries")
     parser.add_argument("--run-names", default="", help="Comma-separated run names matching selected config indices")
-    parser.add_argument("--dual-dag-task-selection", action="store_true", help="Compatibility flag; Dual-DAG runtime task selection is always enabled")
+    parser.add_argument("--task-selection-policy", choices=TASK_SELECTION_POLICIES, default="dual-dag", help="Default runtime task ordering policy")
+    parser.add_argument("--dual-dag-task-selection", action="store_true", help="Deprecated compatibility flag; equivalent to --task-selection-policy dual-dag")
+    parser.add_argument("--no-dual-dag-task-selection", action="store_true", help="Deprecated compatibility flag; equivalent to --task-selection-policy original")
     parser.add_argument("--execute", action="store_true", help="Explicitly run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.no_dual_dag_task_selection:
+        args.task_selection_policy = "original"
+        args.dual_dag_task_selection = False
+    elif args.dual_dag_task_selection:
+        args.task_selection_policy = "dual-dag"
+    return args
 
 
 def _load_config_entries(config_path: str | Path) -> list[dict[str, Any]]:
@@ -167,8 +182,12 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.extend(["--config-indices", args.config_indices])
     if args.run_names:
         parts.extend(["--run-names", args.run_names])
+    if args.task_selection_policy != "dual-dag":
+        parts.extend(["--task-selection-policy", args.task_selection_policy])
     if args.dual_dag_task_selection:
         parts.append("--dual-dag-task-selection")
+    if args.no_dual_dag_task_selection:
+        parts.append("--no-dual-dag-task-selection")
     if args.execute:
         parts.append("--execute")
     if args.execute_timeout_seconds is not None:

@@ -18,6 +18,7 @@ from type_define.graph import Graph, Task
 
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
+TASK_SELECTION_POLICIES = ("dual-dag", "original")
 
 
 class MinecraftExecuteTimeoutError(TimeoutError):
@@ -31,6 +32,7 @@ def run_minecraft_experiment(
     run_name: str | None = None,
     config_index: int = 0,
     enable_dual_dag_task_selection: bool = True,
+    task_selection_policy: str | None = None,
     execute: bool = False,
     execute_timeout_seconds: float | None = None,
     command_text: str | None = None,
@@ -47,7 +49,11 @@ def run_minecraft_experiment(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
-    dual_dag_config = _dual_dag_config(enable_dual_dag_task_selection)
+    selected_policy = _task_selection_policy(
+        task_selection_policy or launch_config.get("task_selection_policy"),
+        enable_dual_dag_task_selection=enable_dual_dag_task_selection,
+    )
+    dual_dag_config = _dual_dag_config(selected_policy)
     tasks, graph, task_store = _task_graph_from_config(launch_config)
     action_log: dict = _fixture_action_log(launch_config)
     score: dict = {}
@@ -98,7 +104,8 @@ def run_minecraft_experiment(
         "task_type": launch_config.get("task_type", ""),
         "task_idx": launch_config.get("task_idx"),
         "dual_dag_runtime_enabled": True,
-        "dual_dag_task_selection_enabled": True,
+        "dual_dag_task_selection_enabled": selected_policy == "dual-dag",
+        "task_selection_policy": selected_policy,
         "runtime_task_store": "runtime_task_dag",
         "source_of_truth": "runtime_task_dag",
         "execute_real_environment": bool(execute),
@@ -148,7 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--config-index", type=int, default=0)
-    parser.add_argument("--dual-dag-task-selection", action="store_true", help="Compatibility flag; Dual-DAG runtime task selection is always enabled")
+    parser.add_argument("--task-selection-policy", choices=TASK_SELECTION_POLICIES, default="dual-dag", help="Runtime task ordering policy")
+    parser.add_argument("--dual-dag-task-selection", action="store_true", help="Deprecated compatibility flag; equivalent to --task-selection-policy dual-dag")
+    parser.add_argument("--no-dual-dag-task-selection", action="store_true", help="Deprecated compatibility flag; equivalent to --task-selection-policy original")
     parser.add_argument("--execute", action="store_true", help="Run the real Minecraft environment")
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     args = parser.parse_args(argv)
@@ -158,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         output_root=args.output_root,
         run_name=args.run_name,
         config_index=args.config_index,
-        enable_dual_dag_task_selection=args.dual_dag_task_selection,
+        enable_dual_dag_task_selection=not args.no_dual_dag_task_selection,
+        task_selection_policy=_policy_from_args(args),
         execute=args.execute,
         execute_timeout_seconds=args.execute_timeout_seconds,
         command_text=_command_text(args),
@@ -194,6 +204,8 @@ def validate_minecraft_config(config: dict, *, context: str = "config") -> dict:
         raise ValueError(f"{context}.port must be positive")
     if task_idx < 0:
         raise ValueError(f"{context}.task_idx must be non-negative")
+    if config.get("task_selection_policy") not in (None, *TASK_SELECTION_POLICIES):
+        raise ValueError(f"{context}.task_selection_policy must be one of: {', '.join(TASK_SELECTION_POLICIES)}")
     _validate_smoke_tasks(config, context=context)
     action_log = config.get("smoke_action_log", {})
     if action_log is not None and not isinstance(action_log, dict):
@@ -333,8 +345,29 @@ def _task_graph_snapshot(graph: Graph) -> dict:
     }
 
 
-def _dual_dag_config(enabled: bool) -> dict:
-    return {"runtime_task_selection": {"enabled": True, "requested_enabled": bool(enabled)}}
+def _task_selection_policy(value: str | None, *, enable_dual_dag_task_selection: bool = True) -> str:
+    if value is None:
+        return "dual-dag" if enable_dual_dag_task_selection else "original"
+    if value not in TASK_SELECTION_POLICIES:
+        raise ValueError(f"Unsupported task_selection_policy: {value}")
+    return value
+
+
+def _policy_from_args(args: argparse.Namespace) -> str:
+    if args.no_dual_dag_task_selection:
+        return "original"
+    if args.dual_dag_task_selection:
+        return "dual-dag"
+    return args.task_selection_policy
+
+
+def _dual_dag_config(task_selection_policy: str) -> dict:
+    return {
+        "runtime_task_selection": {
+            "enabled": task_selection_policy == "dual-dag",
+            "policy": task_selection_policy,
+        }
+    }
 
 
 def _fixture_action_log(config: dict) -> dict:
@@ -381,8 +414,12 @@ def _command_text(args: argparse.Namespace | None = None) -> str:
         parts.extend(["--run-name", args.run_name])
     if args.config_index:
         parts.extend(["--config-index", str(args.config_index)])
+    if args.task_selection_policy != "dual-dag":
+        parts.extend(["--task-selection-policy", args.task_selection_policy])
     if args.dual_dag_task_selection:
         parts.append("--dual-dag-task-selection")
+    if args.no_dual_dag_task_selection:
+        parts.append("--no-dual-dag-task-selection")
     if args.execute:
         parts.append("--execute")
     if args.execute_timeout_seconds is not None:
