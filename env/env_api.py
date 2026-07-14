@@ -8,7 +8,8 @@ import os
 import json
 from collections import deque
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
+if not os.environ.get("PYTEST_CURRENT_TEST") and hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
 
 env_infos = None
 update_time = 0
@@ -48,6 +49,18 @@ def readNearestSign(bot, Vec3, mcData, max_distance=7) -> str:
         return text.join('\n'), True
     else:
         return f"cannot find the specific sign within {max_distance} blocks", False
+
+
+def unsupported_tool_result(tool_name: str):
+    return (
+        f"Unsupported Minecraft tool interaction: {tool_name} is not implemented in the current runtime.",
+        False,
+        {
+            "error_type": "unsupported_tool",
+            "tool": tool_name,
+            "supported": False,
+        },
+    )
 
 from math import floor
 import random
@@ -1778,6 +1791,10 @@ async def interact_nearest(pathfinder, bot,  Vec3, envs_info, mcData, RANGE_GOAL
         # [DEBUG] print('interact with held item')
         msg, tag = interactItem(bot, name)
         return msg, tag, []
+    if 'enchanting_table' in name:
+        return unsupported_tool_result("enchanting_table")
+    if 'anvil' in name:
+        return unsupported_tool_result("anvil")
     if target_position is not None:
         pos = target_position
     else:
@@ -2042,63 +2059,6 @@ async def interact_nearest(pathfinder, bot,  Vec3, envs_info, mcData, RANGE_GOAL
             # bot.chat(f'unable to open furnace {name}')
             # [DEBUG] print(f'unable to open furnace {name} {e}')
             return f'you action is executed, but system check furnace failed for several reasons, mostly because material is not enough', False, {"furnace_info":fuel_data}
-
-    if 'enchanting_table' in name:  # TODO Not Supported yet
-        enchantTableBlock = bot.findBlock({
-            "matching": mcData.blocksByName.enchanting_table.id,
-            "maxDistance": 16,
-        })
-        if not enchantTableBlock:
-            return f"No enchantment nearby", False
-        table = bot.openEnchantmentTable(enchantTableBlock)
-        try:
-            items = getInventoryItemByName(bot, get_item_name)
-            if len(items) == 0:
-                return f"No {get_item_name} in my bag", False
-            table.putTargetItem(items[0])
-            # while table.enchantments[0].level < 0:
-            #     #[DEBUG] print(table.enchantments)
-            #     time.sleep(1)
-
-            items = getInventoryItemByName(bot, "dye")
-            items += getInventoryItemByName(bot, "lapis_lazuli")
-            if len(items) == 0:
-                return f"I don't have any lapis", False
-            try:
-                table.putLapis(items[0])
-            except Exception as e:
-                # [DEBUG] print(e)
-                pass
-
-            table.enchant(random.randint(0, 3), timeout=3)
-            table.takeTargetItem()
-
-            return f' enchant the {get_item_name}', True
-        except Exception as e:
-            # [DEBUG] print(e)
-            # # bot.chat(f'unable to open enchantment table {name}')
-            return f"I don't have enough exp and lapis.", False
-
-    if 'anvil' in name:  # TODO check issue
-        try:
-            anvilBlock = bot.findBlock({
-                "matching": mcData.blocksByName.anvil.id,
-            })
-            anvil = bot.openAnvil(anvilBlock)
-            # bot.chat(f'#opened anvil {name}')
-            try:
-                # bot.chat('Using the anvil...')
-                anvil.combine(getInventoryItemByName(bot, repair_item_name)[0],
-                              getInventoryItemByName(bot, get_item_name)[0], repair_item_name)
-                # bot.chat('Anvil used .')
-                return f" open anvil {name}", True
-            except Exception as e:
-                # bot.chat(f'unable to open anvil {name}')
-                # [DEBUG] print(e)
-                return f'unable to open anvil {name} ', False
-        except Exception as e:
-            # bot.chat(f'unable to open anvil {name}')
-            return f'unable to open anvil {name} {e}', False
 
     if 'villager' in name or 'trader' in name:
         villager_data = []
