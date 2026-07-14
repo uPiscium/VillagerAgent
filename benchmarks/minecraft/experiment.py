@@ -17,6 +17,7 @@ from type_define.graph import Graph, Task
 
 
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
+REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
 
 
 class MinecraftExecuteTimeoutError(TimeoutError):
@@ -168,10 +169,61 @@ def main(argv: list[str] | None = None) -> int:
 def _load_config(config_path: str | Path, *, config_index: int) -> dict:
     config = _read_json(Path(config_path), default=None)
     if isinstance(config, list):
-        return dict(config[config_index])
+        if config_index < 0 or config_index >= len(config):
+            raise ValueError(f"Minecraft config index out of range: {config_index}")
+        selected = config[config_index]
+        if not isinstance(selected, dict):
+            raise ValueError(f"Minecraft config entry at index {config_index} must be an object")
+        return validate_minecraft_config(dict(selected), context=f"config[{config_index}]")
     if isinstance(config, dict):
-        return dict(config)
+        return validate_minecraft_config(dict(config), context="config")
     raise ValueError(f"Unsupported Minecraft config shape: {config_path}")
+
+
+def validate_minecraft_config(config: dict, *, context: str = "config") -> dict:
+    missing = [field for field in REQUIRED_CONFIG_FIELDS if field not in config]
+    if missing:
+        raise ValueError(f"{context} missing required field(s): {', '.join(missing)}")
+    agent_num = _required_int(config, "agent_num", context=context)
+    port = _required_int(config, "port", context=context)
+    task_idx = _required_int(config, "task_idx", context=context)
+    if agent_num < 0:
+        raise ValueError(f"{context}.agent_num must be non-negative")
+    if port <= 0:
+        raise ValueError(f"{context}.port must be positive")
+    if task_idx < 0:
+        raise ValueError(f"{context}.task_idx must be non-negative")
+    _validate_smoke_tasks(config, context=context)
+    action_log = config.get("smoke_action_log", {})
+    if action_log is not None and not isinstance(action_log, dict):
+        raise ValueError(f"{context}.smoke_action_log must be an object")
+    return config
+
+
+def _validate_smoke_tasks(config: dict, *, context: str) -> None:
+    smoke_tasks = config.get("smoke_tasks")
+    if smoke_tasks is None:
+        return
+    if not isinstance(smoke_tasks, list):
+        raise ValueError(f"{context}.smoke_tasks must be a list")
+    for index, task in enumerate(smoke_tasks):
+        task_context = f"{context}.smoke_tasks[{index}]"
+        if not isinstance(task, dict):
+            raise ValueError(f"{task_context} must be an object")
+        if "description" not in task:
+            raise ValueError(f"{task_context} missing required field: description")
+        for list_field in ("candidate_agents", "assigned_agents", "required_subtasks", "required subtasks"):
+            if list_field in task and not isinstance(task[list_field], list):
+                raise ValueError(f"{task_context}.{list_field} must be a list")
+        if "number" in task and _required_int(task, "number", context=task_context) <= 0:
+            raise ValueError(f"{task_context}.number must be positive")
+
+
+def _required_int(config: dict, field: str, *, context: str) -> int:
+    try:
+        return int(config[field])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context}.{field} must be an integer") from exc
 
 
 def _execute_real_runtime(launch_config: dict, *, dual_dag_config: dict) -> None:

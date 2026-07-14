@@ -1,6 +1,8 @@
 import json
 import time
 
+import pytest
+
 from benchmarks.minecraft.experiment import MinecraftExecuteTimeoutError, run_minecraft_experiment
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
@@ -124,6 +126,42 @@ def test_minecraft_experiment_accepts_config_lists(tmp_path):
     )
     assert graph_snapshot["mutates_runtime"] is False
     assert graph_snapshot["tasks"][0]["description"] == "Second task"
+
+
+def test_minecraft_experiment_rejects_missing_required_fields(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps({"task_type": "meta"}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"missing required field\(s\): task_idx, agent_num, task_goal, host, port, task_name"):
+        run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result")
+
+
+def test_minecraft_experiment_rejects_config_index_out_of_range(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps([_minecraft_config("first")]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Minecraft config index out of range: 1"):
+        run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result", config_index=1)
+
+
+def test_minecraft_experiment_rejects_negative_agent_count(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config("bad_agents")
+    config["agent_num"] = -1
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="config.agent_num must be non-negative"):
+        run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result")
+
+
+def test_minecraft_experiment_rejects_invalid_smoke_fixture_shape(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config("bad_smoke")
+    config["smoke_tasks"] = [{"id": "missing_description"}]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"config.smoke_tasks\[0\] missing required field: description"):
+        run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result")
 
 
 def test_minecraft_experiment_records_always_on_task_reordering(tmp_path):
@@ -333,3 +371,15 @@ def _write_minecraft_config(tmp_path):
         encoding="utf-8",
     )
     return config_path
+
+
+def _minecraft_config(task_name):
+    return {
+        "task_type": "meta",
+        "task_idx": 0,
+        "agent_num": 1,
+        "task_goal": task_name,
+        "host": "127.0.0.1",
+        "port": 25565,
+        "task_name": task_name,
+    }
