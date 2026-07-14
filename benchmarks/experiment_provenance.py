@@ -16,7 +16,7 @@ def standard_run_name(*parts: object) -> str:
     text = "_".join(str(part) for part in parts if part not in (None, ""))
     text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text.strip())
     text = re.sub(r"_+", "_", text).strip("_")
-    return text or "experiment_run"
+    return text if text not in {"", ".", ".."} else "experiment_run"
 
 
 def write_provenance(

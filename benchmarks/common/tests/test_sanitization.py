@@ -49,6 +49,17 @@ def test_sanitizer_handles_nested_credential_sources_and_short_secrets():
     assert sanitized["error"] == f"rejected {REDACTED}"
 
 
+def test_sanitizer_redacts_common_private_credentials():
+    sanitized = sanitize_artifact_value({
+        "auth": "basic-secret",
+        "client_secret": "oauth-secret",
+        "private_key": "private-key-data",
+        "ssh_private_key": "ssh-key-data",
+    })
+
+    assert set(sanitized.values()) == {REDACTED}
+
+
 def test_command_sanitizers_hide_flags_and_known_secret_literals():
     secrets = (SENTINEL_SECRET,)
 

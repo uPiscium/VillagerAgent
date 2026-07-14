@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from benchmarks.common.run_artifacts import read_attempt_id, validate_run_attempt
+
 
 REPORT_FIELDS = [
     "benchmark",
@@ -61,6 +63,7 @@ def summarize_inputs(inputs: list[Path]) -> list[dict[str, Any]]:
 
 
 def summarize_path(path: Path) -> list[dict[str, Any]]:
+    artifact_status = _validate_managed_artifact(path)
     if path.is_dir():
         matrix_summary = path / "matrix_summary.json"
         normalized_summary = path / "summary.json"
@@ -74,11 +77,11 @@ def summarize_path(path: Path) -> list[dict[str, Any]]:
         if normalized_summary.exists() and minecraft_metrics.exists():
             summary = _read_json(normalized_summary)
             if _looks_like_minecraft_summary(summary):
-                return [summarize_minecraft_run(path, summary=summary)]
+                return [summarize_minecraft_run(path, summary=summary, artifact_status=artifact_status)]
         if normalized_summary.exists():
-            return [summarize_cwah_summary(normalized_summary)]
+            return [summarize_cwah_summary(normalized_summary, artifact_status=artifact_status)]
         if craft_summary.exists():
-            return [summarize_craft_run(path)]
+            return [summarize_craft_run(path, artifact_status=artifact_status)]
     if path.name == "matrix_summary.json":
         summary = _read_json(path)
         if summary.get("benchmark") == "minecraft":
@@ -87,10 +90,10 @@ def summarize_path(path: Path) -> list[dict[str, Any]]:
     if path.name == "summary.json":
         summary = _read_json(path)
         if summary.get("benchmark") == "cwah":
-            return [summarize_cwah_summary(path, summary=summary)]
+            return [summarize_cwah_summary(path, summary=summary, artifact_status=artifact_status)]
         if (path.parent / "metrics.json").exists() and _looks_like_minecraft_summary(summary):
-            return [summarize_minecraft_run(path.parent, summary=summary)]
-        return [summarize_craft_run(path.parent.parent)]
+            return [summarize_minecraft_run(path.parent, summary=summary, artifact_status=artifact_status)]
+        return [summarize_craft_run(path.parent.parent, artifact_status=artifact_status)]
     raise CommonReportInputError(f"Unsupported benchmark report input: {path}")
 
 
@@ -107,6 +110,8 @@ def summarize_cwah_matrix(path: Path) -> list[dict[str, Any]]:
         policy_steps = int(event_counts.get("policy_steps") or 0)
         policy_overrides = int(event_counts.get("policy_overrides") or 0)
         success_available = metrics.get("task_success") is not None
+        progress = _as_optional_float(metrics.get("normalized_progress"))
+        steps = _as_optional_float(metrics.get("episode_steps"))
         row.update({
             "attempt_id": run.get("attempt_id", ""),
             "status": "completed" if run.get("passed") else "failed",
@@ -119,10 +124,10 @@ def summarize_cwah_matrix(path: Path) -> list[dict[str, Any]]:
             "task_count": None,
             "completed_task_count": None,
             "task_completion_rate": None,
-            "mean_progress": _as_optional_float(metrics.get("normalized_progress")),
-            "progress_available": metrics.get("normalized_progress") is not None,
-            "mean_steps": _as_optional_float(metrics.get("episode_steps")),
-            "steps_available": metrics.get("episode_steps") is not None,
+            "mean_progress": progress,
+            "progress_available": progress is not None,
+            "mean_steps": steps,
+            "steps_available": steps is not None,
             "failed_runs": 0 if run.get("passed") else 1,
             "action_log_available": action_log_available,
             "physical_action_count": _physical_action_count(action_counts) if action_log_available else None,
@@ -143,7 +148,12 @@ def summarize_cwah_matrix(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None) -> dict[str, Any]:
+def summarize_cwah_summary(
+    path: Path,
+    *,
+    summary: dict[str, Any] | None = None,
+    artifact_status: str | None = None,
+) -> dict[str, Any]:
     summary = summary or _read_json(path)
     run_config = summary.get("run_config", {}) if isinstance(summary.get("run_config"), dict) else {}
     metrics = summary.get("metrics", {}) if isinstance(summary.get("metrics"), dict) else {}
@@ -157,9 +167,12 @@ def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None)
     success_available = metrics.get("task_success") is not None
     success = bool(metrics.get("task_success"))
     row = _base_row(benchmark="cwah", run_name=str(run_name))
+    status = artifact_status or "completed"
+    progress = _as_optional_float(metrics.get("normalized_progress"))
+    steps = _as_optional_float(metrics.get("episode_steps"))
     row.update({
         "attempt_id": summary.get("attempt_id") or run_config.get("attempt_id", ""),
-        "status": "completed",
+        "status": status,
         "task_id": run_config.get("task_id", ""),
         "seed": run_config.get("seed", ""),
         "evaluation_unit": "episode",
@@ -169,10 +182,11 @@ def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None)
         "task_count": None,
         "completed_task_count": None,
         "task_completion_rate": None,
-        "mean_progress": _as_optional_float(metrics.get("normalized_progress")),
-        "progress_available": metrics.get("normalized_progress") is not None,
-        "mean_steps": _as_optional_float(metrics.get("episode_steps")),
-        "steps_available": metrics.get("episode_steps") is not None,
+        "mean_progress": progress,
+        "progress_available": progress is not None,
+        "mean_steps": steps,
+        "steps_available": steps is not None,
+        "failed_runs": 1 if status == "failed" else 0,
         "action_log_available": action_log_available,
         "physical_action_count": _physical_action_count(action_counts) if action_log_available else None,
         "communication_action_count": int(action_counts.get("send_message", 0) or 0) if action_log_available else None,
@@ -191,12 +205,12 @@ def summarize_cwah_summary(path: Path, *, summary: dict[str, Any] | None = None)
     return row
 
 
-def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
+def summarize_craft_run(run_dir: Path, *, artifact_status: str | None = None) -> dict[str, Any]:
     from benchmarks.craft.report import load_run_summary
 
     row = load_run_summary(run_dir.name, result_root=run_dir.parent)
     normalized_summary = _read_json(run_dir / "normalized" / "summary.json")
-    status = row.get("status", "completed")
+    status = artifact_status or row.get("status", "completed")
     episodes = int(row.get("num_games") or 0)
     completion_rate = _as_optional_float(row.get("completion_rate"))
     action_log_available = _craft_action_metrics_available(run_dir)
@@ -248,20 +262,32 @@ def summarize_craft_run(run_dir: Path) -> dict[str, Any]:
     return common
 
 
-def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = None) -> dict[str, Any]:
+def summarize_minecraft_run(
+    run_dir: Path,
+    *,
+    summary: dict[str, Any] | None = None,
+    artifact_status: str | None = None,
+) -> dict[str, Any]:
     summary = summary or _read_json(run_dir / "summary.json")
     metrics = _read_json(run_dir / "metrics.json")
     action_log_path = run_dir / "action_log.json"
-    action_log_available = bool(summary.get("action_log_available", action_log_path.exists()))
     action_log = _read_optional_json(action_log_path)
+    action_log_available = bool(summary.get("action_log_available", _minecraft_actions(action_log)))
     action_counts = _minecraft_action_counts(action_log)
     failed_action_counts = _minecraft_failed_action_counts(action_log)
-    status = "failed" if summary.get("error") or metrics.get("error") else "completed"
+    status = artifact_status or ("failed" if summary.get("error") or metrics.get("error") else "completed")
     task_count = int(metrics.get("task_count") or 0)
     completed_tasks = int(metrics.get("completed_task_count") or 0)
-    task_completion_rate = _as_optional_float(metrics.get("task_completion_rate")) if task_count else None
-    run_success = task_count > 0 and completed_tasks == task_count
     error_message = str(summary.get("error") or metrics.get("error") or "")
+    evaluation_available = status == "completed"
+    task_completion_rate = (
+        _as_optional_float(metrics.get("task_completion_rate"))
+        if evaluation_available and task_count
+        else None
+    )
+    run_success = evaluation_available and task_count > 0 and completed_tasks == task_count
+    progress = _as_optional_float(metrics.get("progress"))
+    steps = _as_optional_float(metrics.get("action_count")) if action_log_available else None
     row = _base_row(benchmark="minecraft", run_name=str(summary.get("run_name") or metrics.get("run_name") or run_dir.name))
     row.update({
         "attempt_id": summary.get("attempt_id", ""),
@@ -270,15 +296,15 @@ def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = N
         "seed": summary.get("seed", ""),
         "evaluation_unit": "run",
         "episodes": 1,
-        "successes": (1 if run_success else 0) if task_count else None,
-        "success_rate": (1.0 if run_success else 0.0) if task_count else None,
-        "task_count": task_count,
-        "completed_task_count": completed_tasks,
+        "successes": (1 if run_success else 0) if evaluation_available and task_count else None,
+        "success_rate": (1.0 if run_success else 0.0) if evaluation_available and task_count else None,
+        "task_count": task_count if evaluation_available else None,
+        "completed_task_count": completed_tasks if evaluation_available else None,
         "task_completion_rate": task_completion_rate,
-        "mean_progress": _as_optional_float(metrics.get("progress")),
-        "progress_available": metrics.get("progress") is not None,
-        "mean_steps": _as_optional_float(metrics.get("action_count")) if action_log_available else None,
-        "steps_available": action_log_available and metrics.get("action_count") is not None,
+        "mean_progress": progress,
+        "progress_available": progress is not None,
+        "mean_steps": steps,
+        "steps_available": steps is not None,
         "failed_runs": 1 if status != "completed" else 0,
         "action_log_available": action_log_available,
         "physical_action_count": _minecraft_physical_action_count(action_counts) if action_log_available else None,
@@ -302,6 +328,8 @@ def summarize_minecraft_run(run_dir: Path, *, summary: dict[str, Any] | None = N
 
 def summarize_minecraft_matrix(path: Path, *, summary: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     summary = summary or _read_json(path)
+    matrix_dir = path.parent if path.is_file() else path
+    expected_run_root = (matrix_dir / "runs").resolve()
     rows = []
     for run in summary.get("runs", []):
         if not isinstance(run, dict):
@@ -312,7 +340,13 @@ def summarize_minecraft_matrix(path: Path, *, summary: dict[str, Any] | None = N
             continue
         run_dir = run.get("run_dir")
         if run_dir:
-            rows.append(summarize_minecraft_run(Path(run_dir)))
+            run_path = Path(run_dir).resolve()
+            if not run_path.is_relative_to(expected_run_root):
+                raise CommonReportInputError(
+                    f"Minecraft matrix child escapes matrix run directory: {run_path}"
+                )
+            _validate_managed_artifact(run_path)
+            rows.append(summarize_minecraft_run(run_path))
     return rows
 
 
@@ -324,7 +358,11 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "failed_runs": sum(int(row.get("failed_runs") or 0) for row in rows),
             "episodes": None,
             "successes": None,
+            "success_evaluable_episodes": None,
             "success_rate": None,
+            "task_count": None,
+            "completed_task_count": None,
+            "task_completion_rate": None,
             "mean_progress": None,
             "mean_steps": None,
             "progress_available_episodes": None,
@@ -333,6 +371,15 @@ def aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "physical_action_count": None,
             "communication_action_count": None,
             "action_counts": None,
+            "policy_override_count": None,
+            "failed_action_record_count": None,
+            "open_failure_record_count": None,
+            "navigation_loop_count": None,
+            "result_failure_count": None,
+            "failed_action_counts": None,
+            "failure_reason_counts": None,
+            "open_failure_reason_counts": None,
+            "policy_override_reason_counts": None,
             "by_benchmark": {
                 benchmark: aggregate_rows([
                     row for row in rows if str(row.get("benchmark") or "unknown") == benchmark
@@ -434,6 +481,8 @@ def _minecraft_report_row_from_mapping(row: dict[str, Any], *, run: dict[str, An
     completed_task_count = int(metrics.get("completed_task_count") or 0)
     run_success = task_count > 0 and completed_task_count == task_count
     action_log_available = mapped.get("action_counts") not in (None, "")
+    progress = _as_optional_float(metrics.get("progress"))
+    steps = _as_optional_float(metrics.get("action_count")) if action_log_available else None
     mapped.update({
         "evaluation_unit": "run",
         "episodes": 1,
@@ -442,10 +491,10 @@ def _minecraft_report_row_from_mapping(row: dict[str, Any], *, run: dict[str, An
         "task_count": task_count,
         "completed_task_count": completed_task_count,
         "task_completion_rate": _as_optional_float(metrics.get("task_completion_rate")) if task_count else None,
-        "mean_progress": _as_optional_float(metrics.get("progress")),
-        "progress_available": metrics.get("progress") is not None,
-        "mean_steps": _as_optional_float(metrics.get("action_count")) if action_log_available else None,
-        "steps_available": action_log_available and metrics.get("action_count") is not None,
+        "mean_progress": progress,
+        "progress_available": progress is not None,
+        "mean_steps": steps,
+        "steps_available": steps is not None,
         "action_log_available": action_log_available,
     })
     return mapped
@@ -465,6 +514,29 @@ def _read_optional_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     return _read_json(path)
+
+
+def _validate_managed_artifact(path: Path) -> str | None:
+    candidate = path if path.is_dir() else path.parent
+    for _ in range(4):
+        if (candidate / "attempt.json").exists():
+            attempt_id = read_attempt_id(candidate)
+            manifest = validate_run_attempt(
+                candidate,
+                attempt_id=attempt_id,
+                require_completed=False,
+            )
+            if manifest.get("status") == "completed":
+                validate_run_attempt(candidate, attempt_id=attempt_id)
+            elif manifest.get("status") != "failed":
+                raise CommonReportInputError(
+                    f"Benchmark run has not reached a final status: {candidate}"
+                )
+            return str(manifest.get("status"))
+        if candidate.parent == candidate:
+            return None
+        candidate = candidate.parent
+    return None
 
 
 def _looks_like_minecraft_summary(summary: dict[str, Any]) -> bool:

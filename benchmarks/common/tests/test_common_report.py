@@ -1,12 +1,16 @@
 import csv
 import json
 
+import pytest
+
 from benchmarks.common.report import (
+    CommonReportInputError,
     aggregate_rows,
     summarize_inputs,
     write_csv_report,
     write_json_report,
 )
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 from benchmarks.minecraft.experiment import run_minecraft_experiment
 
 
@@ -398,6 +402,8 @@ def test_mixed_benchmark_aggregate_keeps_metrics_separate():
     assert aggregate["episodes"] is None
     assert aggregate["success_rate"] is None
     assert aggregate["mean_progress"] is None
+    assert aggregate["task_completion_rate"] is None
+    assert aggregate["result_failure_count"] is None
     assert aggregate["by_benchmark"]["cwah"]["success_rate"] == 1.0
     assert aggregate["by_benchmark"]["craft"]["success_rate"] == 0.0
 
@@ -441,6 +447,62 @@ def test_legacy_minecraft_matrix_row_is_upgraded_to_run_semantics(tmp_path):
     assert row["task_count"] == 2
     assert row["completed_task_count"] == 2
     assert row["mean_progress"] is None
+
+
+def test_common_report_rejects_unfinalized_managed_artifact(tmp_path):
+    run_dir = tmp_path / "unfinished"
+    prepare_run_directory(run_dir, producer="test")
+    _write_json(
+        run_dir / "summary.json",
+        {"run_name": "unfinished", "mode": "dry_run", "artifact_summary": {}},
+    )
+    _write_json(run_dir / "metrics.json", {})
+
+    with pytest.raises((CommonReportInputError, ValueError), match="artifact_manifest"):
+        summarize_inputs([run_dir])
+
+
+def test_common_report_propagates_failed_managed_status(tmp_path):
+    run_dir = tmp_path / "failed_cwah"
+    attempt_id = prepare_run_directory(run_dir, producer="benchmarks.cwah.matrix.run")
+    _write_json(
+        run_dir / "summary.json",
+        {
+            "benchmark": "cwah",
+            "run_config": {"episode_id": "failed_cwah"},
+            "metrics": {"task_success": False, "normalized_progress": "invalid"},
+        },
+    )
+    finalize_run_directory(
+        run_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.cwah.matrix.run",
+        status="failed",
+    )
+
+    row = summarize_inputs([run_dir])[0]
+
+    assert row["status"] == "failed"
+    assert row["failed_runs"] == 1
+    assert row["mean_progress"] is None
+    assert row["progress_available"] is False
+
+
+def test_minecraft_matrix_rejects_external_child_directory(tmp_path):
+    matrix_dir = tmp_path / "matrix"
+    matrix_dir.mkdir()
+    external_run = tmp_path / "external_run"
+    external_run.mkdir()
+    _write_json(
+        matrix_dir / "matrix_summary.json",
+        {
+            "benchmark": "minecraft",
+            "runs": [{"run_dir": str(external_run)}],
+        },
+    )
+
+    with pytest.raises(CommonReportInputError, match="escapes matrix run directory"):
+        summarize_inputs([matrix_dir])
 
 
 def _write_json(path, payload):

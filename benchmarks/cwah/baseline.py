@@ -27,55 +27,85 @@ def main() -> None:
         raise ValueError("C-WAH report directory must not equal or contain the matrix output directory")
 
     command = build_matrix_command(args=args, output_dir=output_dir)
+    previous_matrix_attempt_id = (
+        read_attempt_id(output_dir) if (output_dir / "attempt.json").exists() else None
+    )
     completed = subprocess.run(command, cwd=Path.cwd(), text=True, capture_output=True, check=False)
     secret_values = (os.environ.get("CWAH_LLM_API_KEY", ""),)
+
+    rows = []
+    matrix_attempt_id = None
+    matrix_status = None
+    csv_path = report_dir / "common_report.csv"
+    json_path = report_dir / "common_report.json"
+    if (output_dir / "attempt.json").exists():
+        candidate_attempt_id = read_attempt_id(output_dir)
+        if completed.returncode == 0 or candidate_attempt_id != previous_matrix_attempt_id:
+            matrix_manifest = validate_run_attempt(
+                output_dir,
+                attempt_id=candidate_attempt_id,
+                require_completed=completed.returncode == 0,
+            )
+            matrix_attempt_id = candidate_attempt_id
+            matrix_status = str(matrix_manifest.get("status") or "")
+    if matrix_attempt_id and (output_dir / "matrix_summary.json").exists():
+        rows = summarize_inputs([output_dir])
+
+    report_inside_matrix = report_resolved.is_relative_to(output_resolved)
+    if completed.returncode != 0 and matrix_attempt_id is None and report_inside_matrix:
+        print(json.dumps({"passed": False, "manifest": "", "runs": 0}, sort_keys=True))
+        raise SystemExit(completed.returncode)
+
     report_attempt_id = prepare_run_directory(
         report_dir,
         producer="benchmarks.cwah.baseline",
         overwrite=args.overwrite,
     )
-
-    rows = []
-    matrix_attempt_id = None
-    csv_path = report_dir / "common_report.csv"
-    json_path = report_dir / "common_report.json"
-    if completed.returncode == 0 and (output_dir / "attempt.json").exists():
-        matrix_attempt_id = read_attempt_id(output_dir)
-        validate_run_attempt(output_dir, attempt_id=matrix_attempt_id)
-    if matrix_attempt_id and (output_dir / "matrix_summary.json").exists():
-        rows = summarize_inputs([output_dir])
-        write_csv_report(rows, csv_path)
-        write_json_report(rows, json_path)
-
-    manifest = build_manifest(
-        args=args,
-        command=command,
-        matrix_returncode=completed.returncode,
-        matrix_stdout=redact_text(completed.stdout.strip(), secret_values=secret_values),
-        matrix_stderr=redact_text(completed.stderr.strip(), secret_values=secret_values),
-        output_dir=output_dir,
-        report_dir=report_dir,
-        common_rows=rows,
-        attempt_id=report_attempt_id,
-        matrix_attempt_id=matrix_attempt_id,
-    )
+    report_finalized = False
     manifest_path = report_dir / "baseline_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    finalize_run_directory(
-        report_dir,
-        attempt_id=report_attempt_id,
-        producer="benchmarks.cwah.baseline",
-        status="completed" if completed.returncode == 0 and matrix_attempt_id else "failed",
-    )
-    if matrix_attempt_id:
-        finalize_run_directory(
-            output_dir,
-            attempt_id=matrix_attempt_id,
-            producer="benchmarks.cwah.matrix",
-            status="completed",
-            stamp_nested=False,
+    try:
+        if rows:
+            write_csv_report(rows, csv_path)
+            write_json_report(rows, json_path)
+
+        manifest = build_manifest(
+            args=args,
+            command=command,
+            matrix_returncode=completed.returncode,
+            matrix_stdout=redact_text(completed.stdout.strip(), secret_values=secret_values),
+            matrix_stderr=redact_text(completed.stderr.strip(), secret_values=secret_values),
+            output_dir=output_dir,
+            report_dir=report_dir,
+            common_rows=rows,
+            attempt_id=report_attempt_id,
+            matrix_attempt_id=matrix_attempt_id,
         )
-    print(json.dumps({"passed": completed.returncode == 0, "manifest": str(manifest_path), "runs": len(rows)}, sort_keys=True))
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        finalize_run_directory(
+            report_dir,
+            attempt_id=report_attempt_id,
+            producer="benchmarks.cwah.baseline",
+            status="completed" if completed.returncode == 0 and matrix_status == "completed" else "failed",
+        )
+        report_finalized = True
+    finally:
+        if not report_finalized:
+            finalize_run_directory(
+                report_dir,
+                attempt_id=report_attempt_id,
+                producer="benchmarks.cwah.baseline",
+                status="failed",
+            )
+        if matrix_attempt_id:
+            finalize_run_directory(
+                output_dir,
+                attempt_id=matrix_attempt_id,
+                producer="benchmarks.cwah.matrix",
+                status=matrix_status,
+                stamp_nested=False,
+            )
+    passed = completed.returncode == 0 and matrix_status == "completed"
+    print(json.dumps({"passed": passed, "manifest": str(manifest_path), "runs": len(rows)}, sort_keys=True))
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
 

@@ -33,12 +33,25 @@ def prepare_run_directory(
 ) -> str:
     if run_dir.is_symlink():
         raise RunDirectoryExistsError(f"Benchmark run directory must not be a symlink: {run_dir}")
+    if run_dir.exists() and not run_dir.is_dir():
+        raise RunDirectoryExistsError(f"Benchmark run path must be a directory: {run_dir}")
     if run_dir.exists():
         if any(run_dir.iterdir()) and not overwrite:
             raise RunDirectoryExistsError(
                 f"Benchmark run directory is not empty: {run_dir}. Use explicit overwrite mode to replace it."
             )
         if overwrite:
+            attempt_path = run_dir / ATTEMPT_FILE
+            if not attempt_path.exists() or attempt_path.is_symlink():
+                raise RunDirectoryExistsError(
+                    f"Refusing to overwrite unmanaged directory without {ATTEMPT_FILE}: {run_dir}"
+                )
+            existing_attempt = _read_json(attempt_path)
+            existing_producer = str(existing_attempt.get("producer") or "")
+            if not existing_attempt.get("attempt_id") or _producer_family(existing_producer) != _producer_family(producer):
+                raise RunDirectoryExistsError(
+                    f"Refusing to overwrite directory owned by {existing_producer or 'unknown'}: {run_dir}"
+                )
             shutil.rmtree(run_dir)
         else:
             run_dir.rmdir()
@@ -140,6 +153,13 @@ def validate_run_attempt(
             raise RunArtifactValidationError(f"Artifact checksum mismatch: {artifact_path}")
     if Path(ATTEMPT_FILE) not in manifested_paths:
         raise RunArtifactValidationError(f"Artifact manifest does not include {ATTEMPT_FILE}: {run_dir}")
+    actual_paths = {path.relative_to(run_dir) for path in _artifact_files(run_dir)}
+    if manifested_paths != actual_paths:
+        missing = sorted(str(path) for path in actual_paths - manifested_paths)
+        stale = sorted(str(path) for path in manifested_paths - actual_paths)
+        raise RunArtifactValidationError(
+            f"Artifact manifest membership mismatch in {run_dir}: unmanifested={missing}, missing={stale}"
+        )
     if require_completed:
         marker = run_dir / COMPLETION_MARKER_FILE
         if manifest.get("status") != "completed" or not marker.exists():
@@ -289,3 +309,7 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _producer_family(producer: str) -> tuple[str, ...]:
+    return tuple(producer.split(".")[:2])

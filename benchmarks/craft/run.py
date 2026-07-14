@@ -1,7 +1,10 @@
 import argparse
+import csv
+import json
 from pathlib import Path
 
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
+from benchmarks.common.sanitization import collect_secret_values, redact_text
 from benchmarks.craft.config import (
     InvalidConfigError,
     condition_from_config,
@@ -132,7 +135,13 @@ def run_config(
                 raw_result=raw_result,
                 output_dir=output_dir,
             )
-    except BaseException:
+    except BaseException as exc:
+        _write_failure_artifacts(
+            config=config,
+            condition=condition,
+            output_dir=output_dir,
+            error=exc,
+        )
         finalize_run_directory(
             output_dir,
             attempt_id=attempt_id,
@@ -147,6 +156,46 @@ def run_config(
         status="completed",
     )
     return output_dir
+
+
+def _write_failure_artifacts(
+    *,
+    config: dict,
+    condition: str,
+    output_dir: Path,
+    error: BaseException,
+) -> None:
+    if not (output_dir / "config.resolved.yaml").exists():
+        save_resolved_config(config, output_dir)
+    normalized_dir = output_dir / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    secret_values = collect_secret_values(config)
+    failure = {
+        "type": error.__class__.__name__,
+        "message": redact_text(str(error), secret_values=secret_values),
+    }
+    summary_path = normalized_dir / "summary.json"
+    if not summary_path.exists():
+        summary_path.write_text(
+            json.dumps({
+                "run_name": output_dir.name,
+                "condition": condition,
+                "seed": config.get("run", {}).get("seed", ""),
+                "structures": config.get("run", {}).get("structures", []) or [],
+                "turns": config.get("run", {}).get("turns", ""),
+                "num_games": 0,
+                "mean_final_progress": None,
+                "completion_rate": None,
+                "runtime": {"status": "failed", "failure": failure},
+                "status": "failed",
+                "failure": failure,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    metrics_path = normalized_dir / "metrics.csv"
+    if not metrics_path.exists():
+        with metrics_path.open("w", encoding="utf-8", newline="") as f:
+            csv.DictWriter(f, fieldnames=["leakage_passed"]).writeheader()
 
 
 def _default_command_text(

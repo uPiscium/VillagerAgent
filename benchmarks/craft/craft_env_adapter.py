@@ -353,20 +353,22 @@ class CraftEnvAdapter:
             craft_config=craft,
             model_config=self.config["models"],
         )
-        completed = subprocess.run(
-            command,
-            cwd=craft["repo_path"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        games = _load_official_runner_games(
-            runner_output=runner_output,
-            condition=condition,
-            requested_structures=structures,
-        )
         secret_values = collect_secret_values(self.config)
-        _sanitize_official_runner_outputs(runner_output, secret_values=secret_values)
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=craft["repo_path"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            games = _load_official_runner_games(
+                runner_output=runner_output,
+                condition=condition,
+                requested_structures=structures,
+            )
+        finally:
+            _sanitize_official_runner_outputs(runner_output, secret_values=secret_values)
         raw_result = sanitize_artifact_value(
             _aggregate_games(condition, games),
             secret_values=secret_values,
@@ -1366,9 +1368,31 @@ def _sanitize_official_runner_outputs(
     secret_values: tuple[str, ...] = (),
 ) -> None:
     forbidden_keys = set(OFFICIAL_RUNNER_HIDDEN_STATE_KEYS)
-    for path in runner_output.glob("**/craft_structure_*.json"):
-        with path.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
+    if runner_output.is_symlink():
+        runner_output.unlink()
+        return
+    if not runner_output.exists():
+        return
+    for path in runner_output.rglob("*"):
+        if path.is_symlink():
+            path.unlink()
+            continue
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            path.unlink()
+            continue
+        text = redact_text(text, secret_values=secret_values)
+        if path.suffix != ".json":
+            path.write_text(text, encoding="utf-8")
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            path.unlink()
+            continue
         sanitized = sanitize_artifact_value(
             _drop_hidden_keys(payload, forbidden_keys),
             secret_values=secret_values,

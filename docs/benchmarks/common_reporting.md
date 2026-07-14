@@ -30,6 +30,8 @@ Evaluation units and success have benchmark-specific definitions:
 
 CRAFT `mean_steps` is derived from observed normalized turn records per game, not the configured turn budget. Action availability requires observed turns or populated action metrics. Minecraft action availability is recorded by the producer; the existence of an empty placeholder `action_log.json` does not imply a measured zero-action run.
 
+When an input belongs to a managed attempt, common reporting validates its artifact manifest and checksums before reading summaries. Legacy artifacts without attempt metadata remain readable, but incomplete managed attempts are rejected.
+
 For Minecraft/Villager Agent inputs, common reports read the normalized `summary.json`, `metrics.json`, and optional `action_log.json` produced by `benchmarks.minecraft.experiment`. They also accept matrix summaries from `benchmarks.minecraft.matrix`. They map run success, task completion rate, progress, action counts, failed action counts, and runtime errors into separate shared fields. `talkTo` actions are counted as communication actions; other Minecraft tool actions are counted as physical actions. If `action_log.json` is absent, action and action-derived step fields are unavailable rather than zero.
 
 For C-WAH inputs, common reports also include policy diagnostics when available:

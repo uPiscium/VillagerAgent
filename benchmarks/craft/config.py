@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import os
 from pathlib import Path
 from typing import Any
 
@@ -185,7 +186,23 @@ def output_dir_for_config(config: dict) -> Path:
     output_root = Path(run.get("output_dir", "result/craft"))
     if not output_root.is_absolute():
         output_root = root / output_root
-    return output_root / run.get("name", "craft_run")
+    run_name = str(run.get("name", "craft_run"))
+    if (
+        not run_name
+        or run_name in {".", ".."}
+        or Path(run_name).is_absolute()
+        or len(Path(run_name).parts) != 1
+        or "/" in run_name
+        or "\\" in run_name
+    ):
+        raise InvalidConfigError(f"run.name must be a single safe path component: {run_name!r}")
+    output_root = Path(os.path.abspath(output_root))
+    if any(path.is_symlink() for path in (output_root, *output_root.parents)):
+        raise InvalidConfigError(f"run.output_dir must not contain symlinks: {output_root}")
+    output_dir = output_root / run_name
+    if output_dir.is_symlink():
+        raise InvalidConfigError(f"CRAFT output directory must not be a symlink: {output_dir}")
+    return output_dir
 
 
 def save_resolved_config(config: dict, output_dir: Path) -> None:

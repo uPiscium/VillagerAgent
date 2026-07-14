@@ -1,4 +1,5 @@
 import json
+import signal
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from benchmarks.common.run_artifacts import (
 )
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
+    _execute_real_runtime_bounded,
     _terminate_runtime_process,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
@@ -574,6 +576,124 @@ def test_runtime_process_termination_uses_kill_fallback():
     }
 
 
+def test_runtime_process_termination_targets_isolated_process_group(monkeypatch):
+    class GroupProcess:
+        pid = 321
+        exitcode = None
+        alive = True
+
+        def terminate(self):
+            raise AssertionError("isolated process must use killpg")
+
+        def kill(self):
+            raise AssertionError("isolated process must use killpg")
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+    process = GroupProcess()
+    signals = []
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.getpgid", lambda pid: pid)
+
+    def kill_group(process_group_id, sent_signal):
+        if sent_signal == 0:
+            raise ProcessLookupError()
+        signals.append((process_group_id, sent_signal))
+        process.alive = False
+        process.exitcode = -sent_signal
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.killpg", kill_group)
+
+    metadata = _terminate_runtime_process(process, grace_seconds=0.01)
+
+    assert signals == [(321, signal.SIGTERM)]
+    assert metadata["terminated"] is True
+    assert metadata["killed"] is False
+
+
+def test_runtime_process_group_kills_descendants_after_leader_exits(monkeypatch):
+    class GroupProcess:
+        pid = 654
+        exitcode = None
+        alive = True
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return self.alive
+
+    process = GroupProcess()
+    group_alive = True
+    signals = []
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.getpgid", lambda pid: pid)
+
+    def kill_group(process_group_id, sent_signal):
+        nonlocal group_alive
+        if sent_signal == 0:
+            if not group_alive:
+                raise ProcessLookupError()
+            return
+        signals.append((process_group_id, sent_signal))
+        if sent_signal == signal.SIGTERM:
+            process.alive = False
+            process.exitcode = -signal.SIGTERM
+        elif sent_signal == signal.SIGKILL:
+            group_alive = False
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.killpg", kill_group)
+
+    metadata = _terminate_runtime_process(process, grace_seconds=0.01)
+
+    assert signals == [(654, signal.SIGTERM), (654, signal.SIGKILL)]
+    assert metadata["terminated"] is True
+    assert metadata["killed"] is True
+
+
+def test_runtime_process_group_cleanup_tolerates_group_exit_race(monkeypatch):
+    class ExitedProcess:
+        pid = 777
+        exitcode = 0
+
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.os.killpg",
+        lambda *args: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+
+    metadata = _terminate_runtime_process(ExitedProcess(), grace_seconds=0.01)
+
+    assert metadata["terminated"] is True
+    assert metadata["killed"] is False
+
+
+def test_runtime_process_group_cleanup_falls_back_to_direct_termination(monkeypatch):
+    process = _StubbornProcess()
+    process.pid = 778
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.os.killpg",
+        lambda *args: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+
+    metadata = _terminate_runtime_process(
+        process,
+        grace_seconds=0.01,
+        process_group_id=process.pid,
+    )
+
+    assert process.calls == ["terminate", ("join", 0.01), "kill", ("join", None)]
+    assert metadata["killed"] is True
+
+
 def test_minecraft_execute_timeout_uses_partial_runtime_snapshot(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
 
@@ -811,13 +931,25 @@ def test_minecraft_failed_run_has_no_completion_marker(tmp_path, monkeypatch):
 
 def test_minecraft_runtime_error_redacts_secret_literals(tmp_path, monkeypatch):
     secret = "tiny"
+    runtime_secret = "runtime-only-secret"
     config_path = _write_minecraft_config(tmp_path)
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["api_key"] = secret
     config_path.write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.setattr(
+        "model.ollama_config.make_ollama_llm_config",
+        lambda: {
+            "api_key": runtime_secret,
+            "api_key_list": [runtime_secret],
+            "api_model": "model",
+            "api_base": "http://example.test/v1",
+        },
+    )
+    monkeypatch.setattr(
         "benchmarks.minecraft.experiment._execute_real_runtime",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError(f"rejected {secret}")),
+        lambda *args, **kwargs: (
+            _ for _ in ()
+        ).throw(RuntimeError(f"rejected {secret} and {runtime_secret}")),
     )
 
     summary = run_minecraft_experiment(
@@ -825,13 +957,41 @@ def test_minecraft_runtime_error_redacts_secret_literals(tmp_path, monkeypatch):
         output_root=tmp_path / "result",
         run_name="secret_error",
         execute=True,
+        retain_runtime_result=True,
     )
     run_dir = tmp_path / "result" / "secret_error"
 
-    assert summary["error"] == "rejected [REDACTED]"
+    assert summary["error"] == "rejected [REDACTED] and [REDACTED]"
     for artifact in run_dir.rglob("*"):
         if artifact.is_file():
-            assert secret not in artifact.read_text(encoding="utf-8", errors="ignore")
+            artifact_text = artifact.read_text(encoding="utf-8", errors="ignore")
+            assert secret not in artifact_text
+            assert runtime_secret not in artifact_text
+
+
+def test_minecraft_runtime_config_error_finalizes_failed_attempt(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    monkeypatch.setattr(
+        "model.ollama_config.make_ollama_llm_config",
+        lambda: (_ for _ in ()).throw(RuntimeError("config failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="config failed"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            run_name="config_failure",
+            execute=True,
+        )
+
+    run_dir = tmp_path / "result" / "config_failure"
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+    row = summarize_inputs([run_dir])[0]
+    assert row["status"] == "failed"
+    assert row["success_rate"] is None
+    assert row["task_completion_rate"] is None
 
 
 def test_minecraft_unexpected_artifact_error_finalizes_failed_attempt(tmp_path, monkeypatch):
@@ -852,6 +1012,64 @@ def test_minecraft_unexpected_artifact_error_finalizes_failed_attempt(tmp_path, 
 
     assert manifest["status"] == "failed"
     assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
+def test_bounded_runtime_terminates_child_when_join_is_interrupted(tmp_path, monkeypatch):
+    class FakeQueue:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeProcess:
+        exitcode = None
+        alive = False
+        terminated = False
+
+        def start(self):
+            self.alive = True
+
+        def join(self, timeout=None):
+            if not self.terminated:
+                raise KeyboardInterrupt()
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.terminated = True
+            self.alive = False
+            self.exitcode = -15
+
+        def kill(self):
+            raise AssertionError("terminated process must not be killed")
+
+    process = FakeProcess()
+    status_queue = FakeQueue()
+
+    class FakeContext:
+        def Queue(self):
+            return status_queue
+
+        def Process(self, **kwargs):
+            return process
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.multiprocessing.get_context",
+        lambda: FakeContext(),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        _execute_real_runtime_bounded(
+            {},
+            dual_dag_config={},
+            timeout_seconds=10,
+            runtime_result_path=tmp_path / "runtime_result.json",
+        )
+
+    assert process.terminated is True
+    assert process.is_alive() is False
+    assert status_queue.closed is True
 
 
 def _write_minecraft_config(tmp_path):

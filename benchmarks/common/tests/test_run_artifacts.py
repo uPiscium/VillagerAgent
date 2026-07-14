@@ -13,6 +13,7 @@ from benchmarks.common.run_artifacts import (
     prepare_run_directory,
     validate_run_attempt,
 )
+from benchmarks.experiment_provenance import standard_run_name
 
 
 def test_run_directory_rejects_reuse_and_explicit_overwrite_replaces_it(tmp_path):
@@ -27,6 +28,26 @@ def test_run_directory_rejects_reuse_and_explicit_overwrite_replaces_it(tmp_path
 
     assert second_attempt != first_attempt
     assert not (run_dir / "stale.json").exists()
+
+
+def test_standard_run_name_does_not_resolve_to_parent_or_current_directory():
+    assert standard_run_name(".") == "experiment_run"
+    assert standard_run_name("..") == "experiment_run"
+
+
+def test_overwrite_rejects_unmanaged_or_different_benchmark_directory(tmp_path):
+    unmanaged = tmp_path / "unmanaged"
+    unmanaged.mkdir()
+    (unmanaged / "valuable.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(RunDirectoryExistsError, match="unmanaged"):
+        prepare_run_directory(unmanaged, producer="benchmarks.craft.run", overwrite=True)
+    assert (unmanaged / "valuable.txt").read_text(encoding="utf-8") == "keep"
+
+    managed = tmp_path / "managed"
+    prepare_run_directory(managed, producer="benchmarks.minecraft.experiment")
+    with pytest.raises(RunDirectoryExistsError, match="owned by"):
+        prepare_run_directory(managed, producer="benchmarks.craft.run", overwrite=True)
 
 
 def test_finalize_stamps_artifacts_and_writes_manifest_last(tmp_path):
@@ -90,6 +111,21 @@ def test_validation_rejects_artifact_modified_after_manifest(tmp_path):
     artifact.write_text('{"status": "changed"}', encoding="utf-8")
 
     with pytest.raises(RunArtifactValidationError, match="checksum mismatch"):
+        validate_run_attempt(run_dir, attempt_id=attempt_id)
+
+
+def test_validation_rejects_unmanifested_artifact(tmp_path):
+    run_dir = tmp_path / "extra"
+    attempt_id = prepare_run_directory(run_dir, producer="test")
+    finalize_run_directory(
+        run_dir,
+        attempt_id=attempt_id,
+        producer="test",
+        status="completed",
+    )
+    (run_dir / "stale.json").write_text('{"stale": true}', encoding="utf-8")
+
+    with pytest.raises(RunArtifactValidationError, match="membership mismatch"):
         validate_run_attempt(run_dir, attempt_id=attempt_id)
 
 
