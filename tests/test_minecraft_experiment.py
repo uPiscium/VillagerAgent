@@ -32,12 +32,15 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     output_dir = tmp_path / "result" / "issue110"
     assert summary["mode"] == "dry_run"
     assert summary["output_dir"] == str(output_dir)
+    assert summary["dual_dag_runtime_enabled"] is True
     assert summary["dual_dag_task_selection_enabled"] is True
+    assert summary["source_of_truth"] == "dual_dag"
     assert summary["mutates_runtime"] is False
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
     assert (output_dir / "action_log.json").exists()
     assert (output_dir / "task_graph_snapshot.json").exists()
+    assert (output_dir / "runtime_dual_dag_snapshot.json").exists()
     assert (output_dir / "dual_dag_artifact.json").exists()
     assert (output_dir / "decision_support.json").exists()
     assert (output_dir / "metrics.json").exists()
@@ -51,6 +54,9 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     provenance = json.loads((output_dir / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["benchmark"] == "minecraft"
     assert provenance["schema_version"] == "1.0.0"
+    runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
+    assert runtime_snapshot["source_of_truth"] == "dual_dag"
+    assert runtime_snapshot["nodes"][0]["node_type"] == "runtime_task"
 
 
 def test_minecraft_experiment_sanitizes_run_names(tmp_path):
@@ -120,7 +126,7 @@ def test_minecraft_experiment_accepts_config_lists(tmp_path):
     assert graph_snapshot["tasks"][0]["description"] == "Second task"
 
 
-def test_minecraft_experiment_records_enabled_task_reordering(tmp_path):
+def test_minecraft_experiment_records_always_on_task_reordering(tmp_path):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(
         json.dumps({
@@ -176,9 +182,14 @@ def test_minecraft_experiment_records_enabled_task_reordering(tmp_path):
         enable_dual_dag_task_selection=True,
     )
 
-    assert disabled["task_order"] == disabled["ranked_task_order"]
+    assert disabled["dual_dag_runtime_enabled"] is True
+    assert disabled["dual_dag_task_selection_enabled"] is True
+    assert disabled["source_of_truth"] == "dual_dag"
+    assert disabled["ranked_task_order"][0]["description"] == "Find chest"
     assert enabled["ranked_task_order"][0]["description"] == "Find chest"
+    assert disabled["task_order"] != disabled["ranked_task_order"]
     assert enabled["task_order"] != enabled["ranked_task_order"]
+    assert disabled["ranked_task_order"] == enabled["ranked_task_order"]
     assert enabled["recommended_description"] == "Find chest"
 
 

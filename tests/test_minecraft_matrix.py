@@ -52,6 +52,7 @@ def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
     assert summary["run_count"] == 2
     assert summary["aggregate"]["runs"] == 2
     assert summary["aggregate"]["failed_runs"] == 0
+    assert summary["dual_dag_runtime_enabled"] is True
     assert summary["dual_dag_task_selection_enabled"] is True
     assert summary["execute_timeout_seconds"] == 600
     assert (matrix_dir / "matrix_summary.json").exists()

@@ -162,9 +162,10 @@ Config field details are documented in [docs/configuration.md](docs/configuratio
 python -m benchmarks.minecraft.matrix \
   --config path/to/minecraft_config_list.json \
   --output-dir result/minecraft_matrix \
-  --run-names run_a,run_b \
-  --dual-dag-task-selection
+  --run-names run_a,run_b
 ```
+
+Dual-DAG runtime task lifecycle and task selection are always enabled.
 
 Generate a shared report:
 

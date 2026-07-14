@@ -162,9 +162,10 @@ python -m benchmarks.minecraft.experiment \
 python -m benchmarks.minecraft.matrix \
   --config path/to/minecraft_config_list.json \
   --output-dir result/minecraft_matrix \
-  --run-names run_a,run_b \
-  --dual-dag-task-selection
+  --run-names run_a,run_b
 ```
+
+Dual-DAG runtime task lifecycle と task selection は常時有効です。
 
 共通 report の生成:
 
