@@ -38,8 +38,11 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 
 - [Minimal startup](docs/minimal_run.md): Ollama defaults, Minecraft smoke, and bounded execute.
 - [Task graph structure](docs/graph_structure.md): `Task`, `Graph`, statuses, dependencies, and artifacts.
+- [Dual-DAG runtime boundary](docs/dual_dag_runtime.md): Task Graph, Epistemic DAG, Action Candidate DAG, and artifact responsibilities.
 - [Configuration](docs/configuration.md): Minecraft JSON fields, LLM defaults, API key fallback, and benchmark CLI options.
 - [Execution flow](docs/execution_flow.md): end-to-end runtime flow from config load to artifacts.
+- [Artifact schema](docs/artifact_schema.md): Minecraft benchmark artifact producers, fields, and public/private boundary.
+- [Termination semantics](docs/termination_semantics.md): success, failure, blocked, timeout, runtime error, partial, and cancelled states.
 
 ## Architecture In One Pass
 
@@ -66,9 +69,13 @@ Expected version:
 3.10.19
 ```
 
-Install dependencies using the project environment manager or your existing virtual environment. Then install JavaScript bridge dependencies if needed:
+Install dependencies with the primary local path:
 
 ```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
 python js_setup.py
 ```
 
@@ -216,4 +223,4 @@ pytest tests/test_ollama_config.py tests/test_minecraft_experiment.py tests/test
 
 ## License
 
-This project is available under the [MIT License](LICENSE).
+This project is available under the MIT License.

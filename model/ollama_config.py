@@ -8,21 +8,31 @@ OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "ollama")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:12b")
 
 
-def make_ollama_llm_config(api_model: str | None = None) -> dict:
+def make_ollama_llm_config(
+    api_model: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> dict:
+    selected_api_key = api_key or OLLAMA_API_KEY
     return {
         "provider": OLLAMA_PROVIDER,
-        "api_key": OLLAMA_API_KEY,
-        "api_base": OLLAMA_API_BASE,
+        "api_key": selected_api_key,
+        "api_base": api_base or OLLAMA_API_BASE,
         "api_model": api_model or OLLAMA_MODEL,
-        "api_key_list": [OLLAMA_API_KEY],
+        "api_key_list": [selected_api_key],
     }
 
 
-def configure_ollama_agent(agent, api_model: str | None = None) -> None:
+def configure_ollama_agent(
+    agent,
+    api_model: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> None:
     agent.provider = OLLAMA_PROVIDER
-    agent.base_url = OLLAMA_API_BASE
+    agent.base_url = api_base or OLLAMA_API_BASE
     agent.model = api_model or OLLAMA_MODEL
-    agent.api_key_list = [OLLAMA_API_KEY]
+    agent.api_key_list = [api_key or OLLAMA_API_KEY]
 
 
 def load_agent_api_key_list(path: str | Path = "API_KEY_LIST", key: str = "AGENT_KEY") -> list[str]:

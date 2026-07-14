@@ -6,6 +6,15 @@ import json
 import networkx as nx
 import matplotlib.pyplot as plt
 import threading
+from enum import Enum
+
+
+class GraphState(str, Enum):
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILURE = "failure"
+    BLOCKED = "blocked"
+    EMPTY = "empty"
 
 
 class Task:
@@ -213,37 +222,37 @@ class Graph:
     def get_open_task_list(self):
         open_task_list = self.get_open_node()
         for node in open_task_list:
-            predecessor = self.get_all_predecessor(node)
-            _direct_pre_task_list = []
-            for task in predecessor:
-                if (task.status == Task.unknown or task.status == Task.running) and task in open_task_list:
-                    node.predecessor_task_list.append(task)
-                    _direct_pre_task_list.append(task)
-            node._direct_pre_task_list =_direct_pre_task_list
-
-            for p_n in set(node.predecessor_task_list):
-                if (p_n.status == Task.unknown or p_n.status == Task.running) and p_n in open_task_list:
-                    node.predecessor_task_list.append(p_n)
-            predecessor_task_list = []
-            for task in node.predecessor_task_list:
-                if task.status == Task.unknown or task.status == Task.running:
-                    predecessor_task_list.append(task)
-            node.predecessor_task_list = list(set(predecessor_task_list))
+            unfinished_direct_predecessors = [
+                task for task in self.get_node_to(node)
+                if task.status in (Task.unknown, Task.running)
+            ]
+            unfinished_predecessors = [
+                task for task in self.get_all_predecessor(node)
+                if task.status in (Task.unknown, Task.running)
+            ]
+            node._direct_pre_task_list = unfinished_direct_predecessors
+            node.predecessor_task_list = unfinished_predecessors
         return open_task_list
+
+    def get_terminal_state(self) -> GraphState:
+        all_nodes = self.get_all_node()
+        if not all_nodes:
+            return GraphState.EMPTY
+        if any(node.status == Task.running for node in all_nodes):
+            return GraphState.RUNNING
+        if all(node.status == Task.success for node in all_nodes):
+            return GraphState.SUCCESS
+        if any(node.status == Task.failure for node in all_nodes):
+            return GraphState.FAILURE
+        for node in all_nodes:
+            if node.status == Task.unknown:
+                predecessors = self.get_all_predecessor(node)
+                if not predecessors or all(pred.status == Task.success for pred in predecessors):
+                    return GraphState.RUNNING
+        return GraphState.BLOCKED
     
     def check_graph_completion(self):
-        all_nodes = self.get_all_node()  # get all nodes
-        running_nodes = [node for node in all_nodes if node.status == Task.running]
-        if not running_nodes:  # there is no running node
-            for node in all_nodes:
-                if node.status == Task.unknown:  # there is a node that has not been executed
-                    predecessors = self.get_all_predecessor(node)
-                    if not predecessors or all(pred.status == Task.success for pred in predecessors):
-                        # all unexecuted nodes have completed predecessors
-                        return False  # the graph is not completed
-            # all unexecuted nodes have completed predecessors
-            return True
-        return False # there is a running node
+        return self.get_terminal_state() != GraphState.RUNNING
 
     def to_json(self) -> dict:
         return {

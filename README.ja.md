@@ -38,8 +38,11 @@ English documentation: [README.md](README.md)
 
 - [Minimal startup](docs/minimal_run.md): Ollama 既定値、Minecraft smoke、bounded execute。
 - [Task graph structure](docs/graph_structure.md): `Task`, `Graph`, status、依存関係、artifact。
+- [Dual-DAG runtime boundary](docs/dual_dag_runtime.md): Task Graph、Epistemic DAG、Action Candidate DAG、artifact の責務境界。
 - [Configuration](docs/configuration.md): Minecraft JSON field、LLM 既定値、API key fallback、benchmark CLI option。
 - [Execution flow](docs/execution_flow.md): config 読み込みから artifact 生成までの全体処理。
+- [Artifact schema](docs/artifact_schema.md): Minecraft benchmark artifact の生成元、field、公開境界。
+- [Termination semantics](docs/termination_semantics.md): success、failure、blocked、timeout、runtime error、partial、cancelled の意味。
 
 ## アーキテクチャ概要
 
@@ -66,9 +69,13 @@ python --version
 3.10.19
 ```
 
-依存関係をプロジェクトの仮想環境へ入れた後、必要に応じて JavaScript bridge 依存を入れます。
+推奨するローカルセットアップ手順:
 
 ```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
 python js_setup.py
 ```
 
@@ -216,4 +223,4 @@ pytest tests/test_ollama_config.py tests/test_minecraft_experiment.py tests/test
 
 ## License
 
-このプロジェクトは [MIT License](LICENSE) で提供されています。
+このプロジェクトは MIT License で提供されています。
