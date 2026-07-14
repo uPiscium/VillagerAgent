@@ -105,6 +105,24 @@ def test_minecraft_matrix_rejects_mismatched_run_names(tmp_path):
         )
 
 
+def test_minecraft_matrix_rejects_invalid_config_entries(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps([_config("first", 0), "bad-entry"]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Minecraft config entry at index 1 must be an object"):
+        run_minecraft_matrix(config_path=config_path, output_dir=tmp_path / "matrix")
+
+
+def test_minecraft_matrix_rejects_missing_required_fields(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _config("first", 0)
+    del config["host"]
+    config_path.write_text(json.dumps([config]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"config\[0\] missing required field\(s\): host"):
+        run_minecraft_matrix(config_path=config_path, output_dir=tmp_path / "matrix")
+
+
 def _config(task_name, task_idx):
     return {
         "task_type": "meta",

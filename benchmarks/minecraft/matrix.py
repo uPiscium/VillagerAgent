@@ -7,7 +7,7 @@ from typing import Any
 
 from benchmarks.common.report import aggregate_rows, summarize_minecraft_run
 from benchmarks.experiment_provenance import standard_run_name
-from benchmarks.minecraft.experiment import run_minecraft_experiment
+from benchmarks.minecraft.experiment import run_minecraft_experiment, validate_minecraft_config
 
 
 DEFAULT_MATRIX_OUTPUT_ROOT = Path("result/minecraft_matrix")
@@ -129,9 +129,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _load_config_entries(config_path: str | Path) -> list[dict[str, Any]]:
     payload = _read_json(Path(config_path))
     if isinstance(payload, list):
-        return [dict(item) for item in payload]
+        entries = []
+        for index, item in enumerate(payload):
+            if not isinstance(item, dict):
+                raise ValueError(f"Minecraft config entry at index {index} must be an object")
+            entries.append(validate_minecraft_config(dict(item), context=f"config[{index}]"))
+        return entries
     if isinstance(payload, dict):
-        return [dict(payload)]
+        return [validate_minecraft_config(dict(payload), context="config")]
     raise ValueError(f"Unsupported Minecraft config shape: {config_path}")
 
 
