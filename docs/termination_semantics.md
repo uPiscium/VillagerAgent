@@ -20,6 +20,7 @@ Termination state is not the same as benchmark success. A run can terminate and 
 
 - Condition: unknown tasks remain but none are runnable, and no task is running.
 - Controller reason: dependencies cannot become satisfied from current graph state.
+- Snapshot diagnosis: `dependency_blockers` identifies each direct/transitive non-success predecessor and its status. A failed predecessor is explicitly reported rather than producing an empty blocker list.
 - Graph state: `BLOCKED`.
 - Artifacts: should be preserved for diagnosis.
 - Comparison: diagnostic unless the benchmark defines blocked as a normal failure outcome.

@@ -22,6 +22,8 @@ The legacy `type_define.Graph` remains a compatibility projection for prompts, v
 
 Runtime task nodes use `node_type="runtime_task"`. Dependency edges use `edge_type="precedes_task"` and mean the target task depends on completion of the source task.
 
+Snapshot-derived dependency diagnostics list every non-success predecessor in `dependency_blockers`, including unknown, running, and failed tasks. Entries carry description/status and distinguish direct from transitive dependencies. The older ID-only `blocked_by_tasks` field remains for compatibility.
+
 `DualDAGTaskStore` remains as a deprecated compatibility alias. New code should use `RuntimeTaskDAGStore`.
 
 ## Task Graph Projection

@@ -174,6 +174,7 @@ def test_store_snapshot_is_canonical_dual_dag_artifact():
     assert snapshot["nodes"][0]["derived"] == {
         "dependency_ready": True,
         "blocked_by_tasks": [],
+        "dependency_blockers": [],
     }
     assert "runtime_task" in snapshot["schema"]["node_types"]
     assert "task_statuses" in snapshot["schema"]["lifecycle_fields"]
@@ -253,6 +254,60 @@ def test_store_rejects_unknown_node_edge():
 
     with pytest.raises(TaskDependencyError, match="unknown node"):
         store.add_task_dependency(store.task_node_id(task), "runtime:task:missing")
+
+
+@pytest.mark.parametrize("status", [Task.unknown, Task.running, Task.failure])
+def test_store_snapshot_reports_non_success_dependency_blocker_status(status):
+    store, tasks = _store_with_chain(2)
+    if status != Task.unknown:
+        store.mark_task_status(tasks[0].id, status)
+
+    blocked = store.snapshot()["nodes"][1]["derived"]
+
+    assert blocked["dependency_ready"] is False
+    assert blocked["blocked_by_tasks"] == [store.task_node_id(tasks[0])]
+    assert blocked["dependency_blockers"] == [{
+        "task_id": store.task_node_id(tasks[0]),
+        "description": "A",
+        "status": status,
+        "relation": "direct",
+    }]
+
+
+def test_store_snapshot_distinguishes_direct_and_transitive_blockers():
+    store, tasks = _store_with_chain(3)
+    store.mark_task_running(tasks[1].id, assigned_agents=["Alice"])
+
+    blocked = store.snapshot()["nodes"][2]["derived"]
+
+    assert blocked["dependency_blockers"] == [
+        {
+            "task_id": store.task_node_id(tasks[1]),
+            "description": "B",
+            "status": Task.running,
+            "relation": "direct",
+        },
+        {
+            "task_id": store.task_node_id(tasks[0]),
+            "description": "A",
+            "status": Task.unknown,
+            "relation": "transitive",
+        },
+    ]
+
+
+def test_store_snapshot_has_no_blockers_when_all_dependencies_succeed():
+    store, tasks = _store_with_chain(3)
+    store.mark_task_success(tasks[0].id)
+    store.mark_task_success(tasks[1].id)
+
+    derived = store.snapshot()["nodes"][2]["derived"]
+
+    assert derived == {
+        "dependency_ready": True,
+        "blocked_by_tasks": [],
+        "dependency_blockers": [],
+    }
 
 
 def test_store_replace_preserves_identity_assignment_history_and_reflect():
