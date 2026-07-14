@@ -39,6 +39,22 @@ def test_task_manager_query_subtasks_reads_dual_dag_state():
     assert manager.dual_dag_store.terminal_state() == GraphState.RUNNING
 
 
+def test_task_manager_query_runnable_subtasks_delegates_to_runtime_task_store():
+    task_a = Task("A", {})
+    task_a.candidate_list = ["Alice"]
+    task_b = Task("B", {})
+    task_b.candidate_list = ["Bob"]
+    manager = TaskManager(silent=True)
+    manager.set_task_list_from_decomposition([task_a, task_b])
+
+    assert [task.description for task in manager.query_runnable_subtasks(["Bob"])] == []
+    assert [task.description for task in manager.query_runnable_subtasks(["Alice"])] == ["A"]
+
+    manager.mark_task_status(task_a.id, Task.success, {"ok": True})
+
+    assert [task.description for task in manager.query_runnable_subtasks(["Bob"])] == ["B"]
+
+
 def test_task_manager_status_updates_write_dual_dag_before_projection():
     task = Task("A", {})
     manager = TaskManager(silent=True)

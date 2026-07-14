@@ -70,6 +70,31 @@ def test_store_query_runnable_tasks_uses_dual_dag_lifecycle_state():
     assert [task.description for task in store.query_runnable_tasks(["Alice"])] == ["B"]
 
 
+def test_store_query_runnable_tasks_requires_enough_free_candidate_agents():
+    task = Task("A", {})
+    task.candidate_list = ["Alice"]
+    task.number = 1
+    store = RuntimeTaskDAGStore()
+    store.load_tasks_from_decomposition([task])
+
+    assert store.query_runnable_tasks(["Bob"]) == []
+    assert [task.description for task in store.query_runnable_tasks(["Alice"])] == ["A"]
+
+
+def test_store_query_runnable_tasks_treats_empty_candidates_as_all_free_agents():
+    task = Task("A", {})
+    task.candidate_list = []
+    task.number = 2
+    store = RuntimeTaskDAGStore()
+    store.load_tasks_from_decomposition([task])
+
+    assert store.query_runnable_tasks(["Alice"]) == []
+    runnable = store.query_runnable_tasks(["Alice", "Bob"])
+
+    assert [task.description for task in runnable] == ["A"]
+    assert runnable[0].candidate_list == ["Alice", "Bob"]
+
+
 def test_store_terminal_state_matches_graph_semantics():
     store, tasks = _store_with_chain(2)
 

@@ -114,9 +114,12 @@ class RuntimeTaskDAGStore:
             task.available = True
             if task.status != Task.unknown or task.predecessor_task_list:
                 task.available = False
-            elif free_agents:
-                candidates = set(task.candidate_list or free_agents)
-                if len(candidates & free_agents) < int(lifecycle.get("required_agent_count", 1) or 1):
+            elif free_agent_names is not None:
+                candidates = list(task.candidate_list or free_agent_names)
+                eligible_free_agents = [agent for agent in free_agent_names if agent in set(candidates)]
+                if not task.candidate_list:
+                    task.candidate_list = eligible_free_agents
+                if len(eligible_free_agents) < int(lifecycle.get("required_agent_count", 1) or 1):
                     task.available = False
             if task.available:
                 runnable.append(task)
