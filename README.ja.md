@@ -158,6 +158,8 @@ python -m benchmarks.minecraft.experiment \
 
 Execute checkpointはrun directoryごとの`.runtime/runtime_result.json`へ分離され、normalized artifact出力後に削除されます。debug用に内部checkpointを残す場合だけ`--retain-runtime-result`を指定してください。
 
+Execute modeではMinecraft runtime全体をchild processで実行します。親processがwall-clock timeoutを管理し、timeout artifactを書き出す前にchildをterminateし、必要ならkillします。controller threadの中断に`SIGALRM`は使用しません。
+
 設定 field の詳細は [docs/configuration.md](docs/configuration.md) にあります。
 
 ## Dry Matrix

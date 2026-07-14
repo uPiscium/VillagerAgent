@@ -48,6 +48,7 @@ class TaskManager:
         self.method = method
         self.cache_enabled = cache_enabled
         self.task_description = None
+        self.runtime_checkpoint = None
 
         self.task_trace = []
         self.task_trace_description = []
@@ -154,6 +155,7 @@ class TaskManager:
     def set_task_list_from_decomposition(self, task_list: list[Task]) -> None:
         self.runtime_task_store.load_tasks_from_decomposition(task_list)
         self.sync_graph_from_dual_dag()
+        self.checkpoint_runtime_state()
 
     def sync_dual_dag_from_graph(self) -> None:
         self.runtime_task_store.load_tasks_from_graph(self.graph)
@@ -165,10 +167,20 @@ class TaskManager:
     def mark_task_running(self, task: Task, assigned_agents: list[str]) -> None:
         self.runtime_task_store.mark_task_running(task.id, assigned_agents=assigned_agents)
         self.sync_graph_from_dual_dag()
+        self.checkpoint_runtime_state()
 
     def mark_task_status(self, task_id: str, status: str, feedback=None) -> None:
         self.runtime_task_store.mark_task_status(task_id, status, feedback=feedback)
         self.sync_graph_from_dual_dag()
+        self.checkpoint_runtime_state()
+
+    def checkpoint_runtime_state(self) -> None:
+        if not callable(self.runtime_checkpoint):
+            return
+        try:
+            self.runtime_checkpoint()
+        except Exception as exc:
+            self.logger.warning(f"Failed to checkpoint runtime task state: {exc}")
 
     def update_history(self, system_prompt, user_prompt, response):
         if type(user_prompt) == str:

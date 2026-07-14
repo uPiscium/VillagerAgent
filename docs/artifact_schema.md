@@ -79,6 +79,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Task provenance fields include `snapshot_source` and `task_state_source` (`config_fixture` or `real_runtime`).
 - Selection fields distinguish `runtime_selection_policy`, recorded `runtime_selected_task_ids`, and `posthoc_ranked_task_order`. `ranked_task_order` remains a compatibility alias for the post-hoc order. In execute mode, `selected_task_id` and `selected_description` are empty unless runtime selection history was recorded; post-hoc ranking is never presented as runtime history.
 - Other fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `mutates_runtime`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
+- Execute process fields are `runtime_process_isolated`, `runtime_process_exit_code`, `runtime_process_terminated`, and `runtime_process_killed`. Timeout summaries are written only after the child is no longer alive.
 
 ## Provenance Files
 
@@ -93,6 +94,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Path: `<output_dir>/.runtime/runtime_result.json`; each run has its own path, including matrix runs.
 - Classification: internal checkpoint used to recover partial execute state. It is not a normalized artifact.
 - Writes use `runtime_result.json.tmp`, flush/fsync, and `os.replace()`; readers consume only the completed JSON path.
+- The child checkpoints after TaskManager initialization, decomposition, running transitions, terminal transitions, normal completion, and exceptions. Lifecycle checkpoints prioritize the runtime task snapshot and current action log without repeatedly evaluating score.
 - The checkpoint and temporary file are removed after normalized artifact generation by default. `--retain-runtime-result` keeps the completed checkpoint for debugging and records `runtime_result_retained: true`.
 
 ## Versioning

@@ -41,6 +41,13 @@ def _runtime_result(env=None, tm=None, *, error: str | None = None) -> dict:
     }
 
 
+def _runtime_checkpoint_result(env=None, tm=None) -> dict:
+    result = _runtime_result(None, tm)
+    if env is not None and hasattr(env, "get_action_log"):
+        result["action_log"] = env.get_action_log()
+    return result
+
+
 def _write_runtime_result(path: str | None, payload: dict) -> None:
     if not path:
         return
@@ -168,6 +175,11 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             # 启动TM
             tm = TaskManager(silent=False, cache_enabled=False)
             runtime_tm = tm
+            tm.runtime_checkpoint = lambda: _write_runtime_result(
+                runtime_result_path,
+                _runtime_checkpoint_result(env, tm),
+            )
+            _write_runtime_result(runtime_result_path, _runtime_checkpoint_result(env, tm))
 
             print(f"TaskManager Time taken: {time.time() - start_time}")
             start_time = time.time()

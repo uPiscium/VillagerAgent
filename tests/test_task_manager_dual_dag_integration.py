@@ -68,3 +68,20 @@ def test_task_manager_status_updates_write_dual_dag_before_projection():
     assert manager.graph.vertex[0].status == Task.failure
     assert manager.graph.vertex[0].reflect == "failed"
     assert manager.dual_dag_store.terminal_state() == GraphState.FAILURE
+
+
+def test_task_manager_checkpoints_decomposition_and_lifecycle_transitions():
+    task = Task("A", {})
+    manager = TaskManager(silent=True)
+    snapshots = []
+    manager.runtime_checkpoint = lambda: snapshots.append(manager.runtime_task_store.snapshot())
+
+    manager.set_task_list_from_decomposition([task])
+    manager.mark_task_running(task, ["Alice"])
+    manager.mark_task_status(task.id, Task.success, {"ok": True})
+
+    assert [snapshot["nodes"][0]["lifecycle"]["status"] for snapshot in snapshots] == [
+        Task.unknown,
+        Task.running,
+        Task.success,
+    ]
