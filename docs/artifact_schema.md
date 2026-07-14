@@ -39,6 +39,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Producer details: dry-run uses a config fixture store; execute mode prefers the real runtime result from `start_with_config.run()` or `.cache/minecraft_runtime_result.json`.
 - Required fields include `schema_version`, `runtime`, `source_of_truth`, `snapshot_source`, `summary`, `nodes`, `edges`, and `schema`.
 - Runtime task lifecycle fields include `status`, `candidate_agents`, `active_agents`, `last_assigned_agents`, and `required_agent_count`. `available` is derived and is not canonical stored lifecycle state.
+- For multi-agent execution, `active_agents` contains the complete running group and terminal transitions preserve that group in `last_assigned_agents`. `content.reflect.agent_results` records each agent's `success`, `failure`, or `timeout` result; the task has one terminal status. Single-agent tasks retain the existing direct detail value in `content.reflect` for compatibility.
 
 ## `dual_dag_artifact.json`
 

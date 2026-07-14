@@ -12,7 +12,7 @@ Termination state is not the same as benchmark success. A run can terminate and 
 ## Failure
 
 - Condition: one or more required tasks fail, or the benchmark score marks failure.
-- Controller reason: task reflection or environment feedback marks a task `failure`.
+- Controller reason: task reflection or environment feedback marks a task `failure`. For a multi-agent execution group, any agent exception, failed reflection, or per-task timeout fails the whole task; all agents must succeed for task success.
 - Artifacts: preserved when using benchmark harnesses.
 - Comparison: comparable as a failed run when runtime itself did not fail.
 
@@ -30,6 +30,8 @@ Termination state is not the same as benchmark success. A run can terminate and 
 - Harness representation: `timed_out == true`, `error_type == "timeout"`, and `execute_timeout_seconds` set in `summary.json`.
 - Artifacts: partial artifacts are preserved.
 - Comparison: diagnostic unless timeout policy is part of the benchmark protocol.
+
+This harness timeout is distinct from a controller task-group timeout. A task-group timeout produces a normal task `failure` with per-agent results, clears `active_agents`, and preserves the assigned group in `last_assigned_agents`.
 
 ## Runtime Error
 

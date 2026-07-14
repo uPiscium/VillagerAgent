@@ -36,10 +36,21 @@ This is the current Ollama-first flow used by `start_with_config.py` and the Min
 5. Order runnable tasks with `task_selection_policy` (`dual-dag` or `original`).
 6. For each runnable task in policy order, select exactly `required_agent_count` free candidate agents. Each accepted assignment reserves its agents immediately, so later tasks in the same iteration cannot reuse them.
 7. Validate that the task and agents exist, every agent is idle and eligible, agent names are unique, and the validated count exactly matches `required_agent_count`.
-8. Mark tasks `running` and submit `BaseAgent.step()` to the worker pool. Other independent tasks can be assigned in the same scheduler iteration while enough eligible agents remain.
-9. Collect completed futures.
-10. Reflect on task success through `BaseAgent.reflect()`.
-11. Write feedback back to `TaskManager.feedback_task()`.
+8. Mark the task `running`, create one execution group, and submit `BaseAgent.step()` once for every assigned agent. Other independent tasks can be assigned in the same scheduler iteration while enough eligible agents remain.
+9. Track all futures by agent name and wait for the entire group. A pending group remains `running`.
+10. Reflect on each completed result through its `BaseAgent.reflect()`. Any exception, timeout, or failed reflection makes the group fail; every reflection must succeed for group success.
+11. Write one terminal task update with an `agent_results` map. This clears `active_agents` while preserving the full group in `last_assigned_agents`.
+
+Example terminal feedback:
+
+```json
+{
+  "agent_results": {
+    "Alice": {"status": "success", "detail": "..."},
+    "Bob": {"status": "failure", "error": "..."}
+  }
+}
+```
 
 ## Agent Step
 
