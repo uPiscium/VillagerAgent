@@ -33,6 +33,15 @@ class DualDAGTaskStore:
             if not getattr(task, "_pre_idxs", []) and task_index > 0:
                 self.add_task_dependency(self.task_node_id(tasks[task_index - 1]), target_id)
 
+    def load_tasks_from_graph(self, graph: Graph) -> None:
+        self.nodes = {}
+        self.edges = []
+        self._task_order = []
+        for task in graph.vertex:
+            self.upsert_task(task)
+        for predecessor, task in graph.edge:
+            self.add_task_dependency(self.task_node_id(predecessor), self.task_node_id(task))
+
     def upsert_task(self, task: Task) -> str:
         node_id = self.task_node_id(task)
         existing = self.nodes.get(node_id, {})
@@ -111,6 +120,9 @@ class DualDAGTaskStore:
 
     def mark_task_failure(self, task_id: str, feedback=None) -> None:
         self._set_task_lifecycle(task_id, status=Task.failure, reflect=feedback)
+
+    def mark_task_status(self, task_id: str, status: str, feedback=None, assigned_agents: list[str] | None = None) -> None:
+        self._set_task_lifecycle(task_id, status=status, assigned_agents=assigned_agents, reflect=feedback)
 
     def terminal_state(self) -> GraphState:
         node_ids = list(self._task_order)

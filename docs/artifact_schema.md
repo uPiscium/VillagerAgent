@@ -26,7 +26,7 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Timing: during normalized artifact generation.
 - Modes: dry-run and execute.
 - Failure behavior: written even on execute failure/timeout.
-- Classification: public Task Graph projection.
+- Classification: public compatibility projection of canonical Dual-DAG task state.
 - Required fields: `mutates_runtime`, `tasks`, `edges`.
 
 ## `dual_dag_artifact.json`
