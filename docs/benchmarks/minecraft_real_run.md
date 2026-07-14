@@ -67,6 +67,20 @@ When server access is available, start with `env_type.none` before running a jud
 
 Prior connectivity evidence is documented in `doc/minecraft_e2e_verification.md`. That run verified Python `VillagerBench` to FastAPI/mineflayer bridge to a remote Minecraft server and back, but it did not launch a benchmark judger or measure scored task completion.
 
+## Tool Limitations
+
+The current runtime does not implement deterministic anvil or enchanting table interactions. Calls routed through `env.env_api.interact_nearest()` for `anvil` or `enchanting_table` return `status=False` with structured detail:
+
+```json
+{
+  "error_type": "unsupported_tool",
+  "tool": "anvil",
+  "supported": false
+}
+```
+
+Tasks that require these tools should be treated as unsupported until an implementation with mocked bridge tests is added.
+
 ## Judged Task Check
 
 After connectivity is confirmed, run one small judged task on a resettable server/world. Prefer a single-agent construction task first because it should produce `data/score.json` through `env.get_score()`.
