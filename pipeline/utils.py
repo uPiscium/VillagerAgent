@@ -350,7 +350,9 @@ def dict2document(dict: dict, db_name: str):
         )
 
     else:
-        raise NotImplementedError
+        raise ValueError(
+            f"Unsupported database name {db_name!r}; expected one of: blueprint, conversation, requirement"
+        )
 
 
 def load_db_name(db_name, update=False, verbose=False, json_path="", query_type="ParentDocument"):

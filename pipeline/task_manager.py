@@ -33,6 +33,10 @@ class TaskManager:
     merge_task: str = "merge"
 
     def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False):
+        if method not in ("update", "merge"):
+            raise ValueError(
+                f"Unsupported task manager method {method!r}; expected one of: update, merge"
+            )
         self.llm = None
         self.dm:DataManager = None
         self.runtime_task_store = RuntimeTaskDAGStore()
@@ -59,7 +63,7 @@ class TaskManager:
 
         self.history = {"prompt": [], "response": []}
 
-        self.manage_method = "update"
+        self.manage_method = method
 
 
         # delete generated graph files when the runtime directories exist
@@ -235,7 +239,9 @@ class TaskManager:
                                                                 "env": env_description})
         else:
             self.logger.error("Task Manager Method Error.")
-            assert False, "task manager method error"
+            raise ValueError(
+                f"Unsupported task manager method {self.manage_method!r}; expected one of: update, merge"
+            )
         # self.logger.warning("TM DEBUG:")
         # self.logger.warning(system_prompt)
         self.logger.warning(user_prompt)
@@ -436,7 +442,9 @@ class TaskManager:
             self.merge_task(task)
         else:
             self.logger.error("Task Manager Method Error.")
-            assert False, "task manager method error"
+            raise ValueError(
+                f"Unsupported task manager method {self.manage_method!r}; expected one of: update, merge"
+            )
         self.status = TaskManager.idle
 
     def merge_task(self, task:Task):
