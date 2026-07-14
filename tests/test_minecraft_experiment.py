@@ -1,11 +1,11 @@
 import json
 import time
+from pathlib import Path
 
 import pytest
 
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
-    RUNTIME_RESULT_PATH,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
 )
@@ -457,8 +457,9 @@ def test_minecraft_execute_failure_uses_partial_runtime_snapshot(tmp_path, monke
     config_path = _write_minecraft_config(tmp_path)
 
     def fail_with_partial(*args, **kwargs):
-        RUNTIME_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        RUNTIME_RESULT_PATH.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
+        runtime_result_path = Path(kwargs["runtime_result_path"])
+        runtime_result_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_result_path.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
         raise RuntimeError("server unavailable")
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", fail_with_partial)
@@ -508,8 +509,9 @@ def test_minecraft_execute_timeout_uses_partial_runtime_snapshot(tmp_path, monke
     config_path = _write_minecraft_config(tmp_path)
 
     def slow_runtime_with_partial(*args, **kwargs):
-        RUNTIME_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        RUNTIME_RESULT_PATH.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
+        runtime_result_path = Path(kwargs["runtime_result_path"])
+        runtime_result_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_result_path.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
         time.sleep(1)
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", slow_runtime_with_partial)
@@ -554,6 +556,117 @@ def test_minecraft_execute_timeout_survives_contextmanager_generator_error(tmp_p
     assert summary["error_type"] == "timeout"
     assert summary["timed_out"] is True
     assert "timed out after 0.01 seconds" in summary["error"]
+
+
+def test_minecraft_execute_uses_unique_per_run_result_paths_and_cleans_up(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    observed_paths = []
+
+    def runtime_result(*args, **kwargs):
+        observed_paths.append(Path(kwargs["runtime_result_path"]))
+        return _runtime_result_snapshot(status="success")
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
+
+    first = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="run_a",
+        execute=True,
+    )
+    second = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="run_b",
+        execute=True,
+    )
+
+    assert observed_paths == [
+        tmp_path / "result" / "run_a" / ".runtime" / "runtime_result.json",
+        tmp_path / "result" / "run_b" / ".runtime" / "runtime_result.json",
+    ]
+    assert first["runtime_result_retained"] is False
+    assert second["runtime_result_retained"] is False
+    assert all(not path.exists() for path in observed_paths)
+    assert (tmp_path / "result" / "run_a" / "runtime_dual_dag_snapshot.json").exists()
+    assert (tmp_path / "result" / "run_b" / "runtime_dual_dag_snapshot.json").exists()
+
+
+def test_minecraft_execute_ignores_stale_global_runtime_result(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_path = _write_minecraft_config(tmp_path)
+    stale_path = tmp_path / ".cache" / "minecraft_runtime_result.json"
+    stale_path.parent.mkdir(parents=True)
+    stale_path.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: {},
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="ignore_stale",
+        execute=True,
+    )
+
+    assert summary["snapshot_source"] == "config_fixture"
+    assert stale_path.exists()
+
+
+def test_minecraft_execute_ignores_partial_tmp_result(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def write_partial_tmp(*args, **kwargs):
+        runtime_result_path = Path(kwargs["runtime_result_path"])
+        runtime_result_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_result_path.with_suffix(".json.tmp").write_text(
+            json.dumps(_runtime_result_snapshot(status="running")),
+            encoding="utf-8",
+        )
+        raise RuntimeError("interrupted write")
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", write_partial_tmp)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="partial_tmp",
+        execute=True,
+    )
+
+    assert summary["snapshot_source"] == "config_fixture"
+    assert summary["error_type"] == "RuntimeError"
+    assert not (tmp_path / "result" / "partial_tmp" / ".runtime").exists()
+
+
+def test_minecraft_execute_can_retain_internal_result_explicitly(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def persist_result(*args, **kwargs):
+        from start_with_config import _write_runtime_result
+
+        _write_runtime_result(
+            str(kwargs["runtime_result_path"]),
+            _runtime_result_snapshot(status="success"),
+        )
+        return {}
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", persist_result)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="retained",
+        execute=True,
+        retain_runtime_result=True,
+    )
+
+    runtime_result_path = tmp_path / "result" / "retained" / ".runtime" / "runtime_result.json"
+    assert summary["runtime_result_retained"] is True
+    assert runtime_result_path.exists()
+    assert not runtime_result_path.with_suffix(".json.tmp").exists()
+    assert json.loads(runtime_result_path.read_text(encoding="utf-8"))["runtime_task_dag_snapshot"]
 
 
 def _write_minecraft_config(tmp_path):

@@ -156,6 +156,8 @@ python -m benchmarks.minecraft.experiment \
 
 `--execute` を省略すると dry-run になります。dry-run は Minecraft server、LLM、judger、credential を必要としません。
 
+Execute checkpointはrun directoryごとの`.runtime/runtime_result.json`へ分離され、normalized artifact出力後に削除されます。debug用に内部checkpointを残す場合だけ`--retain-runtime-result`を指定してください。
+
 設定 field の詳細は [docs/configuration.md](docs/configuration.md) にあります。
 
 ## Dry Matrix

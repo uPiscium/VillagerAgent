@@ -156,6 +156,8 @@ python -m benchmarks.minecraft.experiment \
 
 Dry-run is the default if `--execute` is omitted. Dry-run does not require a Minecraft server, LLM, judger, or credentials.
 
+Execute checkpoints are isolated under each run directory and cleaned after normalized artifacts are written. Use `--retain-runtime-result` only to keep the internal `.runtime/runtime_result.json` checkpoint for debugging.
+
 Config field details are documented in [docs/configuration.md](docs/configuration.md).
 
 ## Run A Dry Matrix
