@@ -50,6 +50,7 @@ The harness preserves normalized artifacts even when the runtime raises or times
 - `metrics.json`
 - `action_log.json`
 - `task_graph_snapshot.json`
+- `runtime_dual_dag_snapshot.json`
 - `dual_dag_artifact.json`
 - `decision_support.json`
 - provenance files
@@ -60,6 +61,9 @@ Timeout metadata is recorded in `summary.json`:
 - `error`
 - `error_type`
 - `timed_out`
+- `snapshot_source`
+
+In dry-run, `snapshot_source` is `config_fixture`. In execute mode, it is `real_runtime` when the harness recovers a runtime task DAG snapshot from `start_with_config.run()` or `.cache/minecraft_runtime_result.json`. If no real runtime snapshot exists, the harness falls back to the config fixture snapshot for artifact completeness.
 
 ## Connectivity Smoke Check
 

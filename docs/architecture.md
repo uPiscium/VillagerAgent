@@ -1,6 +1,6 @@
 # Architecture Diagrams
 
-This document visualizes the current proposed method after the Dual-DAG runtime integration. The key architectural change is that `DualDAGTaskStore` is the runtime source of truth, while `type_define.Graph` remains a compatibility projection.
+This document visualizes the current runtime architecture after the task-store migration. `RuntimeTaskDAGStore` is the source of truth for runtime task dependency and lifecycle state. It is not the full Dual-DAG runtime: Epistemic DAG and Action Candidate DAG runtime stores remain future implementation targets for Minecraft.
 
 ## Current Architecture
 
@@ -8,264 +8,133 @@ This document visualizes the current proposed method after the Dual-DAG runtime 
 flowchart TD
     A[User Goal / Minecraft Config] --> B[TaskManager]
     B --> C[LLM Task Decomposition]
-    C --> D[DualDAGTaskStore]
+    C --> D[RuntimeTaskDAGStore]
 
     D --> D1[runtime_task Nodes]
     D --> D2[precedes_task Edges]
     D --> D3[Lifecycle Status]
-    D --> D4[Candidate / Assigned Agents]
+    D --> D4[Candidate / Active / Last Assigned Agents]
 
-    D --> E[Task Graph Projection]
-    E --> F[Legacy Task / Graph APIs]
-    E --> G[Prompts / Logs / task_graph_snapshot.json]
+    D --> R[Runnable Query]
+    R --> P[Task Selection Policy\ndual-dag / original]
+    P --> GC[GlobalController]
+    GC --> BA[BaseAgent]
+    BA --> ENV[Minecraft Env / Tools]
 
-    D --> H[GlobalController]
-    H --> I[Dual-DAG Task Selection / Ranking]
-    I --> J[BaseAgent]
-    J --> K[Minecraft Env / Tools]
+    D -.-> G[Task Graph Projection]
+    G -.-> LEG[Legacy Task / Graph APIs]
+    G -.-> TGS[task_graph_snapshot.json]
 
-    K --> L[Action Log / Observations]
-    L --> M[Dual-DAG Artifacts]
-    D --> M
-
-    M --> N[runtime_dual_dag_snapshot.json]
-    M --> O[dual_dag_artifact.json]
-    M --> P[decision_support.json]
-    M --> Q[summary.json / metrics.json]
-```
-
-## Runtime Responsibility View
-
-```mermaid
-flowchart LR
-    subgraph Canonical[Canonical Runtime State]
-        D[DualDAGTaskStore]
-        D --> T[runtime_task nodes]
-        D --> E[precedes_task edges]
-        D --> S[lifecycle: unknown / running / success / failure / blocked]
-        D --> A[assignment metadata]
-    end
-
-    subgraph Compatibility[Compatibility Projection]
-        G[Task Graph Projection]
-        TSK[type_define.Task]
-        GR[type_define.Graph]
-        G --> TSK
-        G --> GR
-    end
-
-    subgraph Control[Runtime Control]
-        TM[TaskManager]
-        GC[GlobalController]
-        BA[BaseAgent]
-        ENV[VillagerBench / Minecraft]
-    end
-
-    TM --> D
-    D --> TM
-    D --> G
-    TM --> GC
-    GC --> D
-    GC --> BA
-    BA --> ENV
-    ENV --> GC
-
-    subgraph Artifacts[Artifacts]
-        RDS[runtime_dual_dag_snapshot.json]
-        TGS[task_graph_snapshot.json]
-        DDS[dual_dag_artifact.json]
-        DS[decision_support.json]
-        SUM[summary.json / metrics.json]
-    end
-
-    D --> RDS
-    G --> TGS
-    ENV --> DDS
-    DDS --> DS
-    DS --> SUM
+    ENV --> LOG[Action Log / Observations]
+    LOG --> ART[dual_dag_artifact.json\npublic analysis artifact]
+    ART --> DS[decision_support.json]
+    D --> RDS[runtime_dual_dag_snapshot.json\nruntime task subgraph snapshot]
+    DS --> SUM[summary.json / metrics.json]
     RDS --> SUM
 ```
 
-## Dual-DAG Internal Operation
-
-This view zooms into `DualDAGTaskStore`, excluding the rest of the controller architecture. It shows how runtime task state moves through the store from LLM decomposition to scheduling, lifecycle updates, and exported artifacts.
-
-```mermaid
-flowchart TD
-    A["LLM Decomposition Result<br/>list[type_define.Task]"] --> B[load_tasks_from_decomposition]
-
-    subgraph Store[DualDAGTaskStore: Canonical Runtime Task State]
-        B --> C[upsert_task]
-        C --> N[(nodes\nruntime_task)]
-        B --> D[add_task_dependency]
-        D --> E[(edges\nprecedes_task)]
-
-        N --> O[query_open_tasks]
-        E --> O
-        O --> P[project Task objects]
-        P --> Q[attach unfinished predecessors]
-        Q --> R[query_runnable_tasks]
-        R --> S{status unknown?\npredecessors done?\nagents available?}
-
-        S -->|yes| T[Runnable Task]
-        S -->|no| U[Open But Blocked Task]
-
-        T --> V[mark_task_running]
-        V --> W[(lifecycle.status=running\nassigned_agents)]
-        W --> X[Agent / Env Execution]
-        X --> Y{task result}
-        Y -->|success| Z[mark_task_success]
-        Y -->|failure| AA[mark_task_failure]
-        Z --> AB[(lifecycle.status=success\nreflect feedback)]
-        AA --> AC[(lifecycle.status=failure\nreflect feedback)]
-
-        N --> AD[to_task_graph_projection]
-        E --> AD
-        N --> AE[snapshot]
-        E --> AE
-        AB --> AE
-        AC --> AE
-    end
-
-    AD --> AF[type_define.Graph\ncompatibility only]
-    AE --> AG[runtime_dual_dag_snapshot.json]
-```
-
-## Runtime Task Node Schema
-
-Each runtime task is represented as a Dual-DAG node. The task graph view is rebuilt from these nodes, so this schema is the authoritative state shape for runtime task lifecycle.
+## Runtime Boundary
 
 ```mermaid
 flowchart LR
-    subgraph P[Predecessor RuntimeTaskNode]
-        P1["node_id = runtime:task:&lt;id&gt;"]
-        P2["node_type = runtime_task"]
-        P3["content: description, metadata, milestones, reflect"]
-        P4["lifecycle: status, candidate_agents, assigned_agents, required_agent_count, available"]
-        P5["provenance.source"]
+    subgraph TaskRuntime[Implemented Runtime Authority]
+        RTS[RuntimeTaskDAGStore]
+        RTS --> T[runtime_task nodes]
+        RTS --> E[precedes_task edges]
+        RTS --> L[lifecycle: unknown / running / success / failure]
+        RTS --> A[candidate_agents / active_agents / last_assigned_agents]
     end
 
-    subgraph E[PrecedesTaskEdge]
-        E1["source_id"]
-        E2["target_id"]
-        E3["edge_type = precedes_task"]
-        E4["metadata.source"]
+    subgraph Projection[Compatibility Projection]
+        GP[type_define.Graph]
+        TK[type_define.Task]
+        GP --> TK
     end
 
-    subgraph S[Successor RuntimeTaskNode]
-        S1["node_id = runtime:task:&lt;id&gt;"]
-        S2["same content / lifecycle shape"]
+    subgraph Analysis[Public Analysis Artifacts]
+        MDA[dual_dag_artifact.json]
+        DSS[decision_support.json]
     end
 
-    P --> E --> S
+    subgraph Future[Not Implemented As Minecraft Runtime Authority]
+        ED[Epistemic DAG runtime store]
+        AD[Action Candidate DAG runtime store]
+    end
+
+    RTS -. projection .-> GP
+    GP -. compatibility .-> MDA
+    MDA --> DSS
 ```
 
-Status values used by the runtime task store:
+## Runnable Path
 
-- `unknown`: created but not yet assigned or completed.
-- `running`: selected by the controller and assigned to one or more agents.
-- `success`: completed successfully; downstream dependencies may become runnable.
-- `failure`: terminal failure; the overall terminal state becomes failure.
-
-## Dependency And Runnable Semantics
-
-`precedes_task` means the target task depends on the source task. A task is runnable only when it is still `unknown`, all transitive predecessors are successful, and enough free agents match the candidate set.
-
-```mermaid
-flowchart LR
-    subgraph Dependency[DAG Dependency Semantics]
-        T1[Task A\nstatus=success] -->|precedes_task| T2[Task B\nstatus=unknown]
-        T2 -->|precedes_task| T3[Task C\nstatus=unknown]
-    end
-
-    T2 --> D1[direct_predecessor_ids\nA]
-    T3 --> D2[direct_predecessor_ids\nB]
-    T3 --> D3[all_predecessor_ids\nB, A]
-
-    D1 --> R1{B runnable?}
-    R1 -->|A success| YES[yes, if agents available]
-
-    D3 --> R2{C runnable?}
-    R2 -->|B still unknown| NO[no, blocked by unfinished predecessor]
-```
-
-Runnable-task filtering follows this decision order:
-
-```mermaid
-flowchart TD
-    A[Task from query_open_tasks] --> B{status == unknown?}
-    B -->|no| X[not runnable]
-    B -->|yes| C{unfinished transitive predecessors?}
-    C -->|yes| X
-    C -->|no| D{free_agent_names provided?}
-    D -->|no| Y[runnable]
-    D -->|yes| E{candidate/free intersection\n>= required_agent_count?}
-    E -->|yes| Y
-    E -->|no| X
-```
-
-## Lifecycle Write-Back Loop
-
-The controller does not mutate the compatibility graph as an authority. It writes lifecycle changes through `TaskManager`, which updates Dual-DAG and then rebuilds `TaskManager.graph` as a projection.
+Runnable-task filtering is centralized in the runtime task DAG store. The controller supplies current free agents, then applies only policy ordering and final assignment validation.
 
 ```mermaid
 sequenceDiagram
     participant GC as GlobalController
     participant TM as TaskManager
-    participant DD as DualDAGTaskStore
-    participant GP as Task Graph Projection
-    participant AG as Agent / Env
+    participant RTS as RuntimeTaskDAGStore
+    participant POL as Task Selection Policy
+    participant AG as BaseAgent / Env
 
-    GC->>TM: query_subtask_list()
-    TM->>DD: query_open_tasks() / query_runnable_tasks()
-    DD-->>TM: projected Task candidates
-    TM-->>GC: candidate tasks
-
+    GC->>GC: compute free_agent_names
+    GC->>TM: query_runnable_subtasks(free_agent_names)
+    TM->>RTS: query_runnable_tasks(free_agent_names)
+    RTS-->>TM: tasks with status unknown, dependencies satisfied, enough eligible free agents
+    TM-->>GC: runnable projected Tasks
+    GC->>POL: order runnable tasks
+    POL-->>GC: original or dual-dag ranked order
     GC->>TM: mark_task_running(task, agents)
-    TM->>DD: mark_task_running(task.id, agents)
-    DD-->>DD: lifecycle.status = running
-    TM->>DD: to_task_graph_projection()
-    DD-->>GP: regenerated Graph
-
+    TM->>RTS: lifecycle.status = running; active_agents set
     GC->>AG: execute selected task
-    AG-->>GC: success or failure feedback
-
-    alt success
-        GC->>TM: mark_task_status(task.id, success, feedback)
-        TM->>DD: mark_task_status(...)
-        DD-->>DD: lifecycle.status = success
-    else failure
-        GC->>TM: mark_task_status(task.id, failure, feedback)
-        TM->>DD: mark_task_status(...)
-        DD-->>DD: lifecycle.status = failure
-    end
-
-    TM->>DD: to_task_graph_projection()
-    DD-->>GP: regenerated compatibility Graph
+    AG-->>GC: success / failure feedback
+    GC->>TM: mark_task_status(task.id, success/failure, feedback)
+    TM->>RTS: terminal status; active_agents cleared; last_assigned_agents preserved
 ```
 
-## Snapshot And Projection Boundary
+Runnable conditions:
 
-Dual-DAG emits the canonical runtime snapshot. The legacy graph snapshot is derived and should be interpreted as a compatibility artifact.
+- `status == unknown`.
+- All transitive predecessors are `success`.
+- `candidate_agents` and free agents overlap by at least `required_agent_count`.
+- If `candidate_agents` is empty, all current free agents are candidates.
+
+## Runtime Task Node Schema
+
+```mermaid
+flowchart LR
+    subgraph Node[RuntimeTaskNode]
+        N1["node_id = runtime:task:&lt;id&gt;"]
+        N2["node_type = runtime_task"]
+        N3["content: description, metadata, milestones, reflect"]
+        N4["lifecycle: status, candidate_agents, active_agents, last_assigned_agents, required_agent_count"]
+        N5["derived: dependency_ready, blocked_by_tasks"]
+    end
+
+    subgraph Edge[PrecedesTaskEdge]
+        E1[source_id]
+        E2[target_id]
+        E3[edge_type = precedes_task]
+    end
+
+    Node --> Edge --> Node
+```
+
+`available` is not stored as canonical lifecycle state. It is derived from task status, predecessor status, free agents, candidates, and required agent count.
+
+## Artifact Boundary
 
 ```mermaid
 flowchart TB
-    subgraph Canonical[Canonical]
-        N[(runtime_task nodes)]
-        E[(precedes_task edges)]
-        L[(lifecycle fields)]
-    end
-
-    N --> S[snapshot]
-    E --> S
-    L --> S
-    S --> R[runtime_dual_dag_snapshot.json\nsource_of_truth=dual_dag]
-
-    N -.-> P[to_task_graph_projection]
-    E -.-> P
-    L -. status copied .-> P
-    P -.-> G[task_graph_snapshot.json\ncompatibility projection]
+    RTS[RuntimeTaskDAGStore] --> RDS[runtime_dual_dag_snapshot.json\nsource_of_truth=runtime_task_dag\nsnapshot_source=config_fixture or real_runtime]
+    RTS -. projection .-> GP[type_define.Graph]
+    GP --> TGS[task_graph_snapshot.json\ncompatibility projection]
+    LOG[action_log.json] --> MDA[dual_dag_artifact.json\npublic task/action/observation/claim analysis]
+    MDA --> DSS[decision_support.json\nread-only recommendation context]
 ```
+
+`runtime_dual_dag_snapshot.json` keeps its filename for compatibility, but it should be read as the runtime task subgraph snapshot, not as a complete Dual-DAG runtime snapshot.
 
 ## Before / After
 
@@ -277,65 +146,53 @@ flowchart TB
         B3[GlobalController]
         B4[Dual-DAG Artifact / Ranking]
         B5[Task Graph Artifacts]
-
-        B1 --> B2
-        B2 --> B3
-        B3 --> B2
+        B1 --> B2 --> B3 --> B2
         B2 -. read-only projection .-> B4
         B2 --> B5
     end
 
-    subgraph After[After: Dual-DAG As Source Of Truth]
+    subgraph After[After: Runtime Task DAG As Source Of Truth]
         A1[TaskManager Decomposition]
-        A2[DualDAGTaskStore]
-        A3[GlobalController]
-        A4[Task Graph Projection]
-        A5[Runtime Dual-DAG Artifact]
-        A6[Compatibility Task Graph Artifact]
-
-        A1 --> A2
-        A2 --> A3
-        A3 --> A2
-        A2 --> A4
-        A2 --> A5
-        A4 --> A6
+        A2[RuntimeTaskDAGStore]
+        A3[Runnable Query]
+        A4[Task Selection Policy]
+        A5[GlobalController]
+        A6[Task Graph Projection]
+        A7[Runtime Task DAG Snapshot]
+        A1 --> A2 --> A3 --> A4 --> A5
+        A5 --> A2
+        A2 -.-> A6
+        A2 --> A7
     end
 ```
 
 ## Paper Figure Layout
 
-Use this layout for a paper or slide figure. It is intentionally not tied to Mermaid syntax, so it can be redrawn in TikZ, SVG, Illustrator, or Keynote.
-
 ```text
 +--------------------------------------------------------------------------------+
 |                                 Proposed Method                                |
 +--------------------------------------------------------------------------------+
-| Input                                                                          |
-|   User Goal / Minecraft Config                                                 |
-|        |                                                                       |
+| Input: User Goal / Minecraft Config                                            |
 |        v                                                                       |
-| Task Generation                                                                |
-|   TaskManager + LLM Decomposition                                              |
-|        |                                                                       |
+| TaskManager + LLM Decomposition                                                |
 |        v                                                                       |
-| Canonical Runtime State                                                        |
-|   DualDAGTaskStore                                                             |
-|     - runtime_task nodes                                                       |
-|     - precedes_task edges                                                      |
-|     - lifecycle state                                                          |
-|     - agent assignment metadata                                                |
+| RuntimeTaskDAGStore                                                            |
+|   - runtime_task nodes                                                         |
+|   - precedes_task edges                                                        |
+|   - lifecycle status                                                           |
+|   - candidate / active / last assigned agents                                  |
 |        |                              |                                        |
 |        v                              v                                        |
-| Controller Loop                  Compatibility Projection                      |
-|   GlobalController                type_define.Graph / Task                     |
-|   BaseAgent                       task_graph_snapshot.json                     |
-|   Minecraft Tools                                                             |
-|        |                                                                       |
+| Runnable Query + Policy           Compatibility Projection                     |
+|   original / dual-dag              type_define.Graph / Task                    |
+|        |                           task_graph_snapshot.json                    |
 |        v                                                                       |
-| Evidence / Artifacts                                                           |
+| GlobalController -> BaseAgent -> Minecraft Tools                               |
+|        v                                                                       |
+| Public Analysis Artifacts                                                      |
 |   action_log.json                                                              |
-|   runtime_dual_dag_snapshot.json                                               |
-|   dual_dag_artifact.json                                                       |
+|   runtime_dual_dag_snapshot.json (runtime task subgraph)                       |
+|   dual_dag_artifact.json (analysis projection)                                 |
 |   decision_support.json                                                        |
 |   summary.json / metrics.json                                                  |
 +--------------------------------------------------------------------------------+
@@ -343,49 +200,18 @@ Use this layout for a paper or slide figure. It is intentionally not tied to Mer
 
 Suggested visual encoding:
 
-- Use a thick border around `DualDAGTaskStore` to indicate source-of-truth ownership.
-- Use dashed arrows from `DualDAGTaskStore` to `Task Graph Projection` to show derived compatibility state.
-- Use solid arrows for lifecycle writes from `GlobalController` back to `DualDAGTaskStore`.
+- Use a thick border around `RuntimeTaskDAGStore` to indicate task dependency/lifecycle source-of-truth ownership.
+- Use dashed arrows from `RuntimeTaskDAGStore` to `Task Graph Projection` to show derived compatibility state.
+- Use solid arrows for lifecycle writes from `GlobalController` through `TaskManager` back to `RuntimeTaskDAGStore`.
 - Use a muted color for legacy `Task` / `Graph` APIs.
 - Use a separate artifact lane at the bottom for reproducibility outputs.
 
-## TikZ Sketch
-
-The following is a compact TikZ skeleton that can be pasted into a LaTeX paper and styled further.
-
-```tex
-\begin{tikzpicture}[
-  node distance=1.2cm and 1.5cm,
-  box/.style={draw, rounded corners, align=center, minimum width=3.2cm, minimum height=0.9cm},
-  source/.style={box, very thick, fill=blue!8},
-  compat/.style={box, dashed, fill=gray!8},
-  artifact/.style={box, fill=green!8},
-  arrow/.style={->, thick}
-]
-\node[box] (input) {User Goal /\\Minecraft Config};
-\node[box, below=of input] (tm) {TaskManager +\\LLM Decomposition};
-\node[source, below=of tm] (dag) {DualDAGTaskStore\\Source of Truth};
-\node[box, below left=of dag] (ctrl) {GlobalController\\BaseAgent};
-\node[compat, below right=of dag] (graph) {Task Graph\\Projection};
-\node[box, below=of ctrl] (env) {VillagerBench /\\Minecraft Tools};
-\node[artifact, below=of dag, yshift=-2.4cm] (artifacts) {runtime\_dual\_dag\_snapshot.json\\dual\_dag\_artifact.json\\summary / metrics};
-
-\draw[arrow] (input) -- (tm);
-\draw[arrow] (tm) -- (dag);
-\draw[arrow] (dag) -- (ctrl);
-\draw[arrow] (ctrl) -- (env);
-\draw[arrow] (env.west) .. controls +(-1.2,-0.2) and +(-1.2,0.2) .. (ctrl.west);
-\draw[arrow] (ctrl) -- node[left]{lifecycle writes} (dag);
-\draw[arrow, dashed] (dag) -- (graph);
-\draw[arrow] (dag) -- (artifacts);
-\draw[arrow, dashed] (graph) -- (artifacts);
-\end{tikzpicture}
-```
-
 ## Current Guarantees
 
-- `DualDAGTaskStore` owns runtime task lifecycle and dependency state.
-- `TaskManager.graph` is regenerated from Dual-DAG state.
-- `GlobalController` writes task running/success/failure state through `TaskManager` into Dual-DAG.
-- Minecraft benchmark runs always emit `runtime_dual_dag_snapshot.json`.
+- `RuntimeTaskDAGStore` owns runtime task lifecycle and dependency state.
+- `TaskManager.graph` is regenerated from runtime task DAG state.
+- `GlobalController` obtains runnable tasks through `TaskManager.query_runnable_subtasks()` and writes task running/success/failure state through `TaskManager` into the runtime task DAG.
+- Minecraft benchmark runs always emit `runtime_dual_dag_snapshot.json` with `snapshot_source`.
 - `task_graph_snapshot.json` is retained as a compatibility projection.
+- Minecraft `dual_dag_artifact.json` is a public analysis artifact over tasks, actions, observations, and claims. It is not the runtime source of truth.
+- Epistemic DAG runtime state and Action Candidate DAG runtime state are future implementation targets for Minecraft.
