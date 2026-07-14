@@ -12,7 +12,7 @@ from env.minecraft_dual_dag import (
     rank_minecraft_runtime_tasks,
     sanitize_public_value,
 )
-from pipeline.dual_dag_task_store import DualDAGTaskStore
+from pipeline.dual_dag_task_store import RuntimeTaskDAGStore
 from type_define.graph import Graph, Task
 
 
@@ -99,7 +99,8 @@ def run_minecraft_experiment(
         "task_idx": launch_config.get("task_idx"),
         "dual_dag_runtime_enabled": True,
         "dual_dag_task_selection_enabled": True,
-        "source_of_truth": "dual_dag",
+        "runtime_task_store": "runtime_task_dag",
+        "source_of_truth": "runtime_task_dag",
         "execute_real_environment": bool(execute),
         "execute_timeout_seconds": execute_timeout_seconds,
         "mutates_runtime": False,
@@ -290,7 +291,7 @@ def _execute_real_runtime_bounded(
         signal.signal(signal.SIGALRM, previous_handler)
 
 
-def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, DualDAGTaskStore]:
+def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, RuntimeTaskDAGStore]:
     task_configs = config.get("smoke_tasks")
     if isinstance(task_configs, list) and task_configs:
         tasks = [_task_from_config(config, task_config) for task_config in task_configs]
@@ -298,7 +299,7 @@ def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, DualDAGTas
         tasks = [_task_from_config(config, {
             "description": config.get("task_goal", config.get("task_name", "Minecraft task")),
         })]
-    task_store = DualDAGTaskStore()
+    task_store = RuntimeTaskDAGStore()
     task_store.load_tasks_from_decomposition(tasks)
     graph = task_store.to_task_graph_projection()
     return tasks, graph, task_store

@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.getcwd())
 from type_define.graph import Graph, GraphState, Task
-from pipeline.dual_dag_task_store import DualDAGTaskStore
+from pipeline.dual_dag_task_store import RuntimeTaskDAGStore
 from pipeline.task_prompt import *
 from pipeline.data_manager import DataManager
 from pipeline.retriever import Retriever
@@ -35,8 +35,10 @@ class TaskManager:
     def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False):
         self.llm = None
         self.dm:DataManager = None
-        self.dual_dag_store = DualDAGTaskStore()
-        self.graph:Graph = self.dual_dag_store.to_task_graph_projection()
+        self.runtime_task_store = RuntimeTaskDAGStore()
+        # Deprecated compatibility attribute. Use runtime_task_store.
+        self.dual_dag_store = self.runtime_task_store
+        self.graph:Graph = self.runtime_task_store.to_task_graph_projection()
         self.logger = init_logger("TaskManager", level= logging.WARNING ,dump=True, silent=silent)
         self.status = TaskManager.idle
         self.agent_describe = None
@@ -150,22 +152,22 @@ class TaskManager:
         return graph
 
     def set_task_list_from_decomposition(self, task_list: list[Task]) -> None:
-        self.dual_dag_store.load_tasks_from_decomposition(task_list)
+        self.runtime_task_store.load_tasks_from_decomposition(task_list)
         self.sync_graph_from_dual_dag()
 
     def sync_dual_dag_from_graph(self) -> None:
-        self.dual_dag_store.load_tasks_from_graph(self.graph)
+        self.runtime_task_store.load_tasks_from_graph(self.graph)
         self.sync_graph_from_dual_dag()
 
     def sync_graph_from_dual_dag(self) -> None:
-        self.graph = self.dual_dag_store.to_task_graph_projection()
+        self.graph = self.runtime_task_store.to_task_graph_projection()
 
     def mark_task_running(self, task: Task, assigned_agents: list[str]) -> None:
-        self.dual_dag_store.mark_task_running(task.id, assigned_agents=assigned_agents)
+        self.runtime_task_store.mark_task_running(task.id, assigned_agents=assigned_agents)
         self.sync_graph_from_dual_dag()
 
     def mark_task_status(self, task_id: str, status: str, feedback=None) -> None:
-        self.dual_dag_store.mark_task_status(task_id, status, feedback=feedback)
+        self.runtime_task_store.mark_task_status(task_id, status, feedback=feedback)
         self.sync_graph_from_dual_dag()
 
     def update_history(self, system_prompt, user_prompt, response):
@@ -277,7 +279,7 @@ class TaskManager:
             time.sleep(TASK_MANAGER_WAIT_TIME)
 
 
-        task_list = self.dual_dag_store.query_open_tasks()
+        task_list = self.runtime_task_store.query_open_tasks()
         self.sync_graph_from_dual_dag()
         return task_list
 
@@ -399,7 +401,7 @@ class TaskManager:
         self.add_task_to_trace()
 
         # update the task status according to the feedback
-        if self.dual_dag_store.terminal_state() == GraphState.RUNNING:
+        if self.runtime_task_store.terminal_state() == GraphState.RUNNING:
             self.status = TaskManager.idle
             return
         

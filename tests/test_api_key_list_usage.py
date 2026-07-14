@@ -19,4 +19,4 @@ def test_runtime_code_does_not_directly_read_api_key_list():
 
 def _is_excluded(path: Path) -> bool:
     parts = set(path.relative_to(REPO_ROOT).parts)
-    return bool({".git", ".worktrees", "external", "__pycache__"} & parts)
+    return bool({".git", ".venv", "venv", ".worktrees", "external", "__pycache__"} & parts)

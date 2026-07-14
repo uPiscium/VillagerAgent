@@ -6,12 +6,16 @@ from benchmarks.craft.dual_dag.schema import DUAL_DAG_SCHEMA_VERSION, dual_dag_s
 from type_define.graph import Graph, GraphState, Task
 
 
-class DualDAGTaskStore:
-    """Canonical Dual-DAG store for runtime task lifecycle state.
+class TaskDependencyError(ValueError):
+    """Raised when runtime task dependencies cannot form a valid DAG."""
 
-    `Task` and `Graph` remain compatibility projections. The canonical task
-    status, dependency, candidate, and assignment state lives in `nodes` and
-    `edges`.
+
+class RuntimeTaskDAGStore:
+    """Canonical store for runtime task dependency and lifecycle state.
+
+    This store owns only the runtime task subgraph: task status, dependency,
+    candidate, and assignment metadata. Epistemic and action-candidate DAG
+    runtime state is outside this class.
     """
 
     def __init__(self) -> None:
@@ -27,11 +31,11 @@ class DualDAGTaskStore:
             self.upsert_task(task)
         for task_index, task in enumerate(tasks):
             target_id = self.task_node_id(task)
-            for predecessor_index in getattr(task, "_pre_idxs", []) or []:
-                if 0 < predecessor_index <= len(tasks):
-                    self.add_task_dependency(self.task_node_id(tasks[predecessor_index - 1]), target_id)
+            for predecessor_index in self._normalized_predecessor_indexes(task, task_index, len(tasks)):
+                self.add_task_dependency(self.task_node_id(tasks[predecessor_index - 1]), target_id)
             if not getattr(task, "_pre_idxs", []) and task_index > 0:
                 self.add_task_dependency(self.task_node_id(tasks[task_index - 1]), target_id)
+        self._validate_acyclic()
 
     def load_tasks_from_graph(self, graph: Graph) -> None:
         self.nodes = {}
@@ -41,6 +45,7 @@ class DualDAGTaskStore:
             self.upsert_task(task)
         for predecessor, task in graph.edge:
             self.add_task_dependency(self.task_node_id(predecessor), self.task_node_id(task))
+        self._validate_acyclic()
 
     def upsert_task(self, task: Task) -> str:
         node_id = self.task_node_id(task)
@@ -68,11 +73,16 @@ class DualDAGTaskStore:
         return node_id
 
     def add_task_dependency(self, predecessor_id: str, task_id: str) -> None:
+        if predecessor_id == task_id:
+            raise TaskDependencyError(f"task dependency self-loop detected: {predecessor_id}")
+        missing = [node_id for node_id in (predecessor_id, task_id) if node_id not in self.nodes]
+        if missing:
+            raise TaskDependencyError(f"task dependency references unknown node(s): {', '.join(missing)}")
         edge = {
             "source_id": predecessor_id,
             "target_id": task_id,
             "edge_type": "precedes_task",
-            "metadata": {"source": "dual_dag_task_store"},
+            "metadata": {"source": "runtime_task_dag_store"},
         }
         if edge not in self.edges:
             self.edges.append(edge)
@@ -158,8 +168,8 @@ class DualDAGTaskStore:
     def snapshot(self) -> dict:
         return {
             "schema_version": DUAL_DAG_SCHEMA_VERSION,
-            "runtime": "dual_dag_task_store",
-            "source_of_truth": "dual_dag",
+            "runtime": "runtime_task_dag_store",
+            "source_of_truth": "runtime_task_dag",
             "summary": {
                 "task_node_count": len(self._task_order),
                 "task_edge_count": sum(1 for edge in self.edges if edge.get("edge_type") == "precedes_task"),
@@ -187,12 +197,66 @@ class DualDAGTaskStore:
             if edge.get("edge_type") == "precedes_task" and edge.get("target_id") == node_id
         ]
 
-    def all_predecessor_ids(self, node_id: str) -> list[str]:
+    def all_predecessor_ids(self, node_id: str, *, visited: set[str] | None = None) -> list[str]:
+        visited = set() if visited is None else visited
+        if node_id in visited:
+            raise TaskDependencyError(f"task dependency cycle detected at {node_id}")
+        visited.add(node_id)
         predecessor_ids = []
         for predecessor_id in self.direct_predecessor_ids(node_id):
             predecessor_ids.append(predecessor_id)
-            predecessor_ids.extend(self.all_predecessor_ids(predecessor_id))
+            predecessor_ids.extend(self.all_predecessor_ids(predecessor_id, visited=set(visited)))
         return predecessor_ids
+
+    def _normalized_predecessor_indexes(self, task: Task, task_index: int, task_count: int) -> list[int]:
+        indexes = []
+        seen = set()
+        for predecessor_index in getattr(task, "_pre_idxs", []) or []:
+            try:
+                normalized = int(predecessor_index)
+            except (TypeError, ValueError) as exc:
+                raise TaskDependencyError(
+                    f'task "{task.description}" references non-integer predecessor index {predecessor_index!r}'
+                ) from exc
+            if normalized <= 0:
+                raise TaskDependencyError(
+                    f'task "{task.description}" references predecessor index {normalized}, but indexes are 1-based'
+                )
+            if normalized > task_count:
+                raise TaskDependencyError(
+                    f'task "{task.description}" references predecessor index {normalized}, but only {task_count} tasks exist'
+                )
+            if normalized == task_index + 1:
+                raise TaskDependencyError(f'task dependency self-loop detected: "{task.description}"')
+            if normalized not in seen:
+                indexes.append(normalized)
+                seen.add(normalized)
+        return indexes
+
+    def _validate_acyclic(self) -> None:
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(node_id: str, path: list[str]) -> None:
+            if node_id in visiting:
+                cycle_start = path.index(node_id) if node_id in path else 0
+                cycle = path[cycle_start:]
+                descriptions = [self.nodes[item]["content"].get("description", item) for item in cycle]
+                raise TaskDependencyError(f"task dependency cycle detected: {' -> '.join(descriptions)}")
+            if node_id in visited:
+                return
+            visiting.add(node_id)
+            for edge in self.edges:
+                if edge.get("edge_type") == "precedes_task" and edge.get("source_id") == node_id:
+                    target_id = edge.get("target_id")
+                    if target_id not in self.nodes:
+                        raise TaskDependencyError(f"task dependency references unknown node: {target_id}")
+                    visit(target_id, path + [target_id])
+            visiting.remove(node_id)
+            visited.add(node_id)
+
+        for node_id in self._task_order:
+            visit(node_id, [node_id])
 
     def _set_task_lifecycle(self, task_id: str, *, status: str, assigned_agents: list[str] | None = None, reflect=None) -> None:
         node_id = self.task_node_id(task_id)
@@ -220,3 +284,7 @@ class DualDAGTaskStore:
 
     def _status(self, node_id: str) -> str:
         return self.nodes[node_id].get("lifecycle", {}).get("status", Task.unknown)
+
+
+# Deprecated compatibility alias. Use RuntimeTaskDAGStore.
+DualDAGTaskStore = RuntimeTaskDAGStore

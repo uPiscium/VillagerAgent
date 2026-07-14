@@ -36,7 +36,8 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert summary["output_dir"] == str(output_dir)
     assert summary["dual_dag_runtime_enabled"] is True
     assert summary["dual_dag_task_selection_enabled"] is True
-    assert summary["source_of_truth"] == "dual_dag"
+    assert summary["runtime_task_store"] == "runtime_task_dag"
+    assert summary["source_of_truth"] == "runtime_task_dag"
     assert summary["mutates_runtime"] is False
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
@@ -57,7 +58,7 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert provenance["benchmark"] == "minecraft"
     assert provenance["schema_version"] == "1.0.0"
     runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
-    assert runtime_snapshot["source_of_truth"] == "dual_dag"
+    assert runtime_snapshot["source_of_truth"] == "runtime_task_dag"
     assert runtime_snapshot["nodes"][0]["node_type"] == "runtime_task"
 
 
@@ -222,7 +223,7 @@ def test_minecraft_experiment_records_always_on_task_reordering(tmp_path):
 
     assert disabled["dual_dag_runtime_enabled"] is True
     assert disabled["dual_dag_task_selection_enabled"] is True
-    assert disabled["source_of_truth"] == "dual_dag"
+    assert disabled["source_of_truth"] == "runtime_task_dag"
     assert disabled["ranked_task_order"][0]["description"] == "Find chest"
     assert enabled["ranked_task_order"][0]["description"] == "Find chest"
     assert disabled["task_order"] != disabled["ranked_task_order"]

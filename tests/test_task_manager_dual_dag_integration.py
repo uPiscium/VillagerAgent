@@ -9,7 +9,7 @@ def test_task_manager_uses_dual_dag_store_as_task_source_of_truth():
 
     manager.set_task_list_from_decomposition([task_a, task_b])
 
-    assert manager.dual_dag_store.snapshot()["source_of_truth"] == "dual_dag"
+    assert manager.runtime_task_store.snapshot()["source_of_truth"] == "runtime_task_dag"
     assert [(start.description, end.description) for start, end in manager.graph.edge] == [("A", "B")]
 
     manager.mark_task_running(task_a, ["Alice"])
