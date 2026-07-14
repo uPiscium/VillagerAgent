@@ -85,6 +85,7 @@ sequenceDiagram
     TM-->>GC: runnable projected Tasks
     GC->>POL: order runnable tasks
     POL-->>GC: original or dual-dag ranked order
+    GC->>GC: select exactly required_agent_count eligible agents and reserve them
     GC->>TM: mark_task_running(task, agents)
     TM->>RTS: lifecycle.status = running; active_agents set
     GC->>AG: execute selected task
@@ -99,6 +100,8 @@ Runnable conditions:
 - All transitive predecessors are `success`.
 - `candidate_agents` and free agents overlap by at least `required_agent_count`.
 - If `candidate_agents` is empty, all current free agents are candidates.
+- The controller selects only `required_agent_count` agents; extra candidates do not prevent assignment.
+- Accepted assignments update controller state immediately, allowing later independent tasks to use only the free agents that remain in the same scheduler iteration.
 
 ## Runtime Task Node Schema
 

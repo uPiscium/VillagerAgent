@@ -50,7 +50,7 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 1. `VillagerBench` starts the Minecraft bridge and exposes agent tools.
 2. `DataManager` stores and summarizes environment/agent/history information.
 3. `TaskManager` initializes the top-level task, decomposes it, and writes canonical task dependency/lifecycle state to `RuntimeTaskDAGStore`.
-4. `GlobalController` asks `TaskManager.query_runnable_subtasks()` for store-filtered runnable tasks, applies the configured selection policy, assigns agents, and writes lifecycle updates back to the runtime task DAG.
+4. `GlobalController` asks `TaskManager.query_runnable_subtasks()` for store-filtered runnable tasks, applies the configured selection policy, assigns exactly each task's required number of free candidate agents, and writes lifecycle updates back to the runtime task DAG. Independent tasks may be assigned to remaining free agents in the same scheduler iteration.
 5. `BaseAgent` queries state through `DataManager`, calls the LLM, executes Minecraft tools, and reflects on task success.
 6. Benchmark harnesses write normalized artifacts: `summary.json`, `metrics.json`, `action_log.json`, `task_graph_snapshot.json`, `dual_dag_artifact.json`, and `decision_support.json`.
 

@@ -34,11 +34,12 @@ This is the current Ollama-first flow used by `start_with_config.py` and the Min
 3. Compute free agent names.
 4. Request runnable tasks through `TaskManager.query_runnable_subtasks(free_agent_names)`, which delegates runnable filtering to `RuntimeTaskDAGStore`.
 5. Order runnable tasks with `task_selection_policy` (`dual-dag` or `original`).
-6. Validate that selected agents exist, are idle, and are candidates for the task.
-7. Mark tasks `running` and submit `BaseAgent.step()` to the worker pool.
-8. Collect completed futures.
-9. Reflect on task success through `BaseAgent.reflect()`.
-10. Write feedback back to `TaskManager.feedback_task()`.
+6. For each runnable task in policy order, select exactly `required_agent_count` free candidate agents. Each accepted assignment reserves its agents immediately, so later tasks in the same iteration cannot reuse them.
+7. Validate that the task and agents exist, every agent is idle and eligible, agent names are unique, and the validated count exactly matches `required_agent_count`.
+8. Mark tasks `running` and submit `BaseAgent.step()` to the worker pool. Other independent tasks can be assigned in the same scheduler iteration while enough eligible agents remain.
+9. Collect completed futures.
+10. Reflect on task success through `BaseAgent.reflect()`.
+11. Write feedback back to `TaskManager.feedback_task()`.
 
 ## Agent Step
 
