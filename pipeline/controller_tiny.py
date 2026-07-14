@@ -125,16 +125,18 @@ class GlobalController:
         for assignment in validated_assignments:
             task_instance = assignment["task_instance"]
             agent_instances = assignment["agent_instances"]
+            agent_names = [agent.name for agent in agent_instances]
 
             for agent in agent_instances:
                 self.assignment[agent.name] = task_instance.id
                 task_instance._agent.append(agent.name)
 
             with self.task_list_lock:
+                self.task_manager.mark_task_running(task_instance, agent_names)
                 task_instance.status = Task.running
                 self.task_queue.append((agent_instances[0], task_instance))
         
-            name_list = ", ".join([agent.name for agent in agent_instances])
+            name_list = ", ".join(agent_names)
             self.logger.info(f"Agent(s) {name_list} assigned to do task {task_instance.description}")
 
             # agent_env_dict = self.env.get_init_state()
@@ -170,27 +172,7 @@ class GlobalController:
                     # time.sleep(self.query_interval)
 
     def set_task_status(self, task_id, status, feedback):
-        for task in self.task_manager.graph.vertex:
-            if task.id == task_id:
-                if task.status == Task.success and status == Task.failure:
-                    if status == Task.failure:
-                        task.status = status
-                else:
-                    task.status = status
-
-                if type(feedback) == dict and type(task.reflect) == None:
-                    task.reflect = feedback
-                elif type(feedback) == str and type(task.reflect) == None:
-                    task.reflect = feedback
-                elif type(feedback) == dict and type(task.reflect) == dict:
-                    task.reflect = [task.reflect, feedback]
-                elif type(feedback) == str and type(task.reflect) == str:
-                    task.reflect = [task.reflect, feedback]
-                elif type(task.reflect) == list:
-                    task.reflect.append(feedback)
-                else:
-                    task.reflect = feedback
-                break
+        self.task_manager.mark_task_status(task_id, status, feedback)
 
     def get_task_by_id(self, task_id):
         for task in self.task_manager.graph.vertex:

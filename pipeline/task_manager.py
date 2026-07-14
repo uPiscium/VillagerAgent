@@ -1,7 +1,8 @@
 import sys
 import os
 sys.path.append(os.getcwd())
-from type_define.graph import Graph, Task
+from type_define.graph import Graph, GraphState, Task
+from pipeline.dual_dag_task_store import DualDAGTaskStore
 from pipeline.task_prompt import *
 from pipeline.data_manager import DataManager
 from pipeline.retriever import Retriever
@@ -34,7 +35,8 @@ class TaskManager:
     def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False):
         self.llm = None
         self.dm:DataManager = None
-        self.graph:Graph = None
+        self.dual_dag_store = DualDAGTaskStore()
+        self.graph:Graph = self.dual_dag_store.to_task_graph_projection()
         self.logger = init_logger("TaskManager", level= logging.WARNING ,dump=True, silent=silent)
         self.status = TaskManager.idle
         self.agent_describe = None
@@ -147,6 +149,25 @@ class TaskManager:
                 graph.add_edge(task_list[t_id-1], task)
         return graph
 
+    def set_task_list_from_decomposition(self, task_list: list[Task]) -> None:
+        self.dual_dag_store.load_tasks_from_decomposition(task_list)
+        self.sync_graph_from_dual_dag()
+
+    def sync_dual_dag_from_graph(self) -> None:
+        self.dual_dag_store.load_tasks_from_graph(self.graph)
+        self.sync_graph_from_dual_dag()
+
+    def sync_graph_from_dual_dag(self) -> None:
+        self.graph = self.dual_dag_store.to_task_graph_projection()
+
+    def mark_task_running(self, task: Task, assigned_agents: list[str]) -> None:
+        self.dual_dag_store.mark_task_running(task.id, assigned_agents=assigned_agents)
+        self.sync_graph_from_dual_dag()
+
+    def mark_task_status(self, task_id: str, status: str, feedback=None) -> None:
+        self.dual_dag_store.mark_task_status(task_id, status, feedback=feedback)
+        self.sync_graph_from_dual_dag()
+
     def update_history(self, system_prompt, user_prompt, response):
         if type(user_prompt) == str:
             user_prompt = [user_prompt]
@@ -232,7 +253,7 @@ class TaskManager:
             subtask._pre_idxs = [int(idx) for idx in subtask_data["required subtasks"]]
             subtask_list.append(subtask)
 
-        self.graph = self.query_graph(subtask_list)
+        self.set_task_list_from_decomposition(subtask_list)
 
         time_str = time.strftime("%Y_%m_%d_%H_%M_%S_graph", time.localtime())
         
@@ -256,7 +277,9 @@ class TaskManager:
             time.sleep(TASK_MANAGER_WAIT_TIME)
 
 
-        return self.graph.get_open_task_list()  
+        task_list = self.dual_dag_store.query_open_tasks()
+        self.sync_graph_from_dual_dag()
+        return task_list
 
 
     def get_graph_strategy(self, task:Task) -> {str: Union[str, int, list]}:
@@ -376,7 +399,7 @@ class TaskManager:
         self.add_task_to_trace()
 
         # update the task status according to the feedback
-        if self.graph.check_graph_completion() == False:
+        if self.dual_dag_store.terminal_state() == GraphState.RUNNING:
             self.status = TaskManager.idle
             return
         
@@ -444,6 +467,8 @@ class TaskManager:
             self.graph.remove_node_merge_edge(task)
         else:
             self.logger.error("Task status error.")
+
+        self.sync_dual_dag_from_graph()
         
         time_str = time.strftime("%Y_%m_%d_%H_%M_%S_graph", time.localtime())
         
@@ -547,7 +572,7 @@ class TaskManager:
                     subtask._pre_idxs.append(idx)
             subtask_list.append(subtask)
 
-        self.graph = self.query_graph(subtask_list)
+        self.set_task_list_from_decomposition(subtask_list)
 
         time_str = time.strftime("%Y_%m_%d_%H_%M_%S_graph", time.localtime())
         

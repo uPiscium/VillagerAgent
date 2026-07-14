@@ -1,6 +1,6 @@
 # Task Graph Structure
 
-VillagerAgent represents decomposed work as a directed task graph in `type_define/graph.py`.
+VillagerAgent projects decomposed work into a directed task graph in `type_define/graph.py`. Runtime source-of-truth state lives in `pipeline.dual_dag_task_store.DualDAGTaskStore`; `Graph` is a compatibility projection.
 
 ## Task
 
@@ -17,7 +17,7 @@ VillagerAgent represents decomposed work as a directed task graph in `type_defin
 - `number`: minimum or assigned number of agents.
 - `available`: whether assignment logic can consider the task.
 - `reflect`: reflection feedback from agent execution.
-- `_pre_idxs`: LLM decomposition output for `required subtasks`. `TaskManager.query_graph()` converts these 1-based indexes to graph edges; runtime dependency truth then lives in `Graph.edge`.
+- `_pre_idxs`: LLM decomposition output for `required subtasks`. `TaskManager` converts these 1-based indexes to Dual-DAG `precedes_task` edges; `Graph.edge` mirrors that state as a projection.
 - `_agent`: agent names assigned by the controller and read by `BaseAgent` prompt construction.
 - `_summary`: task-manager summary state updated during feedback/reflection.
 - `_direct_pre_task_list`: direct unfinished predecessor tasks, computed by `Graph.get_open_task_list()` and exposed in assignment views.
@@ -26,7 +26,7 @@ VillagerAgent represents decomposed work as a directed task graph in `type_defin
 
 ## Graph
 
-`Graph` stores:
+Projected `Graph` stores:
 
 - `vertex`: list of `Task` nodes.
 - `edge`: list of `(start_task, end_task)` dependency edges. The edge means `end_task` depends on completion of `start_task`.
@@ -44,13 +44,13 @@ Core operations include:
 
 ## Construction Flow
 
-`TaskManager.init_task()` asks the LLM to decompose the user goal into subtasks. Each generated subtask becomes a `Task`. The `required subtasks` field is stored in `_pre_idxs`, then `TaskManager.query_graph()` converts those predecessor indexes into edges.
+`TaskManager.init_task()` asks the LLM to decompose the user goal into subtasks. Each generated subtask becomes a `Task` projection and a canonical Dual-DAG `runtime_task` node. The `required subtasks` field is stored in `_pre_idxs`, then `TaskManager` converts those predecessor indexes into Dual-DAG `precedes_task` edges.
 
-If a generated task has no explicit predecessor and is not the first task, `query_graph()` links it after the previous task. Explicit parallelism must be represented by explicit `required subtasks` indexes. For example, `B requires A` and `C requires A` becomes `A -> B` and `A -> C`; a missing predecessor on `C` after `B` becomes `B -> C`.
+If a generated task has no explicit predecessor and is not the first task, the Dual-DAG store links it after the previous task. Explicit parallelism must be represented by explicit `required subtasks` indexes. For example, `B requires A` and `C requires A` becomes `A -> B` and `A -> C`; a missing predecessor on `C` after `B` becomes `B -> C`.
 
 ## Runtime Semantics
 
-The controller asks `TaskManager.query_subtask_list()` for open work. A runnable task is a task with `status == unknown`, no unfinished predecessor in `predecessor_task_list`, enough free candidate agents, and `available == True`. The returned tasks are ranked or filtered, then assigned to available agents. During execution the status moves through:
+The controller asks `TaskManager.query_subtask_list()` for open work. `TaskManager` reads canonical state from `DualDAGTaskStore`, then returns projected `Task` objects. A runnable task is a task with `status == unknown`, no unfinished predecessor in `predecessor_task_list`, enough free candidate agents, and `available == True`. The returned tasks are ranked or filtered, then assigned to available agents. During execution the Dual-DAG lifecycle status moves through:
 
 ```text
 unknown -> running -> success
@@ -69,7 +69,7 @@ Terminal graph states:
 
 ## Artifacts
 
-Graph state can be written as:
+Projected graph state can be written as:
 
 - Mermaid markdown through `write_graph_to_md()` under `img/`.
 - JSON through `write_graph_to_json()` under `logs/`.
