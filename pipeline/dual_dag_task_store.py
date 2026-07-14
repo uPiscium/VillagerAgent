@@ -434,13 +434,24 @@ class RuntimeTaskDAGStore:
 
     def _snapshot_node(self, node_id: str) -> dict:
         node = deepcopy(self.nodes[node_id])
-        predecessors = self.all_predecessor_ids(node_id)
+        direct_predecessors = set(self.direct_predecessor_ids(node_id))
+        predecessors = list(dict.fromkeys(self.all_predecessor_ids(node_id)))
+        blocker_ids = [
+            predecessor_id
+            for predecessor_id in predecessors
+            if self._status(predecessor_id) != Task.success
+        ]
         node["derived"] = {
             "dependency_ready": all(self._status(predecessor_id) == Task.success for predecessor_id in predecessors),
-            "blocked_by_tasks": [
-                predecessor_id
-                for predecessor_id in predecessors
-                if self._status(predecessor_id) in (Task.unknown, Task.running)
+            "blocked_by_tasks": blocker_ids,
+            "dependency_blockers": [
+                {
+                    "task_id": predecessor_id,
+                    "description": self.nodes[predecessor_id]["content"].get("description", ""),
+                    "status": self._status(predecessor_id),
+                    "relation": "direct" if predecessor_id in direct_predecessors else "transitive",
+                }
+                for predecessor_id in blocker_ids
             ],
         }
         return node
