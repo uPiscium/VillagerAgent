@@ -203,6 +203,8 @@ Full test suite:
 just test
 ```
 
+これには common benchmark tests、CRAFT tests、C-WAH unit/mock tests、repository-level tests が含まれます。Real environment smoke tests は引き続き opt-in です。
+
 Minecraft/Ollama 関連の targeted test:
 
 ```bash
