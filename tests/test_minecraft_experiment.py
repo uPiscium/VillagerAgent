@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from benchmarks.minecraft.experiment import MinecraftExecuteTimeoutError, run_minecraft_experiment
+from benchmarks.minecraft.experiment import MinecraftExecuteTimeoutError, RUNTIME_RESULT_PATH, run_minecraft_experiment
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
 
@@ -59,6 +59,7 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert provenance["schema_version"] == "1.0.0"
     runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
     assert runtime_snapshot["source_of_truth"] == "runtime_task_dag"
+    assert runtime_snapshot["snapshot_source"] == "config_fixture"
     assert runtime_snapshot["nodes"][0]["node_type"] == "runtime_task"
 
 
@@ -317,6 +318,52 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     assert metrics["error"] == "server unavailable"
 
 
+def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def runtime_result(*args, **kwargs):
+        return _runtime_result_snapshot(status="success")
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="execute_real_snapshot",
+        execute=True,
+    )
+
+    output_dir = tmp_path / "result" / "execute_real_snapshot"
+    runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
+    assert summary["snapshot_source"] == "real_runtime"
+    assert runtime_snapshot["snapshot_source"] == "real_runtime"
+    assert runtime_snapshot["nodes"][0]["lifecycle"]["status"] == "success"
+
+
+def test_minecraft_execute_failure_uses_partial_runtime_snapshot(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def fail_with_partial(*args, **kwargs):
+        RUNTIME_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        RUNTIME_RESULT_PATH.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
+        raise RuntimeError("server unavailable")
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", fail_with_partial)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="execute_partial_error",
+        execute=True,
+    )
+
+    output_dir = tmp_path / "result" / "execute_partial_error"
+    runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
+    assert summary["error_type"] == "RuntimeError"
+    assert summary["snapshot_source"] == "real_runtime"
+    assert runtime_snapshot["nodes"][0]["lifecycle"]["status"] == "running"
+
+
 def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
 
@@ -342,6 +389,31 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert persisted["timed_out"] is True
     common_rows = summarize_inputs([output_dir])
     assert common_rows[0]["error_type"] == "timeout"
+
+
+def test_minecraft_execute_timeout_uses_partial_runtime_snapshot(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def slow_runtime_with_partial(*args, **kwargs):
+        RUNTIME_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        RUNTIME_RESULT_PATH.write_text(json.dumps(_runtime_result_snapshot(status="running")), encoding="utf-8")
+        time.sleep(1)
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", slow_runtime_with_partial)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="execute_timeout_partial",
+        execute=True,
+        execute_timeout_seconds=0.01,
+    )
+
+    output_dir = tmp_path / "result" / "execute_timeout_partial"
+    runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
+    assert summary["timed_out"] is True
+    assert summary["snapshot_source"] == "real_runtime"
+    assert runtime_snapshot["nodes"][0]["lifecycle"]["status"] == "running"
 
 
 def test_minecraft_execute_timeout_survives_contextmanager_generator_error(tmp_path, monkeypatch):
@@ -386,6 +458,41 @@ def _write_minecraft_config(tmp_path):
         encoding="utf-8",
     )
     return config_path
+
+
+def _runtime_result_snapshot(status="success"):
+    return {
+        "score": {"progress": 1.0 if status == "success" else 0.5},
+        "action_log": {"Alice": [{"action": "mock", "result": {"status": True}}]},
+        "runtime_task_dag_snapshot": {
+            "schema_version": "1.0.0",
+            "runtime": "runtime_task_dag_store",
+            "source_of_truth": "runtime_task_dag",
+            "summary": {"task_node_count": 1, "task_edge_count": 0, "terminal_state": status},
+            "nodes": [{
+                "node_id": "runtime:task:mock",
+                "node_type": "runtime_task",
+                "content": {"description": "Runtime task", "metadata": {}, "milestones": [], "reflect": None},
+                "lifecycle": {
+                    "status": status,
+                    "candidate_agents": ["Alice"],
+                    "active_agents": ["Alice"] if status == "running" else [],
+                    "last_assigned_agents": ["Alice"],
+                    "required_agent_count": 1,
+                },
+                "derived": {"dependency_ready": True, "blocked_by_tasks": []},
+                "provenance": {"source": "test"},
+            }],
+            "edges": [],
+            "schema": {},
+        },
+        "task_graph_snapshot": {
+            "mutates_runtime": False,
+            "tasks": [{"description": "Runtime task", "status": status}],
+            "edges": [],
+        },
+        "error": None,
+    }
 
 
 def _minecraft_config(task_name):
