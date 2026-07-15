@@ -128,6 +128,7 @@ class CWAHSymbolicAdapter:
         nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
         nodes_by_id = {node.get("id"): node for node in nodes}
         held_object_ids = _held_object_ids(observation, character_id=agent_index + 1)
+        objects_held_by_any_character = _objects_held_by_any_character(observation)
         agent_goal_hints = self._task_goal_hints.get(agent_index, ())
         actions = [ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})]
         actions.extend(
@@ -151,6 +152,7 @@ class CWAHSymbolicAdapter:
             object_names,
             agent_goal_hints,
             held_object_ids=held_object_ids,
+            unavailable_grab_ids=objects_held_by_any_character,
         ))
         actions.append(InformationActionSpec(
             action_id=f"send_message:{agent_id}",
@@ -309,10 +311,12 @@ def _object_interaction_actions(
     task_goal_hints: tuple[dict[str, Any], ...] = (),
     *,
     held_object_ids: set[Any] | None = None,
+    unavailable_grab_ids: set[Any] | None = None,
 ) -> list[ActionSpec]:
     visible_ids = set(visible_object_ids)
     nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
     held_ids = held_object_ids or set()
+    unavailable_grab_ids = unavailable_grab_ids or set()
     held_object_names = {held_id: object_names.get(held_id, "object") for held_id in held_ids}
     close_ids = _close_object_ids(observation)
     nodes_by_id = {node.get("id"): node for node in nodes}
@@ -334,7 +338,7 @@ def _object_interaction_actions(
             continue
         object_name = object_names.get(object_id, "object")
         goal_relevance = _goal_relevance_for_object(object_id, object_name, task_goal_hints)
-        if _has_any_token(node, {"GRABBABLE"}) and object_id not in held_ids:
+        if _has_any_token(node, {"GRABBABLE"}) and object_id not in unavailable_grab_ids:
             preconditions = _grab_preconditions(agent_id, object_id, close_ids, held_object_names)
             actions.append(ActionSpec(
                 action_id=f"grab:{agent_id}:{object_id}",
@@ -648,6 +652,25 @@ def _held_object_ids(observation: dict[str, Any], *, character_id: int) -> set[A
         if from_id == character_id and to_id is not None:
             held_ids.add(to_id)
         elif to_id == character_id and from_id is not None:
+            held_ids.add(from_id)
+    return held_ids
+
+
+def _objects_held_by_any_character(observation: dict[str, Any]) -> set[Any]:
+    object_ids = {
+        node.get("id")
+        for node in observation.get("nodes", [])
+        if isinstance(node, dict) and node.get("category") != "Characters"
+    }
+    held_ids: set[Any] = set()
+    for edge in observation.get("edges", []):
+        if not isinstance(edge, dict) or "HOLD" not in str(edge.get("relation_type", "")).upper():
+            continue
+        from_id = edge.get("from_id")
+        to_id = edge.get("to_id")
+        if to_id in object_ids:
+            held_ids.add(to_id)
+        elif from_id in object_ids:
             held_ids.add(from_id)
     return held_ids
 

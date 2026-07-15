@@ -251,9 +251,8 @@ def test_cwah_adapter_does_not_treat_teammate_held_object_as_actor_held():
     adapter.reset(episode_id="mock-cwah", seed=7)
 
     actions = adapter.get_legal_actions("agent_0")
-    plate_grab = next(action for action in actions if action.action_id == "grab:agent_0:20")
 
-    assert plate_grab.parameters["hand_state"] == "empty"
+    assert "grab:agent_0:20" not in {action.action_id for action in actions}
     assert not any(action.action_type in {"putin", "putback"} for action in actions)
 
 
