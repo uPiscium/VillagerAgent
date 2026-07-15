@@ -110,6 +110,20 @@ Navigation actions carry agent-facing search metadata derived from local symboli
 
 The fallback scheduler prefers room search targets before receptacle/surface search targets, and both before irrelevant visible-object interactions. This remains symbolic and agent-local: it uses only visible rooms/objects/properties and sanitized task hints, not evaluator progress, full graph state, simulator debug fields, or private observations from other agents.
 
+## Post-Grab Goal Transition
+
+When the physical-action policy sees a held goal object and a legal placement candidate whose object, target, and `on`/`inside` relation all match the task goal, it now prioritizes that concrete transition ahead of generic search or navigation:
+
+- An `executable_now` matching placement is selected directly.
+- A `setup_required` matching placement selects its exact legal `walktowards` or `open` setup action when that setup is executable now.
+- Mismatched-relation and fallback-receptacle placements are not eligible.
+- Failed or blocked placements and setup actions remain suppressed, including failed-open target suppression.
+- If the concrete goal target is not locally visible or in the action space, no target action is synthesized. Navigation toward the already-held object is blocked so legal target-search actions can proceed instead.
+
+The selected transition is always one of the current legal action candidates. Overrides are recorded with reason `post_grab_goal_transition`, which is included in the existing policy-override reason diagnostics and common reports.
+
+When a goal supplies a concrete target id, placement, navigation, and open metadata match that id exactly. Target-class matching is used only when the goal has no target id, preventing same-class object instances from being treated as the concrete target.
+
 ## Placement Target Suitability
 
 Placement actions now carry agent-facing suitability metadata derived from local target properties and goal-relation matches:

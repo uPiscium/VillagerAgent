@@ -414,6 +414,13 @@ def action_from_decision(
     selected_is_blocked = selected is not None and (selected.action_id in blocked_action_ids or selected_signature in blocked_action_signatures)
     selected_open_is_blocked = _open_target_id(selected) in blocked_open_target_ids
     selected_needs_setup = selected is not None and selected.parameters.get("precondition_status") == "setup_required"
+    selected_precondition_blocked = selected is not None and selected.parameters.get("precondition_status") == "blocked"
+    post_grab_transition = preferred_post_grab_goal_transition(
+        legal_actions,
+        blocked_action_ids=blocked_action_ids,
+        blocked_action_signatures=blocked_action_signatures,
+        blocked_open_target_ids=blocked_open_target_ids,
+    )
     if selected_is_blocked:
         decision["policy_override"] = {
             "reason": "avoid_repeated_failed_action",
@@ -432,7 +439,31 @@ def action_from_decision(
             "blocked_action_id": selected.action_id,
             "setup_action_id": selected.parameters.get("setup_action_id", ""),
         }
-    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked or selected_open_is_blocked or selected_needs_setup):
+    if selected_precondition_blocked:
+        decision["policy_override"] = {
+            "reason": "precondition_blocked",
+            "blocked_action_id": selected.action_id,
+            "precondition_reason": selected.parameters.get("precondition_reason", ""),
+        }
+    if prefer_physical and post_grab_transition is not None:
+        transition, goal_action = post_grab_transition
+        replaceable_selection = (
+            selected is None
+            or selected.action_type in {"send_message", "wait", "walktowards"}
+            or selected_is_blocked
+            or selected_open_is_blocked
+            or selected_needs_setup
+            or selected_precondition_blocked
+        )
+        if replaceable_selection and (selected is None or transition.action_id != selected.action_id):
+            decision["policy_override"] = {
+                "reason": "post_grab_goal_transition",
+                "action_id": transition.action_id,
+                "action_type": transition.action_type,
+                "goal_action_id": goal_action.action_id,
+            }
+            return transition
+    if prefer_physical and (selected is None or selected.action_type in {"send_message", "wait"} or selected_is_blocked or selected_open_is_blocked or selected_needs_setup or selected_precondition_blocked):
         physical = preferred_physical_action(
             legal_actions,
             blocked_action_ids=blocked_action_ids,
@@ -442,7 +473,7 @@ def action_from_decision(
         if physical is not None and (selected is None or physical.action_id != selected.action_id):
             decision["policy_override"] = {"reason": "prefer_physical_after_steps", "action_id": physical.action_id, "action_type": physical.action_type}
             return physical
-    if selected is not None and not selected_is_blocked and not selected_open_is_blocked:
+    if selected is not None and not selected_is_blocked and not selected_open_is_blocked and not selected_needs_setup and not selected_precondition_blocked:
         if selected.action_type == "send_message":
             return InformationActionSpec(
                 action_id=selected.action_id,
@@ -490,6 +521,14 @@ def preferred_physical_action(
     blocked_action_ids = blocked_action_ids or set()
     blocked_action_signatures = blocked_action_signatures or set()
     blocked_open_target_ids = blocked_open_target_ids or set()
+    post_grab_transition = preferred_post_grab_goal_transition(
+        legal_actions,
+        blocked_action_ids=blocked_action_ids,
+        blocked_action_signatures=blocked_action_signatures,
+        blocked_open_target_ids=blocked_open_target_ids,
+    )
+    if post_grab_transition is not None:
+        return post_grab_transition[0]
     physical = [
         action
         for action in legal_actions
@@ -497,8 +536,65 @@ def preferred_physical_action(
         and action.action_id not in blocked_action_ids
         and action_failure_signature(action) not in blocked_action_signatures
         and _open_target_id(action) not in blocked_open_target_ids
+        and action.parameters.get("precondition_status") not in {"blocked", "setup_required"}
     ]
     return min(physical, key=physical_action_rank, default=None)
+
+
+def preferred_post_grab_goal_transition(
+    legal_actions: tuple[ActionSpec, ...],
+    *,
+    blocked_action_ids: set[str] | frozenset[str] | None = None,
+    blocked_action_signatures: set[str] | frozenset[str] | None = None,
+    blocked_open_target_ids: set[str] | frozenset[str] | None = None,
+) -> tuple[ActionSpec, ActionSpec] | None:
+    blocked_action_ids = blocked_action_ids or set()
+    blocked_action_signatures = blocked_action_signatures or set()
+    blocked_open_target_ids = blocked_open_target_ids or set()
+    action_by_id = {action.action_id: action for action in legal_actions}
+    placements = sorted(
+        (
+            action
+            for action in legal_actions
+            if action.action_type in {"putin", "putback"}
+            and action.parameters.get("hand_state") == "holding"
+            and bool(action.parameters.get("goal_object_match"))
+            and bool(action.parameters.get("goal_target_match"))
+            and action.parameters.get("placement_relation_compatibility") == "goal_relation_match"
+            and action.parameters.get("placement_suitability") == "goal_relation_match"
+            and _action_is_available(action, blocked_action_ids, blocked_action_signatures, blocked_open_target_ids)
+        ),
+        key=physical_action_rank,
+    )
+    for placement in placements:
+        status = placement.parameters.get("precondition_status")
+        if status == "executable_now":
+            return placement, placement
+        if status != "setup_required":
+            continue
+        setup = action_by_id.get(str(placement.parameters.get("setup_action_id", "")))
+        if (
+            setup is not None
+            and setup.action_type in {"walktowards", "open"}
+            and setup.parameters.get("precondition_status") == "executable_now"
+            and _action_is_available(setup, blocked_action_ids, blocked_action_signatures, blocked_open_target_ids)
+        ):
+            return setup, placement
+    return None
+
+
+def _action_is_available(
+    action: ActionSpec,
+    blocked_action_ids: set[str] | frozenset[str],
+    blocked_action_signatures: set[str] | frozenset[str],
+    blocked_open_target_ids: set[str] | frozenset[str],
+) -> bool:
+    return (
+        action.action_id not in blocked_action_ids
+        and action_failure_signature(action) not in blocked_action_signatures
+        and _open_target_id(action) not in blocked_open_target_ids
+        and action.parameters.get("precondition_status") != "blocked"
+    )
 
 
 def _open_target_id(action: ActionSpec | None) -> str:

@@ -204,6 +204,58 @@ def test_cwah_adapter_blocks_extra_grabs_while_holding_object():
     assert apple_grab.parameters["hand_state"] == "holding"
 
 
+def test_cwah_adapter_blocks_navigation_to_held_goal_object_while_goal_target_is_missing():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env.goal_spec = {0: {"on_apple_<coffeetable> (268)": [1, True, 2]}}
+        env._observations[0]["nodes"][2] = {
+            "id": 375,
+            "class_name": "apple",
+            "category": "Objects",
+            "states": [],
+            "properties": ["GRABBABLE"],
+        }
+        env._observations[0]["nodes"].append({
+            "id": 269,
+            "class_name": "coffeetable",
+            "category": "Objects",
+            "states": [],
+            "properties": ["SURFACES"],
+        })
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 375, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 375, 269], 1: [11, 21, 268]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    actions = adapter.get_legal_actions("agent_0")
+    held_object_walk = next(action for action in actions if action.action_id == "walktowards:agent_0:375")
+    target_search = next(action for action in actions if action.action_id == "walktowards:agent_0:10")
+    wrong_same_class_target = next(action for action in actions if action.action_id == "walktowards:agent_0:269")
+
+    assert held_object_walk.parameters["precondition_status"] == "blocked"
+    assert held_object_walk.parameters["precondition_reason"] == "blocked_by_holding_target_object"
+    assert target_search.parameters["search_priority"] == "search_goal_target_room"
+    assert wrong_same_class_target.parameters["goal_target_match"] is False
+    assert "walktowards:agent_0:268" not in {action.action_id for action in actions}
+
+
+def test_cwah_adapter_does_not_treat_teammate_held_object_as_actor_held():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["edges"].append({"from_id": 2, "to_id": 20, "relation_type": "HOLDS_RH"})
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    actions = adapter.get_legal_actions("agent_0")
+
+    assert "grab:agent_0:20" not in {action.action_id for action in actions}
+    assert not any(action.action_type in {"putin", "putback"} for action in actions)
+
+
 def test_cwah_adapter_prefers_open_setup_for_closed_close_target():
     def env_factory(_config):
         env = mock_cwah_env_factory(_config)
@@ -263,6 +315,37 @@ def test_cwah_adapter_marks_on_goal_putback_relation_match():
 
     assert putback.parameters["goal_relation_matches"] == ("on",)
     assert putback.parameters["placement_relation_compatibility"] == "goal_relation_match"
+
+
+def test_cwah_adapter_does_not_match_same_class_receptacle_with_different_goal_target_id():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env._observations[0]["nodes"].extend([
+            {"id": 30, "class_name": "dishwasher", "category": "Objects", "states": ["CLOSED"], "properties": ["CONTAINERS", "CAN_OPEN"]},
+            {"id": 32, "class_name": "dishwasher", "category": "Objects", "states": ["CLOSED"], "properties": ["CONTAINERS", "CAN_OPEN"]},
+        ])
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 20, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 20, 30, 32], 1: [11, 21]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    actions = adapter.get_legal_actions("agent_0")
+    goal_target = next(action for action in actions if action.action_id == "putin:agent_0:20:30")
+    same_class_fallback = next(action for action in actions if action.action_id == "putin:agent_0:20:32")
+    goal_target_walk = next(action for action in actions if action.action_id == "walktowards:agent_0:30")
+    same_class_walk = next(action for action in actions if action.action_id == "walktowards:agent_0:32")
+    goal_target_open = next(action for action in actions if action.action_id == "open:agent_0:30")
+    same_class_open = next(action for action in actions if action.action_id == "open:agent_0:32")
+
+    assert goal_target.parameters["placement_relation_compatibility"] == "goal_relation_match"
+    assert same_class_fallback.parameters["goal_target_match"] is False
+    assert same_class_fallback.parameters["placement_relation_compatibility"] == "goal_relation_unknown"
+    assert goal_target_walk.parameters["goal_target_match"] is True
+    assert goal_target_open.parameters["goal_target_match"] is True
+    assert same_class_walk.parameters["goal_target_match"] is False
+    assert same_class_open.parameters["goal_target_match"] is False
 
 
 def test_cwah_adapter_marks_unstated_container_suitability_as_unknown():
