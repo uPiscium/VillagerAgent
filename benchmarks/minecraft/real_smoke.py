@@ -9,9 +9,12 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+
+import psutil
 
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 from benchmarks.common.sanitization import sanitize_artifact_value
@@ -144,7 +147,9 @@ def run_bridge_smoke(
 
     def check() -> dict:
         result_path = output_root / "minecraft_bridge" / ".runtime" / "bridge_result.json"
+        phase_path = output_root / "minecraft_bridge" / ".runtime" / "bridge_phase.txt"
         result_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_phase(phase_path, "starting bridge child")
         command = [
             sys.executable,
             "-m",
@@ -162,6 +167,8 @@ def run_bridge_smoke(
             world,
             "--result-path",
             str(result_path),
+            "--phase-path",
+            str(phase_path),
         ]
         process = subprocess.Popen(
             command,
@@ -170,11 +177,16 @@ def run_bridge_smoke(
             text=True,
             start_new_session=os.name == "posix",
         )
+        leader_identity = _capture_process_identity(process.pid)
         try:
             stdout, stderr = process.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
-            _stop_process(process)
-            raise TimeoutError(f"env_type.none bridge smoke timed out after {timeout_seconds} seconds") from exc
+            _stop_process(process, leader_identity=leader_identity)
+            phase = phase_path.read_text(encoding="utf-8").strip() or "unknown phase"
+            raise TimeoutError(
+                f"env_type.none bridge smoke to {host}:{port} timed out during {phase} "
+                f"after {timeout_seconds} seconds"
+            ) from exc
         if process.returncode != 0:
             raise RuntimeError(
                 f"env_type.none bridge smoke failed with exit code {process.returncode}: "
@@ -371,8 +383,11 @@ def _run_check_bundle(
 
 
 def _bridge_child(args: argparse.Namespace) -> int:
+    phase_path = Path(args.phase_path)
+    _write_phase(phase_path, "loading bridge runtime")
     from env.env import Agent, VillagerBench, env_type
 
+    _write_phase(phase_path, "initializing bridge environment")
     environment = VillagerBench(
         env_type.none,
         task_id=0,
@@ -385,9 +400,12 @@ def _bridge_child(args: argparse.Namespace) -> int:
     environment.base_port = args.local_port
     environment.agent_register(agent_number=1, name_list=[args.agent_name])
     try:
+        _write_phase(phase_path, "launching bridge agent")
         Agent.launch(host=args.host, port=args.port, world=args.world, fast=True)
         environment.running = True
+        _write_phase(phase_path, "pinging bridge agent")
         ping = Agent.ping(args.agent_name)
+        _write_phase(phase_path, "reading bridge environment")
         environment_info = Agent.get_environment_info_dict(args.agent_name)
         if not isinstance(ping, dict) or ping.get("status") is False:
             raise RuntimeError(f"bridge ping failed: {ping}")
@@ -404,6 +422,7 @@ def _bridge_child(args: argparse.Namespace) -> int:
         })
         return 0
     finally:
+        _write_phase(phase_path, "stopping bridge agent")
         environment.stop()
         for process in Agent.agent_process.values():
             try:
@@ -413,21 +432,138 @@ def _bridge_child(args: argparse.Namespace) -> int:
                 process.wait()
 
 
-def _stop_process(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "posix":
-        os.killpg(process.pid, 15)
-    else:
-        process.terminate()
+@dataclass(frozen=True)
+class _ProcessIdentity:
+    pid: int
+    create_time: float
+
+
+def _capture_process_identity(pid: int) -> _ProcessIdentity | None:
     try:
-        process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        if os.name == "posix":
-            os.killpg(process.pid, 9)
-        else:
-            process.kill()
-        process.wait()
+        process = psutil.Process(pid)
+        return _ProcessIdentity(pid=pid, create_time=process.create_time())
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+
+
+def _stop_process(
+    process: subprocess.Popen,
+    *,
+    leader_identity: _ProcessIdentity | None = None,
+    posix: bool | None = None,
+) -> None:
+    leader_identity = leader_identity or _capture_process_identity(process.pid)
+    if leader_identity is None:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        return
+
+    use_posix_session = os.name == "posix" if posix is None else posix
+    collect = _collect_session_processes if use_posix_session else _collect_process_tree
+    targets = collect(leader_identity)
+    _signal_processes(targets, "terminate")
+    survivors = _wait_processes(targets, timeout_seconds=2)
+
+    if use_posix_session:
+        survivors = _unique_processes([*survivors, *collect(leader_identity)])
+    _signal_processes(survivors, "kill")
+    _wait_processes(survivors, timeout_seconds=2)
+
+
+def _collect_session_processes(leader_identity: _ProcessIdentity) -> list[psutil.Process]:
+    try:
+        current_leader = psutil.Process(leader_identity.pid)
+        if (
+            current_leader.create_time() != leader_identity.create_time
+            and os.getsid(current_leader.pid) == leader_identity.pid
+        ):
+            return []
+    except psutil.NoSuchProcess:
+        pass
+    except (psutil.AccessDenied, ProcessLookupError, PermissionError):
+        return []
+
+    members = []
+    for candidate in psutil.process_iter(["pid", "create_time"]):
+        try:
+            if os.getsid(candidate.pid) != leader_identity.pid:
+                continue
+            identity = _ProcessIdentity(candidate.pid, candidate.info["create_time"])
+            if _resolve_process_identity(identity) is not None:
+                members.append(candidate)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError, PermissionError):
+            continue
+
+    try:
+        current_leader = psutil.Process(leader_identity.pid)
+        if (
+            current_leader.create_time() != leader_identity.create_time
+            and os.getsid(current_leader.pid) == leader_identity.pid
+        ):
+            return []
+    except psutil.NoSuchProcess:
+        pass
+    except (psutil.AccessDenied, ProcessLookupError, PermissionError):
+        return []
+    return sorted(members, key=lambda member: member.pid == leader_identity.pid)
+
+
+def _collect_process_tree(leader_identity: _ProcessIdentity) -> list[psutil.Process]:
+    leader = _resolve_process_identity(leader_identity)
+    if leader is None:
+        return []
+    try:
+        descendants = leader.children(recursive=True)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        descendants = []
+    return _unique_processes([*descendants, leader])
+
+
+def _resolve_process_identity(identity: _ProcessIdentity) -> psutil.Process | None:
+    try:
+        process = psutil.Process(identity.pid)
+        if process.create_time() != identity.create_time or not process.is_running():
+            return None
+        return process
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+
+
+def _unique_processes(processes: list[psutil.Process]) -> list[psutil.Process]:
+    unique = {}
+    for process in processes:
+        try:
+            identity = (process.pid, process.create_time())
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+        unique[identity] = process
+    return list(unique.values())
+
+
+def _signal_processes(processes: list[psutil.Process], method: str) -> None:
+    for process in processes:
+        try:
+            if process.is_running():
+                getattr(process, method)()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+
+def _wait_processes(processes: list[psutil.Process], *, timeout_seconds: float) -> list[psutil.Process]:
+    if not processes:
+        return []
+    _, survivors = psutil.wait_procs(processes, timeout=timeout_seconds)
+    return [process for process in survivors if process.is_running()]
+
+
+def _write_phase(path: Path, phase: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(phase + "\n", encoding="utf-8")
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -558,6 +694,7 @@ def _parser() -> argparse.ArgumentParser:
     child.add_argument("--local-port", required=True, type=int)
     child.add_argument("--world", required=True)
     child.add_argument("--result-path", required=True)
+    child.add_argument("--phase-path", required=True)
     return parser
 
 

@@ -1,8 +1,11 @@
 import json
+import os
 import shlex
 import socket
+import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -10,6 +13,11 @@ import pytest
 
 from benchmarks.common.run_artifacts import read_attempt_id, validate_run_attempt
 from benchmarks.minecraft.real_smoke import (
+    _ProcessIdentity,
+    _capture_process_identity,
+    _collect_session_processes,
+    _resolve_process_identity,
+    _stop_process,
     main,
     run_bridge_smoke,
     run_judged_smoke,
@@ -112,6 +120,7 @@ def test_minecraft_port_preflight_records_reachable_endpoint(tmp_path):
 
 def test_bridge_records_exact_runnable_command(monkeypatch, tmp_path):
     class Process:
+        pid = 123
         returncode = 0
 
         def __init__(self, command):
@@ -127,6 +136,10 @@ def test_bridge_records_exact_runnable_command(monkeypatch, tmp_path):
         lambda command, **kwargs: (
             Process(command) if "--result-path" in command else real_popen(command, **kwargs)
         ),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._capture_process_identity",
+        lambda pid: _ProcessIdentity(pid=pid, create_time=1.0),
     )
 
     run_bridge_smoke(
@@ -186,6 +199,144 @@ def test_bridge_rejects_invalid_timeout_before_process_launch(monkeypatch, tmp_p
         )
 
     assert not list(tmp_path.iterdir())
+
+
+def test_bridge_timeout_reports_endpoint_and_phase(monkeypatch, tmp_path):
+    class TimedOutProcess:
+        pid = 123
+
+        def communicate(self, timeout):
+            raise subprocess.TimeoutExpired("bridge-child", timeout)
+
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke.subprocess.Popen",
+        lambda command, **kwargs: (
+            TimedOutProcess() if "_bridge-child" in command else real_popen(command, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._capture_process_identity",
+        lambda pid: _ProcessIdentity(pid=pid, create_time=1.0),
+    )
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke._stop_process", lambda process, **kwargs: None)
+
+    with pytest.raises(
+        TimeoutError,
+        match=r"bridge smoke to 127\.0\.0\.1:40000 timed out during starting bridge child after 0\.1 seconds",
+    ):
+        run_bridge_smoke(
+            output_root=tmp_path,
+            host="127.0.0.1",
+            port=40000,
+            timeout_seconds=0.1,
+            overwrite=False,
+        )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX session regression")
+def test_bridge_timeout_stops_orphaned_descendant_after_leader_exits(tmp_path):
+    descendant_pid_path = tmp_path / "descendant.pid"
+    descendant_code = (
+        "import os, signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"open({str(descendant_pid_path)!r}, 'w').write(str(os.getpid())); "
+        "time.sleep(60)"
+    )
+    parent_code = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {descendant_code!r}])"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", parent_code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    leader_identity = _capture_process_identity(process.pid)
+    descendant_identity = None
+
+    try:
+        assert leader_identity is not None
+        descendant_identity = _capture_process_identity(_wait_for_pid(descendant_pid_path))
+        assert descendant_identity is not None
+        process.wait(timeout=2)
+        assert _resolve_process_identity(leader_identity) is None
+
+        _stop_process(process, leader_identity=leader_identity)
+
+        assert _resolve_process_identity(descendant_identity) is None
+        assert _collect_session_processes(leader_identity) == []
+    finally:
+        if descendant_identity is not None:
+            remaining = _resolve_process_identity(descendant_identity)
+            if remaining is not None:
+                remaining.kill()
+                remaining.wait(timeout=2)
+
+
+def test_session_collection_rejects_reused_leader_identity(monkeypatch):
+    class ReusedLeader:
+        pid = 123
+
+        def create_time(self):
+            return 200.0
+
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke.psutil.Process", lambda pid: ReusedLeader())
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke.os.getsid", lambda pid: pid)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke.psutil.process_iter",
+        lambda *args, **kwargs: pytest.fail("a reused session must not be enumerated"),
+    )
+
+    assert _collect_session_processes(_ProcessIdentity(pid=123, create_time=100.0)) == []
+
+
+def test_non_posix_cleanup_terminates_descendants_before_parent_and_escalates(monkeypatch):
+    calls = []
+
+    class Process:
+        def __init__(self, pid, children=()):
+            self.pid = pid
+            self._children = list(children)
+            self.running = True
+
+        def create_time(self):
+            return float(self.pid)
+
+        def is_running(self):
+            return self.running
+
+        def children(self, recursive):
+            assert recursive is True
+            return self._children
+
+        def terminate(self):
+            calls.append(("terminate", self.pid))
+
+        def kill(self):
+            calls.append(("kill", self.pid))
+
+    child = Process(2)
+    leader = Process(1, children=[child])
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._resolve_process_identity",
+        lambda identity: leader,
+    )
+    waits = iter([[child], []])
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._wait_processes",
+        lambda processes, timeout_seconds: next(waits),
+    )
+
+    _stop_process(
+        object(),
+        leader_identity=_ProcessIdentity(pid=1, create_time=1.0),
+        posix=False,
+    )
+
+    assert calls == [("terminate", 2), ("terminate", 1), ("kill", 2)]
 
 
 def test_ollama_preflight_redacts_url_credential_sentinels(monkeypatch, tmp_path):
@@ -342,6 +493,17 @@ def _assert_recorded_command(run_dir: Path, expected: list[str]) -> None:
     provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["argv"] == expected
     assert (run_dir / "command.txt").read_text(encoding="utf-8") == shlex.join(expected) + "\n"
+
+
+def _wait_for_pid(path: Path, timeout: float = 2) -> int:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            return int(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            pass
+        time.sleep(0.01)
+    pytest.fail(f"timed out waiting for {path}")
 
 
 def _write_judged_config(tmp_path: Path) -> Path:
