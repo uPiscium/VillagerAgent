@@ -35,3 +35,4 @@ dependencies = [
 pythonpath = ["."]
 testpaths = ["benchmarks/common/tests", "benchmarks/craft/tests", "benchmarks/cwah/tests", "tests"]
 norecursedirs = ["external"]
+markers = ["real_smoke: opt-in tests requiring real Ollama or Minecraft services"]

@@ -118,6 +118,8 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False)
     else:
         raise NotImplementedError
+    if task_type == "meta" and runtime_result_path:
+        env.meta_diagnostics_dir = os.path.dirname(runtime_result_path) or "."
 
     # 设置agent_tool
     if task_type == "construction":

@@ -621,6 +621,38 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert common_rows[0]["error_type"] == "timeout"
 
 
+def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def runtime_with_diagnostics(*args, **kwargs):
+        diagnostics_path = Path(kwargs["runtime_result_path"]).parent / "meta_judger_diagnostics.json"
+        diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics_path.write_text(json.dumps({
+            "command": ["python", "env/meta_judger.py"],
+            "load_status_history": [{"status": "loading"}, {"status": "loaded"}],
+            "exit_code": None,
+            "timeout_reason": None,
+        }), encoding="utf-8")
+        return {"score": {"score": 1}, "action_log": {}}
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_with_diagnostics)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="meta_diagnostics",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    output_dir = tmp_path / "result" / "meta_diagnostics"
+    assert summary["load_status"] == "loaded"
+    assert summary["meta_judger_diagnostics_available"] is True
+    assert summary["score_available"] is True
+    diagnostics = json.loads((output_dir / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["load_status_history"][-1]["status"] == "loaded"
+
+
 def test_minecraft_execute_timeout_stops_child_activity(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
     late_marker = tmp_path / "late_child_activity.txt"
