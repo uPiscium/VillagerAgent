@@ -5,6 +5,16 @@
 <!-- benchmark-result: craft-issue291-v1-diagnostic-v1 -->
 <!-- benchmark-result: craft-issue291-v4-diagnostic-v1 -->
 <!-- benchmark-result: craft-issue291-analysis-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v0-s1-seed1-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v1-s1-seed1-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v4-s1-seed1-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v0-s2-seed3-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v1-s2-seed3-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v4-s2-seed3-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v0-s3-seed5-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v1-s3-seed5-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-v4-s3-seed5-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-expanded-analysis-diagnostic-v1 -->
 
 The replication matrix is declared in
 `configs/craft/experiments/gemma4_12b_clarify_policy_official.yaml`. It includes
@@ -55,14 +65,71 @@ one structure/seed pair cannot support a performance claim or recommendation.
 The checked-in #298 contracts are
 `docs/benchmarks/evidence/craft_issue_291/v0_v1_comparison_input.json` and
 `docs/benchmarks/evidence/craft_issue_291/v0_v4_comparison_input.json`, with
-corresponding `*_comparison_report.json` outputs in the same directory. Each
-has one matched `(structure_id=0, seed=3)` pair,
-requests only a `diagnostic` claim, is marked non-prespecified and bounded, and
-uses a two-comparison Bonferroni family. Both reports grant only `diagnostic`;
-their performance gates reject the evidence as not full, not prespecified, and
-insufficient in pairs, seeds, and comparison units. The numerical paired
-difference is recorded by the contract but must not be interpreted as an
-effect estimate from an adequate sample.
+corresponding `*_comparison_report.json` outputs in the same directory. After
+the expansion below, each has four matched pairs, requests only a `diagnostic`
+claim, is marked non-prespecified and bounded, and uses a two-comparison
+Bonferroni family. Both reports grant only `diagnostic`; their performance
+gates reject the records as claim-ineligible. The numerical paired differences
+are retained by the contracts but must not be interpreted as effect estimates
+from an adequate sample.
+
+## Expanded Matched Diagnostic
+
+Three additional non-Cartesian matched combinations were run from
+`configs/craft/experiments/issue_291_matched_expanded_diagnostic.yaml`:
+`(structure_id=1, seed=1)`, `(structure_id=2, seed=3)`, and
+`(structure_id=3, seed=5)`. Each combination used the same V0/V1/V4
+conditions and three-turn settings as the original bounded diagnostic. This
+is a selected diagnostic expansion, not the full matrix and not a performance
+evaluation.
+
+The expansion used repository commit
+`36cfc8cb62eb68013c5d935c0513f5ac81f3a372`, with the newly added experiment
+config recorded as a dirty worktree in provenance, CRAFT commit
+`0630f1b3350ce2ae9fef676c8271c35963a09b45`, dataset SHA-256
+`c7a57048ec0d2e92c25bde8aa7936c911919accdcdcedc078e9ccf1e0a2c9e3a`,
+and Ollama `gemma4:12b` digest
+`4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c`.
+All nine runs used CPython 3.10.19 and completed successfully.
+
+| Structure / seed | V0 final progress | V1 final progress | V4 final progress |
+| --- | ---: | ---: | ---: |
+| 1 / 1 | 0.1616747182 | 0.1246376812 | 0.1246376812 |
+| 2 / 3 | 0.1391304348 | 0.1391304348 | 0.1483413849 |
+| 3 / 5 | 0.1888658845 | 0.1888658845 | 0.1888658845 |
+
+Every run recorded three physical actions, zero builder fallback, zero invalid
+actions, zero Clarify or wait actions, and a passing normalized leakage report.
+Retrieval activation, retrieval use in the top action, retrieval changes to the
+top action, and V4 gate invocation were all zero. These observations do not
+provide evidence about retrieval or Clarify policy behavior.
+
+The existing #298 inputs and reports now contain four matched pairs per
+comparison, including the original `(0, 3)` pair. Both performance gates reject
+the records because execution was bounded and non-prespecified, there are fewer
+than five matched pairs, the selected combinations are not a complete crossed
+matrix, and the estimate and uncertainty checks are not favorable. The recorded
+differences and intervals are retained for diagnostic reproducibility only and
+must not be presented as performance estimates.
+
+Each expanded run was sanitized and validated as a 21-artifact public bundle
+with one completed run. The separate analysis bundle links the original and
+expanded source releases and contains the updated #298 contracts, retrieval
+probe, resolved non-secret config, provenance, summary, metrics, publication
+source accounting, and exact artifact manifest.
+
+| Condition / pair | Archive SHA-256 | Manifest SHA-256 |
+| --- | --- | --- |
+| [V0, 1/1](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s1-seed1-diagnostic-v1/craft-issue291-expanded-v0-s1-seed1-diagnostic-v1.zip) | `481d17796dc42b765ab218ce201cb0ae753def471b2edc8714c01fdeb0f9f913` | `cfd651fa930f390f08f8fc3f3522acaf4616a247645b63668df5634c25d86aa2` |
+| [V1, 1/1](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s1-seed1-diagnostic-v1/craft-issue291-expanded-v1-s1-seed1-diagnostic-v1.zip) | `15a92d8e0a9c138c242645b80957a9a1a107b967e3262e9420094fd61cba884d` | `c8bf22c40017b7b951d2e52c0b25d4e04a7234f8d016a972ae39cddbcf3df7e0` |
+| [V4, 1/1](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s1-seed1-diagnostic-v1/craft-issue291-expanded-v4-s1-seed1-diagnostic-v1.zip) | `bbe673398dd6348dadd9822922faed672f18dfb88e4bf3d64c01872adb81c7b7` | `7befff7e48b26e21e39ca8b7dab6400c7e46ef1c0bf66c13546060fb3614ddb8` |
+| [V0, 2/3](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s2-seed3-diagnostic-v1/craft-issue291-expanded-v0-s2-seed3-diagnostic-v1.zip) | `f4894f49cfbeb393021e543c049e408c52b931be05c198280c4a4da05b26d27a` | `85c55aec47c8f3a9a533455cfeb1846cfa129ebaa7c7a1ab07e412e3d68631b3` |
+| [V1, 2/3](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s2-seed3-diagnostic-v1/craft-issue291-expanded-v1-s2-seed3-diagnostic-v1.zip) | `a435b5c5f2f31b7af382e689e0f09ed110a9b04796c00a4cca57d0c2318f5c13` | `10691b9672d71b32ef6a4ead4e97b3b1b7b3d58e5f04f799451f6a46979224c9` |
+| [V4, 2/3](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s2-seed3-diagnostic-v1/craft-issue291-expanded-v4-s2-seed3-diagnostic-v1.zip) | `8644337ecca109a92e5bc9e80f9c69ec38c24af7f6afb2f0a1f872b974683122` | `3347737c11a37eed33998e0a076f6df204f640383131d1aa6c1b3b68224a8196` |
+| [V0, 3/5](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s3-seed5-diagnostic-v1/craft-issue291-expanded-v0-s3-seed5-diagnostic-v1.zip) | `4a5117e649b39e45d54641ca02f14e680c9355b35467df9d73e7477775f857d9` | `e9e28cf02191009f97dd97c05b699de6c77545ce3a56cbacc720de7fcab76015` |
+| [V1, 3/5](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s3-seed5-diagnostic-v1/craft-issue291-expanded-v1-s3-seed5-diagnostic-v1.zip) | `7d311a03a23c934931b5e4385f3135cb652d3f5753d494964117879c4675f342` | `b1032e5cce8913b21b96bc0f71b8b8a1de014c7bdd1d01eb0bd88555988f7130` |
+| [V4, 3/5](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s3-seed5-diagnostic-v1/craft-issue291-expanded-v4-s3-seed5-diagnostic-v1.zip) | `2720f6ef7c4faec6598e004e93bf23c2f25c13ce2040b58fb9c978845ca0459f` | `4b04aeed6779500e245df13975df617130507fd9d27c5276a7ce2c21b762fe3a` |
+| [Expanded analysis](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-analysis-diagnostic-v1/craft-issue291-expanded-analysis-diagnostic-v1.zip) | `24631b40642b84dbc7223fd972b400bc2874aea509d7d7bc37822fb8812fbd44` | `8206642243fd91d457d3c075f5b199b122c0da11444cb69af042739779b73c23` |
 
 ## Controlled Retrieval Probe
 

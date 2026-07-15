@@ -22,6 +22,48 @@
       "status": "completed",
       "metric_value": 0.13051529790660224,
       "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v4-diagnostic-v1/craft-issue291-v4-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {"structure_id": 1, "seed": 1},
+      "status": "completed",
+      "metric_value": 0.16167471819645732,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s1-seed1-diagnostic-v1/craft-issue291-expanded-v0-s1-seed1-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v4_dual_dag_value_of_information",
+      "pairing": {"structure_id": 1, "seed": 1},
+      "status": "completed",
+      "metric_value": 0.1246376811594203,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s1-seed1-diagnostic-v1/craft-issue291-expanded-v4-s1-seed1-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {"structure_id": 2, "seed": 3},
+      "status": "completed",
+      "metric_value": 0.1391304347826087,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s2-seed3-diagnostic-v1/craft-issue291-expanded-v0-s2-seed3-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v4_dual_dag_value_of_information",
+      "pairing": {"structure_id": 2, "seed": 3},
+      "status": "completed",
+      "metric_value": 0.148341384863124,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s2-seed3-diagnostic-v1/craft-issue291-expanded-v4-s2-seed3-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {"structure_id": 3, "seed": 5},
+      "status": "completed",
+      "metric_value": 0.1888658845180584,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s3-seed5-diagnostic-v1/craft-issue291-expanded-v0-s3-seed5-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v4_dual_dag_value_of_information",
+      "pairing": {"structure_id": 3, "seed": 5},
+      "status": "completed",
+      "metric_value": 0.1888658845180584,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s3-seed5-diagnostic-v1/craft-issue291-expanded-v4-s3-seed5-diagnostic-v1.zip#artifact_manifest.json"
     }
   ],
   "analysis": {"seed": 291, "bootstrap_samples": 10000, "confidence_level": 0.95},
