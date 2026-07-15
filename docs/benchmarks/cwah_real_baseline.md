@@ -1,5 +1,9 @@
 # C-WAH Real Evaluation Baseline
 
+<!-- benchmark-result: cwah-bounded-baseline-diagnostic -->
+
+This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+
 This workflow records a bounded real CoELA baseline for the current C-WAH policy. It is intended to measure the current implementation state before further policy improvements. It is not a benchmark-performance claim.
 
 ## Preconditions

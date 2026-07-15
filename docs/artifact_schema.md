@@ -124,3 +124,5 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 ## Versioning
 
 Artifacts that already expose a schema version keep it in the payload. Artifacts without `schema_version` should be treated as versioned by producer and repository commit until a future migration adds explicit versions.
+
+Public archive retention, validation, deterministic packaging, recovery, migration, and stable report references are specified in `docs/benchmark_artifact_retention.md`.

@@ -1,5 +1,9 @@
 # C-WAH Goal-Aware Policy Notes
 
+<!-- benchmark-result: cwah-goal-policy-diagnostics -->
+
+This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+
 This note records the first goal-aware policy improvement after the 2026-07-04 bounded baseline. The change is still an integration/policy-maturation step, not a benchmark-performance claim.
 
 ## Policy Change

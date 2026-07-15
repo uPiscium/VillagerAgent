@@ -1,5 +1,9 @@
 # CRAFT V5 Action-Selection Diagnostics
 
+<!-- benchmark-result: craft-v5-action-selection-diagnostic -->
+
+This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+
 This note records the first post-instrumentation diagnostic run for the V5 repeated-zero action-selection policy. The goal was to determine why V5 previously showed no observed suppression events, not to establish a new performance result.
 
 ## Setup
