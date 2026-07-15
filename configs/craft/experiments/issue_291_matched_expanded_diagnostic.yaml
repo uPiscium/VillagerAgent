@@ -1,0 +1,79 @@
+experiment:
+  name: craft_issue_291_matched_expanded_diagnostic
+  description: Three additional diagnostic-only matched V0/V1/V4 pairs for Issue 291.
+  result_root: result/craft
+  continue_on_error: true
+  overrides:
+    turns: 3
+  runs:
+    - config: configs/craft/eval_gemma4_12b_ollama.yaml
+      suffix: _issue291_expanded_v0_oracle5_turns3_structure1
+      seeds: [1]
+      structures: [1]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_retrieval.yaml
+      suffix: _issue291_expanded_v1_oracle5_turns3_structure1
+      seeds: [1]
+      structures: [1]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml
+      suffix: _issue291_expanded_v4_oracle5_turns3_structure1
+      seeds: [1]
+      structures: [1]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama.yaml
+      suffix: _issue291_expanded_v0_oracle5_turns3_structure2
+      seeds: [3]
+      structures: [2]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_retrieval.yaml
+      suffix: _issue291_expanded_v1_oracle5_turns3_structure2
+      seeds: [3]
+      structures: [2]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml
+      suffix: _issue291_expanded_v4_oracle5_turns3_structure2
+      seeds: [3]
+      structures: [2]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama.yaml
+      suffix: _issue291_expanded_v0_oracle5_turns3_structure3
+      seeds: [5]
+      structures: [3]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_retrieval.yaml
+      suffix: _issue291_expanded_v1_oracle5_turns3_structure3
+      seeds: [5]
+      structures: [3]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml
+      suffix: _issue291_expanded_v4_oracle5_turns3_structure3
+      seeds: [5]
+      structures: [3]
+      overrides:
+        craft:
+          oracle_n: 5
+  report:
+    output: result/craft/comparison_issue_291_matched_expanded_diagnostic.csv
+    json_output: result/craft/comparison_issue_291_matched_expanded_diagnostic.json
+    compact_summary_output: result/craft/summary_issue_291_matched_expanded_diagnostic.csv
+    compact_summary_json_output: result/craft/summary_issue_291_matched_expanded_diagnostic.json
+    variance_summary_output: result/craft/variance_issue_291_matched_expanded_diagnostic.csv
+    variance_summary_json_output: result/craft/variance_issue_291_matched_expanded_diagnostic.json
+    variance_group_by: run_group

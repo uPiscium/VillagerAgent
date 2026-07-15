@@ -117,6 +117,116 @@
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     },
     {
+      "id": "craft-issue291-expanded-v0-s1-seed1-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s1-seed1-diagnostic-v1/craft-issue291-expanded-v0-s1-seed1-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s1-seed1-diagnostic-v1/craft-issue291-expanded-v0-s1-seed1-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "481d17796dc42b765ab218ce201cb0ae753def471b2edc8714c01fdeb0f9f913",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "cfd651fa930f390f08f8fc3f3522acaf4616a247645b63668df5634c25d86aa2",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v1-s1-seed1-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s1-seed1-diagnostic-v1/craft-issue291-expanded-v1-s1-seed1-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s1-seed1-diagnostic-v1/craft-issue291-expanded-v1-s1-seed1-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "15a92d8e0a9c138c242645b80957a9a1a107b967e3262e9420094fd61cba884d",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "c8bf22c40017b7b951d2e52c0b25d4e04a7234f8d016a972ae39cddbcf3df7e0",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v4-s1-seed1-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s1-seed1-diagnostic-v1/craft-issue291-expanded-v4-s1-seed1-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s1-seed1-diagnostic-v1/craft-issue291-expanded-v4-s1-seed1-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "bbe673398dd6348dadd9822922faed672f18dfb88e4bf3d64c01872adb81c7b7",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "7befff7e48b26e21e39ca8b7dab6400c7e46ef1c0bf66c13546060fb3614ddb8",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v0-s2-seed3-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s2-seed3-diagnostic-v1/craft-issue291-expanded-v0-s2-seed3-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s2-seed3-diagnostic-v1/craft-issue291-expanded-v0-s2-seed3-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "f4894f49cfbeb393021e543c049e408c52b931be05c198280c4a4da05b26d27a",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "85c55aec47c8f3a9a533455cfeb1846cfa129ebaa7c7a1ab07e412e3d68631b3",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v1-s2-seed3-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s2-seed3-diagnostic-v1/craft-issue291-expanded-v1-s2-seed3-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s2-seed3-diagnostic-v1/craft-issue291-expanded-v1-s2-seed3-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "a435b5c5f2f31b7af382e689e0f09ed110a9b04796c00a4cca57d0c2318f5c13",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "10691b9672d71b32ef6a4ead4e97b3b1b7b3d58e5f04f799451f6a46979224c9",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v4-s2-seed3-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s2-seed3-diagnostic-v1/craft-issue291-expanded-v4-s2-seed3-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s2-seed3-diagnostic-v1/craft-issue291-expanded-v4-s2-seed3-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "8644337ecca109a92e5bc9e80f9c69ec38c24af7f6afb2f0a1f872b974683122",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "3347737c11a37eed33998e0a076f6df204f640383131d1aa6c1b3b68224a8196",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v0-s3-seed5-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s3-seed5-diagnostic-v1/craft-issue291-expanded-v0-s3-seed5-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v0-s3-seed5-diagnostic-v1/craft-issue291-expanded-v0-s3-seed5-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "4a5117e649b39e45d54641ca02f14e680c9355b35467df9d73e7477775f857d9",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "e9e28cf02191009f97dd97c05b699de6c77545ce3a56cbacc720de7fcab76015",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v1-s3-seed5-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s3-seed5-diagnostic-v1/craft-issue291-expanded-v1-s3-seed5-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v1-s3-seed5-diagnostic-v1/craft-issue291-expanded-v1-s3-seed5-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "7d311a03a23c934931b5e4385f3135cb652d3f5753d494964117879c4675f342",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "b1032e5cce8913b21b96bc0f71b8b8a1de014c7bdd1d01eb0bd88555988f7130",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-v4-s3-seed5-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s3-seed5-diagnostic-v1/craft-issue291-expanded-v4-s3-seed5-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-v4-s3-seed5-diagnostic-v1/craft-issue291-expanded-v4-s3-seed5-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "2720f6ef7c4faec6598e004e93bf23c2f25c13ce2040b58fb9c978845ca0459f",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "4b04aeed6779500e245df13975df617130507fd9d27c5276a7ce2c21b762fe3a",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-expanded-analysis-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-analysis-diagnostic-v1/craft-issue291-expanded-analysis-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-expanded-analysis-diagnostic-v1/craft-issue291-expanded-analysis-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "24631b40642b84dbc7223fd972b400bc2874aea509d7d7bc37822fb8812fbd44",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "8206642243fd91d457d3c075f5b199b122c0da11444cb69af042739779b73c23",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
       "id": "minecraft-ollama-real-smoke-v1",
       "benchmark": "minecraft",
       "classification": "archived",
