@@ -2,6 +2,7 @@
 
 <!-- benchmark-result: minecraft-ollama-real-smoke-v1 -->
 <!-- benchmark-result: minecraft-port-real-smoke-v1 -->
+<!-- benchmark-result: minecraft-bridge-real-smoke-v1 -->
 
 Issues: #226, #243
 
@@ -21,6 +22,13 @@ Minecraft endpoint at `10.12.3.1:40000`. Its sanitized evidence is registered
 as immutable release `benchmark-minecraft-port-smoke-v1`. Port reachability does
 not establish bridge actions, world reset behavior, judged scoring, or benchmark
 performance.
+
+The read-only bridge smoke then completed against the same endpoint in 14.2
+seconds. It verified bridge ping and `get_environment_info_dict` for agent
+`Alice`, and process-session cleanup left no Node or bridge descendants. Its
+sanitized evidence is registered as immutable release
+`benchmark-minecraft-bridge-smoke-v1`. This is connectivity/integration evidence
+only; it does not establish world reset, judged scoring, or task performance.
 
 ## Required Runtime Assets
 
