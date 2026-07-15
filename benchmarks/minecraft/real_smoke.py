@@ -384,6 +384,9 @@ def _run_check_bundle(
 
 def _bridge_child(args: argparse.Namespace) -> int:
     phase_path = Path(args.phase_path)
+    _write_phase(phase_path, "preparing bridge runtime")
+    Path(".cache").mkdir(parents=True, exist_ok=True)
+    Path("data/history").mkdir(parents=True, exist_ok=True)
     _write_phase(phase_path, "loading bridge runtime")
     from env.env import Agent, VillagerBench, env_type
 

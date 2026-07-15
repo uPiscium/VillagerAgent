@@ -8,12 +8,14 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from benchmarks.common.run_artifacts import read_attempt_id, validate_run_attempt
 from benchmarks.minecraft.real_smoke import (
     _ProcessIdentity,
+    _bridge_child,
     _capture_process_identity,
     _collect_session_processes,
     _resolve_process_identity,
@@ -232,6 +234,54 @@ def test_bridge_timeout_reports_endpoint_and_phase(monkeypatch, tmp_path):
             timeout_seconds=0.1,
             overwrite=False,
         )
+
+
+def test_bridge_child_prepares_runtime_directories_before_environment_init(monkeypatch, tmp_path):
+    import env.env as env_module
+
+    class Environment:
+        running = False
+
+        def __init__(self, *args, **kwargs):
+            assert Path(".cache").is_dir()
+            assert Path("data/history").is_dir()
+
+        def agent_register(self, **kwargs):
+            return None
+
+        def stop(self):
+            return None
+
+    class Agent:
+        agent_process = {}
+
+        @staticmethod
+        def launch(**kwargs):
+            return None
+
+        @staticmethod
+        def ping(agent_name):
+            return {"status": True}
+
+        @staticmethod
+        def get_environment_info_dict(agent_name):
+            return {"status": True}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(env_module, "VillagerBench", Environment)
+    monkeypatch.setattr(env_module, "Agent", Agent)
+    args = SimpleNamespace(
+        phase_path=str(tmp_path / "phase.txt"),
+        result_path=str(tmp_path / "result.json"),
+        host="127.0.0.1",
+        port=25565,
+        local_port=5000,
+        agent_name="Alice",
+        world="world",
+    )
+
+    assert _bridge_child(args) == 0
+    assert (tmp_path / ".cache").is_dir()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX session regression")
