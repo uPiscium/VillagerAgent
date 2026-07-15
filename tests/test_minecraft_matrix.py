@@ -228,4 +228,5 @@ def _config(task_name, task_idx):
         "host": "127.0.0.1",
         "port": 25565,
         "task_name": task_name,
+        "task_scenario": "move",
     }
