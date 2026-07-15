@@ -51,11 +51,20 @@ _FORBIDDEN_DATA_KEYS = {
     "full_graph_state",
     "hidden_evaluator_state",
     "hidden_state",
+    "builder_prompt",
+    "internal_thinking",
     "oracle_plan",
+    "oracle_moves",
+    "private_reasoning",
     "private_observation",
     "private_observations",
     "private_view",
+    "raw_markdown",
+    "raw_stdout",
+    "stderr",
+    "stdout",
     "target_blueprint",
+    "target_director_views",
     "target_structure",
 }
 _CREDENTIAL_KEY = re.compile(
@@ -63,6 +72,7 @@ _CREDENTIAL_KEY = re.compile(
     re.IGNORECASE,
 )
 _CREDENTIAL_SOURCE_KEY = re.compile(r"(?:_env|credential_sources?)$", re.IGNORECASE)
+_NON_CREDENTIAL_TOKEN_KEYS = {"max_token", "max_tokens"}
 _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"\bgh[opusr]_[A-Za-z0-9_]{20,}\b"),
@@ -627,7 +637,7 @@ def _sanitize_value(value: Any) -> Any:
             key_text = str(key)
             if _is_hidden_key(key_text):
                 continue
-            if _CREDENTIAL_KEY.search(key_text) and not _CREDENTIAL_SOURCE_KEY.search(key_text):
+            if _is_credential_key(key_text) and not _CREDENTIAL_SOURCE_KEY.search(key_text):
                 result[key] = "[REDACTED]"
             else:
                 result[key] = _sanitize_value(child)
@@ -638,7 +648,7 @@ def _sanitize_value(value: Any) -> Any:
 
 
 def _sanitize_scalar_for_key(key: str, value: Any) -> Any:
-    if _CREDENTIAL_KEY.search(key) and not _CREDENTIAL_SOURCE_KEY.search(key):
+    if _is_credential_key(key) and not _CREDENTIAL_SOURCE_KEY.search(key):
         return "[REDACTED]"
     return value
 
@@ -651,7 +661,7 @@ def _sanitize_text(text: str) -> str:
         match = assignment.match(line.rstrip("\r\n"))
         if match and _is_hidden_key(match.group(2)):
             continue
-        if match and _CREDENTIAL_KEY.search(match.group(2)) and not _CREDENTIAL_SOURCE_KEY.search(match.group(2)):
+        if match and _is_credential_key(match.group(2)) and not _CREDENTIAL_SOURCE_KEY.search(match.group(2)):
             ending = "\n" if line.endswith("\n") else ""
             line = f"{match.group(1)}{match.group(2)}{match.group(3)}[REDACTED]{ending}"
         lines.append(line)
@@ -664,6 +674,11 @@ def _sanitize_text(text: str) -> str:
 
 def _is_hidden_key(key: str) -> bool:
     return key.lower().replace("-", "_") in _FORBIDDEN_DATA_KEYS
+
+
+def _is_credential_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    return normalized not in _NON_CREDENTIAL_TOKEN_KEYS and bool(_CREDENTIAL_KEY.search(key))
 
 
 def _validate_public_path(relative: Path) -> None:
@@ -766,7 +781,7 @@ def _validate_key_value(key: str, value: Any, relative: Path) -> None:
         )
     if _CREDENTIAL_SOURCE_KEY.search(key):
         return
-    if not _CREDENTIAL_KEY.search(key):
+    if not _is_credential_key(key):
         return
     if value in (None, "", "[REDACTED]"):
         return

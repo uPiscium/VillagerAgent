@@ -1,12 +1,20 @@
 import json
 import subprocess
+import sys
 
 import pytest
+import requests
 
 from benchmarks.common.report import summarize_inputs
-from benchmarks.craft.config import load_config
-from benchmarks.craft.craft_env_adapter import CraftEnvAdapter
-from benchmarks.craft.run import run_config
+from benchmarks.craft.config import InvalidConfigError, load_config
+from benchmarks.craft.craft_env_adapter import (
+    CraftEnvAdapter,
+    _inspect_official_runner_leakage,
+    _official_runner_environment,
+    _require_official_runner_semantic_output,
+)
+from benchmarks.craft.leakage_guard import PartialInformationLeakageError
+from benchmarks.craft.run import _provenance_assets, run_config
 from benchmarks.craft.result_converter import normalize_results
 from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
 
@@ -17,6 +25,7 @@ def load_config_with_minimal_dataset(tmp_path, path, *, overrides=None):
         **(overrides or {}),
         "craft": {
             "dataset_path": str(dataset_path),
+            "official_runner_interpreter": sys.executable,
             **((overrides or {}).get("craft") or {}),
         },
     }
@@ -68,17 +77,21 @@ def test_official_baseline_runs_all_requested_structures(tmp_path):
 def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monkeypatch):
     secret = "sentinel-secret-value-12345"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.example/v1")
     config = load_config_with_minimal_dataset(
         tmp_path,
         "configs/craft/official_baseline_full.yaml",
         overrides={"structures": [0], "turns": 2, "seed": 7},
     )
 
-    def fake_run(command, cwd, check, capture_output, text):
+    def fake_run(command, cwd, env, timeout, check, capture_output, text):
         output_dir = command[command.index("--output") + 1]
         result_dir = tmp_path / "raw" / "official_craft_runner" / "gpt-4o-mini_gpt-4o-mini"
         assert output_dir == str(tmp_path / "raw" / "official_craft_runner")
         assert cwd == config["craft"]["repo_path"]
+        assert command[0] == config["craft"]["official_runner_interpreter"]
+        assert env["OPENAI_API_KEY"] == secret
+        assert env["OPENAI_BASE_URL"] == "https://gateway.example/v1"
         assert "--oracle" in command
         assert "--no_tools" in command
         result_dir.mkdir(parents=True)
@@ -97,9 +110,16 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
                     "final_progress": 1.0,
                     "turns": [{
                         "turn_number": 1,
+                        "director_prompt_D1": "private prompt",
+                        "builder_prompt": "private builder prompt",
                         "director_responses": {
-                            "D1": {"public_message": f"place red {secret}", "internal_thinking": "hidden"},
+                            "D1": {
+                                "public_message": f"place red {secret}",
+                                "internal_thinking": "hidden",
+                                "raw_response": "private raw response",
+                            },
                         },
+                        "target_director_views": {"D1": {"hidden": True}},
                         "oracle_moves": [{"hidden": True}],
                         "move_attempted": {"action": "place", "color": "red"},
                         "move_executed": True,
@@ -108,6 +128,9 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
                 }],
             }),
             encoding="utf-8",
+        )
+        (result_dir / "craft_structure_001_7.md").write_text(
+            f"private markdown {secret}", encoding="utf-8"
         )
         return subprocess.CompletedProcess(command, 0, stdout=f"ok {secret}", stderr=f"warning {secret}")
 
@@ -121,6 +144,11 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
     assert raw_result["turns"][0]["director_messages"] == {"D1": "place red [REDACTED]"}
     assert raw_result["turns"][0]["progress"] == {"overall_progress": 0.5}
     assert secret not in json.dumps(raw_result)
+    assert config["craft"]["official_runner_environment_forward"] == [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ]
+    assert "api_key" not in config["models"]["director"]
     sanitized_runner_output = json.loads(
         (tmp_path / "raw" / "official_craft_runner" / "gpt-4o-mini_gpt-4o-mini" / "craft_structure_001_7.json").read_text(
             encoding="utf-8"
@@ -130,7 +158,14 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
     assert "target_structure" not in serialized
     assert "oracle_moves" not in serialized
     assert "internal_thinking" not in serialized
+    assert "director_prompt_D1" not in serialized
+    assert "target_director_views" not in serialized
+    assert "raw_response" not in serialized
+    assert "builder_prompt" not in serialized
     assert secret not in serialized
+    assert not (tmp_path / "raw" / "official_craft_runner" / "gpt-4o-mini_gpt-4o-mini" / "craft_structure_001_7.md").exists()
+    assert "stdout" not in raw_result["official_craft_runner"]
+    assert "stderr" not in raw_result["official_craft_runner"]
 
     normalize_results(
         config=config,
@@ -140,6 +175,252 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
     )
     summary = json.loads((tmp_path / "normalized" / "summary.json").read_text(encoding="utf-8"))
     assert summary["runtime"]["baseline_type"] == "full_official_runner"
+
+
+def test_forwarded_openai_environment_rejects_unsafe_parent_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "parent-secret")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.example/v1?api_key=secret")
+    craft = {
+        "official_runner_environment": {},
+        "official_runner_environment_forward": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+    }
+
+    with pytest.raises(InvalidConfigError, match="must not contain credentials"):
+        _official_runner_environment(craft, seed=3)
+
+
+def test_official_runner_forwards_only_safe_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-be-forwarded")
+    config = load_config_with_minimal_dataset(
+        tmp_path,
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml",
+        overrides={"structures": [0], "turns": 1},
+    )
+
+    proxy_url = None
+    proxy_token = None
+
+    def fake_run(command, *, cwd, env, **kwargs):
+        nonlocal proxy_token, proxy_url
+        assert env["OPENAI_API_KEY"] != "ollama"
+        assert len(env["OPENAI_API_KEY"]) >= 32
+        proxy_token = env["OPENAI_API_KEY"]
+        assert env["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
+        assert env["PYTHONHASHSEED"] == "3"
+        proxy_url = env["OPENAI_BASE_URL"]
+        assert "UNRELATED_SECRET" not in env
+        result_dir = tmp_path / "raw" / "official_craft_runner" / "gemma4_12b_gemma4_12b"
+        result_dir.mkdir(parents=True)
+        (result_dir / "craft_structure_001_3.json").write_text(
+            json.dumps({
+                "experiment_info": {"structure_index": 0},
+                "games": [{
+                    "structure_id": "structure_001",
+                    "completed": False,
+                    "final_progress": 0.0,
+                    "turns": [{
+                        "turn_number": 1,
+                        "director_responses": {
+                            "D1": {"public_message": "Place the red block."},
+                        },
+                        "move_attempted": {"action": "place", "color": "red"},
+                        "move_executed": True,
+                    }],
+                }],
+            }),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("benchmarks.craft.craft_env_adapter.subprocess.run", fake_run)
+    result = CraftEnvAdapter(config, tmp_path).run("official_baseline")
+
+    persisted = json.dumps(result)
+    assert "ollama.arc.upiscium.dev" in persisted
+    assert '"OPENAI_API_KEY": "[REDACTED]"' in persisted
+    assert proxy_token not in persisted
+    assert result["official_craft_runner"]["compatibility_proxy"]["think"] is False
+    assert result["official_craft_runner"]["compatibility_proxy"]["effective_generation_settings"] == {
+        "director": {"temperature": 0.2, "max_tokens": 4096, "seed": 3},
+        "builder": {"temperature": 0.0, "max_tokens": 4096, "seed": 3},
+    }
+    with pytest.raises(requests.ConnectionError):
+        requests.get(f"{proxy_url}/models", timeout=0.2)
+
+
+def test_official_runner_semantic_gate_rejects_placeholder_messages(tmp_path, monkeypatch):
+    config = load_config_with_minimal_dataset(
+        tmp_path,
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml",
+        overrides={"structures": [0], "turns": 1},
+    )
+
+    def fake_run(command, **kwargs):
+        result_dir = tmp_path / "raw" / "official_craft_runner" / "gemma4_12b_gemma4_12b"
+        result_dir.mkdir(parents=True)
+        (result_dir / "craft_structure_001_3.json").write_text(
+            json.dumps({
+                "experiment_info": {"structure_index": 0},
+                "games": [{
+                    "structure_id": "structure_001",
+                    "completed": False,
+                    "turns": [{
+                        "turn_number": 1,
+                        "director_responses": {
+                            "D1": {"public_message": "No message provided"},
+                        },
+                    }],
+                }],
+            }),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("benchmarks.craft.craft_env_adapter.subprocess.run", fake_run)
+    with pytest.raises(RuntimeError, match="fallback/error"):
+        CraftEnvAdapter(config, tmp_path).run("official_baseline")
+
+
+@pytest.mark.parametrize("message", [
+    "No message provided",
+    "Error generating response: endpoint failed",
+    "Could not generate a response",
+    "Could not parse response: empty",
+    "Empty API response",
+    "No response from API",
+    "API request failed after retries",
+])
+def test_official_runner_semantic_gate_rejects_known_fallback_phrases(message):
+    games = [{
+        "structure_id": 0,
+        "turns": [{
+            "director_messages": {"D1": message},
+            "builder_action": {"action": "place"},
+            "move_executed": True,
+        }],
+    }]
+
+    with pytest.raises(RuntimeError, match="fallback/error"):
+        _require_official_runner_semantic_output(games)
+
+
+def test_official_runner_semantic_gate_rejects_fallback_among_valid_messages():
+    games = [{
+        "structure_id": 0,
+        "turns": [{
+            "director_messages": {
+                "D1": "Place a small red block.",
+                "D2": "No message provided",
+            },
+            "builder_action": {"action": "place"},
+            "move_executed": True,
+        }],
+    }]
+
+    with pytest.raises(RuntimeError, match="fallback/error"):
+        _require_official_runner_semantic_output(games)
+
+
+def test_official_runner_semantic_gate_requires_executed_builder_action():
+    games = [{
+        "structure_id": 0,
+        "turns": [{
+            "director_messages": {"D1": "Place a small red block."},
+            "builder_action": {"action": "place"},
+            "move_executed": False,
+        }],
+    }]
+
+    with pytest.raises(RuntimeError, match="no parsed, executed builder action"):
+        _require_official_runner_semantic_output(games)
+
+
+def test_official_runner_leakage_inspection_rejects_sentinel_public_exposure(tmp_path, monkeypatch):
+    sentinel = "SENTINEL-HIDDEN-TARGET-291"
+    config = load_config_with_minimal_dataset(
+        tmp_path,
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml",
+        overrides={"structures": [0], "turns": 1},
+    )
+
+    def fake_run(command, **kwargs):
+        result_dir = tmp_path / "raw" / "official_craft_runner" / "gemma4_12b_gemma4_12b"
+        result_dir.mkdir(parents=True)
+        (result_dir / "craft_structure_001_3.json").write_text(json.dumps({
+            "experiment_info": {"structure_index": 0},
+            "games": [{
+                "structure_id": "structure_001",
+                "target_structure": {"secret": sentinel},
+                "turns": [{
+                    "turn_number": 1,
+                    "director_prompt_D1": "Use only your own view.",
+                    "director_responses": {"D1": {"public_message": sentinel}},
+                    "move_attempted": {"action": "place"},
+                    "move_executed": True,
+                }],
+            }],
+        }), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("benchmarks.craft.craft_env_adapter.subprocess.run", fake_run)
+    with pytest.raises(PartialInformationLeakageError, match="target_structure"):
+        CraftEnvAdapter(config, tmp_path).run("official_baseline")
+
+
+def test_public_director_output_rejects_other_director_private_view(tmp_path):
+    sentinel = "SENTINEL-D2-PRIVATE-VIEW-291"
+    game = {
+        "target_director_views": {
+            "D1": {"marker": "SENTINEL-D1-OWN-VIEW-291"},
+            "D2": {"marker": sentinel},
+        },
+        "turns": [{
+            "director_prompt_D1": "SENTINEL-D1-OWN-VIEW-291",
+            "director_responses": {"D1": {"public_message": sentinel}},
+            "move_attempted": {"action": "place"},
+        }],
+    }
+
+    with pytest.raises(PartialInformationLeakageError, match="other_private_view:D2"):
+        _inspect_official_runner_leakage(game, artifact_path=tmp_path / "runner.json")
+
+
+def test_public_builder_output_rejects_every_director_private_view(tmp_path):
+    sentinel = "SENTINEL-D1-PRIVATE-VIEW-291"
+    game = {
+        "target_director_views": {
+            "D1": {"marker": sentinel},
+            "D2": {"marker": "SENTINEL-D2-PRIVATE-VIEW-291"},
+        },
+        "turns": [{
+            "director_prompt_D1": "Use only your view.",
+            "director_responses": {"D1": {"public_message": "Place a block."}},
+            "move_attempted": {"action": "place", "confirmation": sentinel},
+        }],
+    }
+
+    with pytest.raises(PartialInformationLeakageError, match="private_view:D1"):
+        _inspect_official_runner_leakage(game, artifact_path=tmp_path / "runner.json")
+
+
+def test_external_ollama_runner_provenance_includes_proxy_and_environment(tmp_path):
+    config = load_config_with_minimal_dataset(
+        tmp_path,
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml",
+        overrides={"structures": [0], "turns": 1},
+    )
+
+    assets = {item["name"]: item for item in _provenance_assets(
+        config,
+        condition="official_baseline",
+    )}
+
+    assert assets["official_runner_interpreter"]["available"] is True
+    assert assets["official_runner_python_environment"]["sha256"]
+    assert assets["official_runner_dependencies"]["sha256"]
+    assert assets["official_runner_config"]["sha256"]
+    assert assets["official_runner_compatibility_proxy"]["available"] is True
+    assert assets["official_runner_compatibility_proxy"]["sha256"]
 
 
 def test_official_baseline_failure_redacts_partial_runner_output(tmp_path, monkeypatch):

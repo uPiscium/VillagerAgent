@@ -88,9 +88,21 @@ def _payload_needles(payload: Any) -> list[str]:
     if isinstance(payload, dict):
         compact = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         pretty = json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2)
-        return [compact, pretty] if len(compact) >= 6 else []
+        nested = [needle for value in payload.values() for needle in _nested_payload_needles(value)]
+        return ([compact, pretty] if len(compact) >= 6 else []) + nested
     if isinstance(payload, list):
         compact = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         pretty = json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2)
-        return [compact, pretty] if len(compact) >= 6 else []
+        nested = [needle for value in payload for needle in _nested_payload_needles(value)]
+        return ([compact, pretty] if len(compact) >= 6 else []) + nested
     return [str(payload)] if len(str(payload)) >= 6 else []
+
+
+def _nested_payload_needles(payload: Any) -> list[str]:
+    if isinstance(payload, str):
+        return [payload] if len(payload) >= 12 else []
+    if isinstance(payload, dict):
+        return [needle for value in payload.values() for needle in _nested_payload_needles(value)]
+    if isinstance(payload, list):
+        return [needle for value in payload for needle in _nested_payload_needles(value)]
+    return []

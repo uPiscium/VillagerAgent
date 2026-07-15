@@ -5,7 +5,7 @@ from pathlib import Path
 
 from benchmarks.craft.config import repo_root
 from benchmarks.craft.dual_dag.schema import DUAL_DAG_SCHEMA_VERSION
-from benchmarks.craft.hidden_state_keys import hidden_state_key_labels
+from benchmarks.craft.hidden_state_keys import official_runner_hidden_state_key_labels
 
 
 REQUIRED_NORMALIZED_ARTIFACTS = [
@@ -143,7 +143,7 @@ def _hidden_key_hits(normalized_dir: Path) -> list[dict]:
         if not path.exists():
             continue
         text = path.read_text(encoding="utf-8")
-        for key in hidden_state_key_labels():
+        for key in official_runner_hidden_state_key_labels():
             if key in text:
                 hits.append({"file": path.name, "key": key})
     return hits

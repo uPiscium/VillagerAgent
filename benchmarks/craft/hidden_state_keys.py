@@ -9,7 +9,11 @@ BASE_HIDDEN_STATE_KEYS = frozenset({
 
 OFFICIAL_RUNNER_HIDDEN_STATE_KEYS = BASE_HIDDEN_STATE_KEYS | frozenset({
     "target_spans",
+    "target_director_views",
     "internal_thinking",
+    "private_reasoning",
+    "raw_response",
+    "builder_prompt",
 })
 
 

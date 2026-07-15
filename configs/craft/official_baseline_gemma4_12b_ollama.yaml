@@ -2,12 +2,25 @@ run:
   name: "craft_official_baseline_gemma4_12b_ollama"
   seed: 3
   output_dir: "result/craft"
-  structures: [0, 1, 2]
-  turns: 5
+  structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  turns: 20
 
 craft:
   repo_path: "external/CRAFT"
   dataset_path: "external/CRAFT/data/structures_dataset_20.json"
+  official_runner: "external_cli"
+  official_runner_interpreter: "/tmp/opencode/issue-291-craft-py312-venv/bin/python"
+  official_runner_dependencies: "external/CRAFT/requirements.txt"
+  official_runner_bootstrap: "benchmarks/craft/external_runner_bootstrap.py"
+  official_runner_mode: "api"
+  official_runner_timeout_seconds: 1800
+  official_runner_require_semantic_output: true
+  official_runner_environment:
+    OPENAI_API_KEY: "ollama"
+  official_runner_ollama_proxy:
+    enabled: true
+    upstream_base_url: "http://ollama.arc.upiscium.dev"
+    request_timeout_seconds: 300
   use_oracle: true
   oracle_n: 5
   builder_tool_use: false
@@ -17,16 +30,14 @@ villageragent:
 
 models:
   director:
-    provider: "ollama_native"
+    provider: "openai_compatible"
     model: "gemma4:12b"
-    base_url: "http://ollama.arc.upiscium.dev"
-    think: false
+    base_url: "http://ollama.arc.upiscium.dev/v1"
     temperature: 0.2
     max_tokens: 4096
   builder:
-    provider: "ollama_native"
+    provider: "openai_compatible"
     model: "gemma4:12b"
-    base_url: "http://ollama.arc.upiscium.dev"
-    think: false
+    base_url: "http://ollama.arc.upiscium.dev/v1"
     temperature: 0.0
     max_tokens: 4096

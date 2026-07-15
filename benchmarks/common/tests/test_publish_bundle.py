@@ -59,6 +59,12 @@ def test_validates_bundle_and_builds_byte_identical_archive(tmp_path):
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
 
 
+def test_validator_does_not_treat_model_token_limit_as_credential(tmp_path):
+    bundle = _bundle(tmp_path, extra={"model.json": {"max_tokens": 4096}})
+
+    assert validate_public_bundle(bundle).benchmark == "minecraft"
+
+
 @pytest.mark.parametrize(
     ("extra", "message"),
     [
@@ -215,7 +221,13 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
         "matrix_summary.json": {"status": "failed"},
         "matrix_metrics.csv": "status,password\nfailed,ordinary-secret\n",
         "raw.json": {"private_observation": "answer"},
-        "normalized/events.jsonl": '{"event":"step","hidden_state":"answer","token":"ordinary-secret","api_keys":["SENTINEL_API_KEYS_SECRET"]}\n',
+        "normalized/events.jsonl": (
+            '{"event":"step","hidden_state":"answer","token":"ordinary-secret",'
+            '"api_keys":["SENTINEL_API_KEYS_SECRET"],'
+            '"target_structure":"SENTINEL_TARGET","oracle_moves":["SENTINEL_ORACLE"],'
+            '"builder_prompt":"SENTINEL_BUILDER_PROMPT",'
+            '"private_reasoning":"SENTINEL_REASONING","stdout":"SENTINEL_STDOUT"}\n'
+        ),
     }
     for name, payload in files.items():
         path = source / name
@@ -241,6 +253,14 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
     assert "hidden_state" not in event
     assert event["token"] == "[REDACTED]"
     assert event["api_keys"] == "[REDACTED]"
+    for hidden_key in (
+        "target_structure",
+        "oracle_moves",
+        "builder_prompt",
+        "private_reasoning",
+        "stdout",
+    ):
+        assert hidden_key not in event
     source_config = json.loads((public / "source_config.resolved.json").read_text())
     assert source_config["api_key_list"] == "[REDACTED]"
     assert source_config["credentials"] == "[REDACTED]"

@@ -1,8 +1,11 @@
 import copy
 import json
+import os
 import random
+import secrets
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +18,7 @@ from benchmarks.common.sanitization import (
 from benchmarks.craft.adapters.openai_compatible import OpenAICompatibleClient
 from benchmarks.craft.adapters.ollama_client import OllamaNativeClient
 from benchmarks.craft.craft_protocol import CraftPrivateView, CraftPublicState
+from benchmarks.craft.config import OPENAI_BASE_URL_PATHS, validate_safe_http_endpoint
 from benchmarks.craft.dual_dag.action_candidates import (
     action_candidate_from_parsed_action,
     action_candidates_from_moves,
@@ -31,7 +35,8 @@ from benchmarks.craft.hidden_state_keys import (
 )
 from benchmarks.craft.dual_dag.gating import should_clarify
 from benchmarks.craft.dual_dag.runtime import DualDAGRuntime
-from benchmarks.craft.leakage_guard import LeakageGuard
+from benchmarks.craft.leakage_guard import LeakageGuard, PartialInformationLeakageError
+from benchmarks.craft.ollama_openai_proxy import OllamaOpenAIProxy
 from benchmarks.craft.villager.villager_craft_agent import VillagerCraftDirectorGroup
 
 
@@ -353,20 +358,52 @@ class CraftEnvAdapter:
             craft_config=craft,
             model_config=self.config["models"],
         )
-        secret_values = collect_secret_values(self.config)
+        proxy_context = _official_runner_proxy(
+            craft,
+            self.config.get("models", {}),
+            seed=run.get("seed", 3),
+        )
+        proxy_token = getattr(proxy_context, "auth_token", None)
+        secret_values = (*collect_secret_values(self.config), *([proxy_token] if proxy_token else []))
+        proxy_metadata = None
+        runner_environment = None
         try:
-            completed = subprocess.run(
-                command,
-                cwd=craft["repo_path"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            games = _load_official_runner_games(
-                runner_output=runner_output,
-                condition=condition,
-                requested_structures=structures,
-            )
+            with proxy_context as proxy:
+                runner_environment = _official_runner_environment(
+                    craft,
+                    openai_base_url=proxy.openai_base_url if proxy else None,
+                    openai_api_key=proxy.auth_token if proxy else None,
+                    seed=run.get("seed", 3),
+                )
+                secret_values = (
+                    *secret_values,
+                    *collect_secret_values({
+                        "api_key": runner_environment.get("OPENAI_API_KEY", ""),
+                    }),
+                )
+                try:
+                    completed = subprocess.run(
+                        command,
+                        cwd=craft["repo_path"],
+                        env=runner_environment,
+                        timeout=craft.get("official_runner_timeout_seconds", 1800),
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise TimeoutError(
+                        f"Official CRAFT runner exceeded {exc.timeout} seconds"
+                    ) from exc
+                games = _load_official_runner_games(
+                    runner_output=runner_output,
+                    condition=condition,
+                    requested_structures=structures,
+                )
+                if craft.get("official_runner_require_semantic_output", False):
+                    _require_official_runner_semantic_output(games)
+                if proxy:
+                    proxy_metadata = proxy.metadata()
         finally:
             _sanitize_official_runner_outputs(runner_output, secret_values=secret_values)
         raw_result = sanitize_artifact_value(
@@ -376,6 +413,18 @@ class CraftEnvAdapter:
         raw_result["official_craft_runner"] = {
             "mode": "external_cli",
             "command": sanitize_command(command, secret_values=secret_values),
+            "environment": sanitize_artifact_value(
+                {
+                    key: value
+                    for key, value in (runner_environment or {}).items()
+                    if key in {"OPENAI_API_KEY", "OPENAI_BASE_URL"}
+                },
+                secret_values=secret_values,
+            ),
+            "compatibility_proxy": sanitize_artifact_value(
+                proxy_metadata,
+                secret_values=secret_values,
+            ) if proxy_metadata else None,
             "repo_path": craft["repo_path"],
             "dataset_path": craft["dataset_path"],
             "output_dir": str(runner_output),
@@ -385,8 +434,8 @@ class CraftEnvAdapter:
             "use_oracle": craft.get("use_oracle", False),
             "oracle_n": craft.get("oracle_n"),
             "builder_tool_use": craft.get("builder_tool_use", False),
-            "stdout": redact_text(completed.stdout, secret_values=secret_values),
-            "stderr": redact_text(completed.stderr, secret_values=secret_values),
+            "stdout_retained": False,
+            "stderr_retained": False,
         }
         raw_dir = self.output_dir / "raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -1308,7 +1357,9 @@ def _official_runner_command(
     director = model_config.get("director", {})
     builder = model_config.get("builder", {})
     command = [
-        sys.executable,
+        craft_config["official_runner_interpreter"],
+        craft_config["official_runner_bootstrap"],
+        str(seed),
         str(craft_repo / "run_craft.py"),
         "--mode",
         craft_config.get("official_runner_mode", "api"),
@@ -1335,6 +1386,105 @@ def _official_runner_command(
     return command
 
 
+def _official_runner_environment(
+    craft_config: dict,
+    *,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
+    seed: int | None = None,
+) -> dict[str, str]:
+    inherited_keys = (
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    )
+    environment = {key: os.environ[key] for key in inherited_keys if key in os.environ}
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    if seed is not None:
+        environment["PYTHONHASHSEED"] = str(seed)
+    environment.update(craft_config.get("official_runner_environment", {}))
+    for key in craft_config.get("official_runner_environment_forward", []):
+        if key in os.environ:
+            environment[key] = os.environ[key]
+    if openai_base_url:
+        environment["OPENAI_BASE_URL"] = openai_base_url
+    if openai_api_key:
+        environment["OPENAI_API_KEY"] = openai_api_key
+    if environment.get("OPENAI_BASE_URL"):
+        environment["OPENAI_BASE_URL"] = validate_safe_http_endpoint(
+            environment["OPENAI_BASE_URL"],
+            field="OPENAI_BASE_URL",
+            allowed_paths=OPENAI_BASE_URL_PATHS,
+        )
+    return environment
+
+
+def _official_runner_proxy(craft_config: dict, model_config: dict, *, seed: int):
+    config = craft_config.get("official_runner_ollama_proxy", {})
+    if not config.get("enabled", False):
+        return nullcontext(None)
+    proxy = OllamaOpenAIProxy(
+        upstream_base_url=config["upstream_base_url"],
+        auth_token=secrets.token_urlsafe(32),
+        request_timeout_seconds=config.get("request_timeout_seconds", 300),
+        generation_overrides={
+            role: {
+                "temperature": model_config.get(role, {}).get("temperature"),
+                "max_tokens": model_config.get(role, {}).get("max_tokens"),
+                "seed": seed,
+            }
+            for role in ("director", "builder")
+        },
+    )
+    return proxy
+
+
+def _require_official_runner_semantic_output(games: list[dict]) -> None:
+    fallback_phrases = (
+        "no message provided",
+        "error generating",
+        "could not generate",
+        "could not parse response",
+        "empty api response",
+        "no response from api",
+        "request timed out",
+        "api request failed",
+    )
+    for game in games:
+        messages = [
+            str(message).strip()
+            for turn in game.get("turns", [])
+            for message in turn.get("director_messages", {}).values()
+        ]
+        if any(
+            phrase in message.lower()
+            for message in messages
+            for phrase in fallback_phrases
+        ):
+            raise RuntimeError(
+                f"Official CRAFT runner produced a director fallback/error for structure {game.get('structure_id')}"
+            )
+        meaningful = any(messages)
+        if not meaningful:
+            raise RuntimeError(
+                f"Official CRAFT runner produced no semantic director output for structure {game.get('structure_id')}"
+            )
+        executed_action = any(
+            isinstance(turn.get("builder_action"), dict)
+            and bool(turn["builder_action"].get("action"))
+            and turn.get("move_executed") is True
+            for turn in game.get("turns", [])
+        )
+        if not executed_action:
+            raise RuntimeError(
+                f"Official CRAFT runner produced no parsed, executed builder action for structure {game.get('structure_id')}"
+            )
+
+
 def _load_official_runner_games(
     *,
     runner_output: Path,
@@ -1348,11 +1498,15 @@ def _load_official_runner_games(
         for game in payload.get("games", []):
             structure_index = _official_structure_index(payload, game)
             if structure_index in requested_structures:
-                games_by_structure[structure_index] = _convert_official_game(
+                leakage_checks = _inspect_official_runner_leakage(game, artifact_path=path)
+                converted = _convert_official_game(
                     condition=condition,
                     game=game,
                     structure_index=structure_index,
                 )
+                converted["leakage_passed"] = all(check.get("passed", False) for check in leakage_checks)
+                converted["leakage_report"] = {"checks": leakage_checks}
+                games_by_structure[structure_index] = converted
     missing = [index for index in requested_structures if index not in games_by_structure]
     if missing:
         raise RuntimeError(
@@ -1378,6 +1532,9 @@ def _sanitize_official_runner_outputs(
             path.unlink()
             continue
         if not path.is_file():
+            continue
+        if path.suffix.lower() == ".md":
+            path.unlink()
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -1406,11 +1563,81 @@ def _drop_hidden_keys(value, forbidden_keys: set[str]):
         return {
             key: _drop_hidden_keys(item, forbidden_keys)
             for key, item in value.items()
-            if key not in forbidden_keys
+            if key not in forbidden_keys and not str(key).startswith("director_prompt_")
         }
     if isinstance(value, list):
         return [_drop_hidden_keys(item, forbidden_keys) for item in value]
     return value
+
+
+def _inspect_official_runner_leakage(game: dict, *, artifact_path: Path) -> list[dict]:
+    guard = LeakageGuard({})
+    target_views = game.get("target_director_views", {}) or {}
+    target_structure = game.get("target_structure")
+    for turn in game.get("turns", []):
+        oracle_moves = turn.get("oracle_moves")
+        for key, prompt in turn.items():
+            if not str(key).startswith("director_prompt_") or not isinstance(prompt, str):
+                continue
+            director_id = str(key).removeprefix("director_prompt_")
+            forbidden = {
+                "target_structure": target_structure,
+                "oracle_moves": oracle_moves,
+                **{
+                    f"other_private_view:{other_id}": view
+                    for other_id, view in target_views.items()
+                    if other_id != director_id
+                },
+            }
+            guard.inspect_prompt(
+                director_id=director_id,
+                prompt_messages=[{"role": "user", "content": prompt}],
+                forbidden_payloads=forbidden,
+                artifact_path=artifact_path,
+            )
+        for director_id, response in (turn.get("director_responses", {}) or {}).items():
+            public_message = response.get("public_message", "") if isinstance(response, dict) else str(response)
+            guard.inspect_prompt(
+                director_id=f"public_director:{director_id}",
+                prompt_messages=[{"role": "user", "content": public_message}],
+                forbidden_payloads={
+                    "target_structure": target_structure,
+                    "oracle_moves": oracle_moves,
+                    **{
+                        f"other_private_view:{other_id}": view
+                        for other_id, view in target_views.items()
+                        if other_id != director_id
+                    },
+                },
+                artifact_path=artifact_path,
+            )
+        builder_output = {
+            key: turn.get(key)
+            for key in ("move_attempted", "builder_action", "builder_response", "clarification")
+            if turn.get(key) is not None
+        }
+        builder_output["conversation"] = [
+            message
+            for message in (turn.get("conversation_snapshot", []) or [])
+            if str(message).startswith("Builder:")
+        ]
+        guard.inspect_prompt(
+            director_id="public_builder",
+            prompt_messages=[{"role": "user", "content": json.dumps(builder_output, sort_keys=True)}],
+            forbidden_payloads={
+                "target_structure": target_structure,
+                **{
+                    f"private_view:{director_id}": view
+                    for director_id, view in target_views.items()
+                },
+            },
+            artifact_path=artifact_path,
+        )
+    if not guard.reports:
+        raise PartialInformationLeakageError(
+            f"Official CRAFT runner produced no inspectable leakage evidence: {artifact_path}"
+        )
+    return guard.reports
 
 
 def _official_structure_index(payload: dict, game: dict) -> int:

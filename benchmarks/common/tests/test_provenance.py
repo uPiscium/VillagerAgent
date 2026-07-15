@@ -1,10 +1,12 @@
 import json
 import subprocess
+import sys
 
 from benchmarks.experiment_provenance import (
     file_identity,
     finalize_provenance,
     git_identity,
+    python_environment_identity,
     write_provenance,
 )
 
@@ -80,3 +82,28 @@ def test_missing_required_asset_marks_environment_unverifiable(tmp_path):
 
     assert provenance["environment_unverifiable"] is True
     assert "executable:runtime:missing" in provenance["unverifiable_reasons"]
+
+
+def test_python_environment_identity_fingerprints_installed_dependencies():
+    first = python_environment_identity(sys.executable, name="runner")
+    second = python_environment_identity(sys.executable, name="runner")
+
+    assert first["available"] is True
+    assert first["python_version"]
+    assert first["package_count"] > 0
+    assert first["sha256"] == second["sha256"]
+
+
+def test_python_environment_identity_times_out_safely(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr("benchmarks.experiment_provenance.subprocess.run", timeout)
+    identity = python_environment_identity(
+        sys.executable,
+        name="runner",
+        timeout_seconds=0.01,
+    )
+
+    assert identity["available"] is False
+    assert identity["reason"] == "python_environment_identity_unavailable"
