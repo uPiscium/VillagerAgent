@@ -241,6 +241,12 @@ def _run_minecraft_experiment_attempt(
         action_log = runtime_result.get("action_log") if action_log_available else {}
         score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
 
+    meta_judger_diagnostics = (
+        _read_json(runtime_result_path.parent / "meta_judger_diagnostics.json", default={})
+        if execute and launch_config.get("task_type") == "meta"
+        else {}
+    )
+
     runtime_task_dag_snapshot = _runtime_task_dag_snapshot(
         runtime_result=runtime_result,
         fallback_snapshot=task_store.snapshot(),
@@ -316,6 +322,9 @@ def _run_minecraft_experiment_attempt(
         "selected_description": selected_task.description if selected_task is not None else "",
         "final_score": sanitize_public_value(score),
         "progress": _progress_from_score(score),
+        "score_available": bool(score),
+        "meta_judger_diagnostics_available": bool(meta_judger_diagnostics),
+        "load_status": _last_load_status(meta_judger_diagnostics),
         "error": error,
         "error_type": error_type,
         "timed_out": timed_out,
@@ -352,6 +361,11 @@ def _run_minecraft_experiment_attempt(
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
     _write_json(output_dir / "summary.json", summary)
+    if meta_judger_diagnostics:
+        _write_json(
+            output_dir / "meta_judger_diagnostics.json",
+            sanitize_artifact_value(meta_judger_diagnostics, secret_values=secret_values),
+        )
     if execute and not retain_runtime_result:
         _remove_runtime_result(runtime_result_path)
     elif execute:
@@ -568,6 +582,14 @@ def _required_int(config: dict, field: str, *, context: str) -> int:
         return int(config[field])
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{context}.{field} must be an integer") from exc
+
+
+def _last_load_status(diagnostics: dict) -> str | None:
+    history = diagnostics.get("load_status_history", []) if isinstance(diagnostics, dict) else []
+    if not history:
+        return None
+    last = history[-1]
+    return last.get("status") if isinstance(last, dict) else None
 
 
 def _execute_real_runtime(

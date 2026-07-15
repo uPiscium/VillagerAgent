@@ -55,6 +55,7 @@ class VillagerBench:
         self.langchain_model = ""
         self.base_port = 5000
         self.op_path = ""
+        self.meta_diagnostics_dir = None
         if not os.path.exists("data"):
             os.mkdir("data")
 
@@ -315,8 +316,10 @@ class VillagerBench:
         elif self.env_type == env_type.meta:
             command = ["python", "env/meta_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name]
             os.makedirs("data", exist_ok=True)
-            stdout_path = "data/meta_judger.stdout.log"
-            stderr_path = "data/meta_judger.stderr.log"
+            diagnostics_dir = getattr(self, "meta_diagnostics_dir", None) or "data"
+            os.makedirs(diagnostics_dir, exist_ok=True)
+            stdout_path = os.path.join(diagnostics_dir, "meta_judger.stdout.log")
+            stderr_path = os.path.join(diagnostics_dir, "meta_judger.stderr.log")
             with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
                 judger_process = subprocess.Popen(command, stdout=stdout, stderr=stderr)
             diagnostics = {
@@ -377,9 +380,10 @@ class VillagerBench:
                 self._write_meta_judger_diagnostics(diagnostics)
             raise Exception("server failed to start")
 
-    @staticmethod
-    def _write_meta_judger_diagnostics(diagnostics):
-        with open("data/meta_judger_diagnostics.json", "w", encoding="utf-8") as f:
+    def _write_meta_judger_diagnostics(self, diagnostics):
+        diagnostics_dir = getattr(self, "meta_diagnostics_dir", None) or "data"
+        os.makedirs(diagnostics_dir, exist_ok=True)
+        with open(os.path.join(diagnostics_dir, "meta_judger_diagnostics.json"), "w", encoding="utf-8") as f:
             json.dump(diagnostics, f, indent=4)
     
     def get_msg(self, agent_name: str):

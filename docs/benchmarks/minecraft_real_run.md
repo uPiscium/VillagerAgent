@@ -1,6 +1,6 @@
 # Minecraft Real-Run Validation
 
-Issue: #226
+Issues: #226, #243
 
 ## Purpose
 
@@ -88,6 +88,41 @@ Mutation metadata separates four concerns. `mutates_environment` is `true` for e
 When server access is available, start with `env_type.none` before running a judged task. This checks the bridge and a non-destructive action without measuring benchmark success.
 
 Prior local connectivity evidence verified Python `VillagerBench` to FastAPI/mineflayer bridge to a remote Minecraft server and back, but it did not launch a benchmark judger or measure scored task completion. Keep new evidence in this document or in run-specific notes under `result/`; the legacy documentation directory has been removed.
+
+Issue #243 remains externally blocked on access to the required Ollama model, resettable Minecraft server/world, bridge, and judged task assets. Automated tests validate the opt-in harness and artifacts only; they are not real-run evidence and do not satisfy the issue's judged-execution requirement.
+
+## Opt-In Real Smoke Targets
+
+All real checks are pytest-skipped by default, including during `just test`. Set only the component variable you intend to run and configure a dedicated output root:
+
+```bash
+export VILLAGER_REAL_SMOKE_OUTPUT_DIR=/absolute/path/to/verification-output
+
+VILLAGER_OLLAMA_REAL_SMOKE=1 just real-smoke-ollama
+VILLAGER_MINECRAFT_PORT_SMOKE=1 just real-smoke-port
+VILLAGER_MINECRAFT_BRIDGE_SMOKE=1 just real-smoke-bridge
+VILLAGER_MINECRAFT_JUDGED_SMOKE=1 just real-smoke-judged
+```
+
+The targets report `SKIP` unless their exact opt-in variable is `1`. An enabled target fails clearly when a required setting is absent. `just real-smoke` runs the same four tests and still only activates explicitly enabled components.
+
+Common settings:
+
+- `MINECRAFT_HOST` and `MINECRAFT_PORT`: required by port and bridge checks.
+- `VILLAGER_REAL_SMOKE_TIMEOUT_SECONDS`: positive per-check bound, default `30` seconds.
+- `VILLAGER_REAL_SMOKE_OVERWRITE=1`: explicitly replace a prior managed attempt bundle. Otherwise non-empty output directories are rejected per #296.
+- `OLLAMA_API_BASE` and `OLLAMA_MODEL`: Ollama endpoint and installed model. The preflight calls `/api/tags`, verifies the model, and records its digest when exposed.
+- `MINECRAFT_SMOKE_AGENT_NAME`, `MINECRAFT_SMOKE_LOCAL_PORT`, and `MINECRAFT_SMOKE_WORLD`: optional bridge settings, defaulting to `Alice`, `5000`, and `world`.
+- `MINECRAFT_JUDGED_CONFIG`: required path to one single-agent `task_type=meta` config object with a non-empty `task_scenario` and `evaluation_arg`, an existing reset/world identity path, an existing bridge identity path, and explicit server version/protocol identity. TCP reachability is checked before any mutating runtime starts.
+- `MINECRAFT_JUDGED_TIMEOUT_SECONDS`: positive judged execute bound, default `600` seconds.
+
+The bridge check launches `VillagerBench(env_type.none)` through the FastAPI bridge, verifies bridge ping, and performs the read-only `get_environment_info_dict` action. It does not invoke an LLM or claim task performance.
+
+Each preflight/bridge output is a unique managed attempt containing `attempt.json`, `verification.json`, standardized `provenance.json`, `artifact_manifest.json`, and `_COMPLETED` on success. The judged target preserves the normal `minecraft_judged_meta` experiment bundle and adds a `minecraft_judged_smoke` parent attempt whose status reflects smoke success, including score availability. Existing bundles require explicit overwrite.
+
+`command.txt` and provenance `argv` record a runnable public smoke subcommand with the effective output directory, timeout, host/port or judged config, and explicit overwrite flag. Service credentials remain environment-provided and are redacted from persisted artifacts.
+
+For `meta`, #234 diagnostics are written directly below the judged run's `.runtime/` directory and normalized `meta_judger_diagnostics.json` is emitted when available. The summary reports `load_status`, `meta_judger_diagnostics_available`, and `score_available`. A timeout or missing score makes the judged target fail while retaining the actionable bundle; this is blocker evidence, not a performance result.
 
 ## Tool Limitations
 
