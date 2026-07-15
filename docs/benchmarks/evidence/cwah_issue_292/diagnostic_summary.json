@@ -1,0 +1,137 @@
+{
+  "schema_version": "1.0.0",
+  "id": "cwah-issue292-dual-dag-diagnostic-v2",
+  "classification": "diagnostic",
+  "performance_claim": false,
+  "comparison": {
+    "scope": "tasks 0,1,2 x seeds 0,1 x 25 steps",
+    "latest_pre_dual_dag_record": "2026-07-10 search-discovery comparison",
+    "settings_matched": true,
+    "strict_runtime_equivalent": false,
+    "runtime_asset_equivalence": "unverifiable",
+    "limitation": "The pre-Dual-DAG source bundle and runtime identities are unavailable and legacy. This prevents a strict runtime-equivalent comparison, but the matched tasks, seeds, and step budget provide the issue-required bounded diagnostic context only."
+  },
+  "aggregate": {
+    "runs": 6,
+    "runtime_failed_runs": 0,
+    "task_successes": 0,
+    "mean_normalized_progress": 0.5920745920745921,
+    "mean_steps": 25.0,
+    "action_counts": {
+      "grab": 6,
+      "walktowards": 144
+    },
+    "policy_overrides": 150,
+    "policy_override_reason_counts": {
+      "prefer_physical_after_steps": 150
+    },
+    "failed_action_records": 0,
+    "failure_reason_counts": {},
+    "navigation_loop_suppressions": 8,
+    "result_failures": 0
+  },
+  "dominant_failure_sequence": "Every run navigated repeatedly, performed one grab, then resumed navigation until the step budget; no placement action occurred.",
+  "runs": [
+    {
+      "task_id": 0,
+      "seed": 0,
+      "normalized_progress": 0.6153846153846154,
+      "steps": 25,
+      "action_sequence_rle": [["walktowards", 14], ["grab", 1], ["walktowards", 10]],
+      "navigation_loop_suppressions": 1,
+      "observation_nodes": 6392,
+      "action_candidate_nodes": 466,
+      "action_candidate_edges": 108,
+      "source_dual_dag_sha256": "1e0eadf2ba42c6d8122feae839effd5ca14b2acccf35669c2dce5a908ae7facf"
+    },
+    {
+      "task_id": 0,
+      "seed": 1,
+      "normalized_progress": 0.6153846153846154,
+      "steps": 25,
+      "action_sequence_rle": [["walktowards", 14], ["grab", 1], ["walktowards", 10]],
+      "navigation_loop_suppressions": 1,
+      "observation_nodes": 6689,
+      "action_candidate_nodes": 466,
+      "action_candidate_edges": 109,
+      "source_dual_dag_sha256": "bb47aba0bd3cee6f29e5341aed3a8478569cd3c4327fa9cdeaee1ccccb102ec6"
+    },
+    {
+      "task_id": 1,
+      "seed": 0,
+      "normalized_progress": 0.6153846153846154,
+      "steps": 25,
+      "action_sequence_rle": [["walktowards", 8], ["grab", 1], ["walktowards", 16]],
+      "navigation_loop_suppressions": 2,
+      "observation_nodes": 10278,
+      "action_candidate_nodes": 776,
+      "action_candidate_edges": 196,
+      "source_dual_dag_sha256": "5ce270fa59951378a43ce852f8ba0d522e540b14d8622516f6f7698cad00dd76"
+    },
+    {
+      "task_id": 1,
+      "seed": 1,
+      "normalized_progress": 0.6153846153846154,
+      "steps": 25,
+      "action_sequence_rle": [["walktowards", 12], ["grab", 1], ["walktowards", 12]],
+      "navigation_loop_suppressions": 2,
+      "observation_nodes": 9170,
+      "action_candidate_nodes": 776,
+      "action_candidate_edges": 193,
+      "source_dual_dag_sha256": "be4a2b6ccf5778fb6a3402461e327542b59bbb564abf6e386265d5af3e9b470b"
+    },
+    {
+      "task_id": 2,
+      "seed": 0,
+      "normalized_progress": 0.5454545454545454,
+      "steps": 25,
+      "action_sequence_rle": [["walktowards", 12], ["grab", 1], ["walktowards", 12]],
+      "navigation_loop_suppressions": 1,
+      "observation_nodes": 9123,
+      "action_candidate_nodes": 792,
+      "action_candidate_edges": 199,
+      "source_dual_dag_sha256": "8ef423fde9d838642e534d9291b9444d19c589fae88e446f51ac83265b79977a"
+    },
+    {
+      "task_id": 2,
+      "seed": 1,
+      "normalized_progress": 0.5454545454545454,
+      "steps": 25,
+      "action_sequence_rle": [["walktowards", 8], ["grab", 1], ["walktowards", 16]],
+      "navigation_loop_suppressions": 1,
+      "observation_nodes": 11107,
+      "action_candidate_nodes": 792,
+      "action_candidate_edges": 198,
+      "source_dual_dag_sha256": "b4236226791b52e5070beeb08d2316735acce41060b5e7221cb63214f5516b0a"
+    }
+  ],
+  "leakage_review": {
+    "all_observation_dags_populated": true,
+    "all_action_candidate_dags_populated": true,
+    "source_evaluator_only_true_nodes": 0,
+    "public_artifacts_are_structural_summaries": true,
+    "agent_facing_goal_contract": {
+      "status": "established",
+      "per_agent_goal_spec_exposed": true,
+      "per_agent_task_goal_fallback_exposed": true,
+      "total_goal_exposed": false,
+      "evaluator_progress_exposed": false,
+      "full_graph_exposed": false,
+      "evidence": [
+        "external/CoELA/cwah/envs/unity_environment.py derives goal_spec per agent from task_goal",
+        "external/CoELA/cwah/algos/arena_mp2.py supplies per-agent goal_spec to LLM policies",
+        "benchmarks/cwah/tests/test_adapter.py verifies the adapter boundary"
+      ]
+    },
+    "public_bundle_excluded": [
+      "raw stdout and stderr",
+      "agent-goal payloads",
+      "hidden evaluator state",
+      "credentials",
+      "private prompts and reasoning",
+      "absolute personal paths",
+      "simulator transforms, grounding, and debug fields"
+    ]
+  },
+  "next_experiment": "A separate future experiment should test a success-oriented post-grab placement transition; Issue #248 is not implemented by this diagnostic."
+}

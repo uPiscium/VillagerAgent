@@ -72,6 +72,45 @@ def test_cwah_decision_context_is_agent_facing_and_candidate_backed():
     assert context.remaining_budget.remaining_steps == 250
 
 
+def test_cwah_adapter_exposes_per_agent_goals_without_evaluator_or_full_graph_state():
+    def env_factory(config):
+        env = mock_cwah_env_factory(config)
+        env.total_goal = {"sentinel_total_goal": 99}
+        env.evaluator_progress = {"sentinel_evaluator_progress": 1.0}
+        env.full_graph = {"sentinel_full_graph": True}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    agent_0_context = adapter.decision_context("agent_0")
+    serialized = repr(agent_0_context)
+
+    agent_0_context.validate_agent_facing()
+    assert "plate" in serialized
+    assert "cupcake" not in serialized
+    assert "sentinel_total_goal" not in serialized
+    assert "sentinel_evaluator_progress" not in serialized
+    assert "sentinel_full_graph" not in serialized
+
+
+def test_cwah_adapter_uses_per_agent_task_goal_when_goal_spec_is_unavailable():
+    def env_factory(config):
+        env = mock_cwah_env_factory(config)
+        env.goal_spec = {}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-cwah", seed=7)
+
+    agent_1_context = adapter.decision_context("agent_1")
+    serialized = repr(agent_1_context)
+
+    agent_1_context.validate_agent_facing()
+    assert "cupcake" in serialized
+    assert "plate" not in serialized
+
+
 def test_cwah_adapter_marks_room_navigation_as_search_when_goal_object_missing():
     def env_factory(_config):
         env = mock_cwah_env_factory(_config)

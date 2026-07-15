@@ -22,6 +22,17 @@
       "run_accounting": {"expected": 6, "completed": 0, "failed": 0, "missing": 6}
     },
     {
+      "id": "cwah-issue292-dual-dag-diagnostic-v2",
+      "benchmark": "cwah",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue292-dual-dag-diagnostic-v2/cwah-issue292-dual-dag-diagnostic-v2.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue292-dual-dag-diagnostic-v2/cwah-issue292-dual-dag-diagnostic-v2.zip.metadata.json",
+      "archive_sha256": "7bdc6a69140630b988cb1b518cbff2c1b754b57c234c847a5435a1d83db4db79",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "fd51b8eac520fc953fa228904682e2275a91b0257cec61e43c653856ca8af1f1",
+      "run_accounting": {"expected": 6, "completed": 6, "failed": 0, "missing": 0}
+    },
+    {
       "id": "craft-qwen-final-diagnostic",
       "benchmark": "craft",
       "classification": "legacy-diagnostic-unarchived",
