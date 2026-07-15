@@ -112,7 +112,7 @@ def _run_minecraft_experiment_attempt(
     without requiring a Minecraft server. ``execute=True`` calls the existing real
     runtime and then captures the same public artifact set from the run outputs.
     """
-    launch_config = _load_config(config_path, config_index=config_index)
+    launch_config = _load_config(config_path, config_index=config_index, execute=execute)
     secret_values = collect_secret_values(launch_config)
     selected_run_name = standard_run_name(run_name or launch_config.get("task_name") or _default_run_name(config_path))
     output_dir = Path(output_root) / selected_run_name
@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if summary.get("error") is None else 1
 
 
-def _load_config(config_path: str | Path, *, config_index: int) -> dict:
+def _load_config(config_path: str | Path, *, config_index: int, execute: bool = False) -> dict:
     config = _read_json(Path(config_path), default=None)
     if isinstance(config, list):
         if config_index < 0 or config_index >= len(config):
@@ -351,13 +351,13 @@ def _load_config(config_path: str | Path, *, config_index: int) -> dict:
         selected = config[config_index]
         if not isinstance(selected, dict):
             raise ValueError(f"Minecraft config entry at index {config_index} must be an object")
-        return validate_minecraft_config(dict(selected), context=f"config[{config_index}]")
+        return validate_minecraft_config(dict(selected), context=f"config[{config_index}]", execute=execute)
     if isinstance(config, dict):
-        return validate_minecraft_config(dict(config), context="config")
+        return validate_minecraft_config(dict(config), context="config", execute=execute)
     raise ValueError(f"Unsupported Minecraft config shape: {config_path}")
 
 
-def validate_minecraft_config(config: dict, *, context: str = "config") -> dict:
+def validate_minecraft_config(config: dict, *, context: str = "config", execute: bool = False) -> dict:
     missing = [field for field in REQUIRED_CONFIG_FIELDS if field not in config]
     if missing:
         raise ValueError(f"{context} missing required field(s): {', '.join(missing)}")
@@ -370,6 +370,10 @@ def validate_minecraft_config(config: dict, *, context: str = "config") -> dict:
         raise ValueError(f"{context}.port must be positive")
     if task_idx < 0:
         raise ValueError(f"{context}.task_idx must be non-negative")
+    if execute and config.get("task_type") == "meta":
+        task_scenario = config.get("task_scenario")
+        if not isinstance(task_scenario, str) or not task_scenario.strip():
+            raise ValueError(f"{context}.task_scenario must be a non-empty string for meta execute mode")
     if config.get("task_selection_policy") not in (None, *TASK_SELECTION_POLICIES):
         raise ValueError(f"{context}.task_selection_policy must be one of: {', '.join(TASK_SELECTION_POLICIES)}")
     _validate_smoke_tasks(config, context=context)
@@ -435,6 +439,7 @@ def _execute_real_runtime(
         document,
         minecraft_dual_dag_config=dual_dag_config,
         runtime_result_path=str(runtime_result_path),
+        task_scenario=config.get("task_scenario"),
     )
 
 

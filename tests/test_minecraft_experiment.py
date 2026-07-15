@@ -11,6 +11,7 @@ from benchmarks.common.run_artifacts import (
 )
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
+    _execute_real_runtime,
     _execute_real_runtime_bounded,
     _terminate_runtime_process,
     run_minecraft_experiment,
@@ -188,6 +189,77 @@ def test_minecraft_experiment_rejects_invalid_smoke_fixture_shape(tmp_path):
 
     with pytest.raises(ValueError, match=r"config.smoke_tasks\[0\] missing required field: description"):
         run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result")
+
+
+def test_minecraft_meta_execute_requires_non_empty_task_scenario(tmp_path):
+    config_path = _write_minecraft_config(tmp_path)
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.pop("task_scenario")
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="config.task_scenario must be a non-empty string for meta execute mode",
+    ):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            execute=True,
+        )
+
+    assert not (tmp_path / "result").exists()
+
+
+def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monkeypatch):
+    captured = {}
+    config = _minecraft_config("meta_forwarding")
+    config["task_scenario"] = "move"
+    config["evaluation_arg"] = {"target": [1, 2, 3]}
+
+    monkeypatch.setattr(
+        "model.ollama_config.make_ollama_llm_config",
+        lambda: {
+            "api_model": "model",
+            "api_base": "http://example.test/v1",
+            "api_key_list": [],
+        },
+    )
+
+    def fake_run(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"score": {}}
+
+    monkeypatch.setattr("start_with_config.run", fake_run)
+
+    result = _execute_real_runtime(
+        config,
+        dual_dag_config={"task_selection_policy": "dual-dag"},
+        runtime_result_path=tmp_path / "runtime_result.json",
+    )
+
+    assert result == {"score": {}}
+    assert captured["args"][14] == config["evaluation_arg"]
+    assert captured["kwargs"]["task_scenario"] == "move"
+
+
+def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config("construction_execute")
+    config["task_type"] = "construction"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: {},
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        execute=True,
+    )
+
+    assert summary["error"] is None
 
 
 def test_minecraft_experiment_records_task_selection_policy_ablation(tmp_path):
@@ -1083,6 +1155,7 @@ def _write_minecraft_config(tmp_path):
             "host": "127.0.0.1",
             "port": 25565,
             "task_name": "bounded_execute",
+            "task_scenario": "move",
         }),
         encoding="utf-8",
     )
