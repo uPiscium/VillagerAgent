@@ -137,6 +137,17 @@
       "manifest_path": "artifact_manifest.json",
       "manifest_sha256": "7e9c34dfee0ad56f11a95a1d56c7aba79b74310bc86ea7c57448fcfc069c64e7",
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "minecraft-bridge-real-smoke-v1",
+      "benchmark": "minecraft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-minecraft-bridge-smoke-v1/minecraft-real-smoke-bridge-20260715-v4-public.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-minecraft-bridge-smoke-v1/minecraft-real-smoke-bridge-20260715-v4-public.zip.metadata.json",
+      "archive_sha256": "e253ce2dbea9b0eaa1fb49f07dc3eedd04103139f7d5fe5f458cd1fe795e2e6d",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "34388fa7acf0d5a60f8b0102200d43db55c4cf8b8486d21d3229a8767611342a",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     }
   ]
 }
