@@ -9,6 +9,11 @@ craft:
   repo_path: "external/CRAFT"
   dataset_path: "external/CRAFT/data/structures_dataset_20.json"
   official_runner: "external_cli"
+  official_runner_interpreter: "/tmp/opencode/issue-291-craft-py312-venv/bin/python"
+  official_runner_dependencies: "external/CRAFT/requirements.txt"
+  official_runner_bootstrap: "benchmarks/craft/external_runner_bootstrap.py"
+  official_runner_environment: {}
+  official_runner_environment_forward: ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
   official_runner_mode: "api"
   use_oracle: true
   oracle_n: 5

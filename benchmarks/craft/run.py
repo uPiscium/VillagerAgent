@@ -20,6 +20,7 @@ from benchmarks.experiment_provenance import (
     finalize_provenance,
     git_identity,
     model_identity,
+    python_environment_identity,
     update_provenance_assets,
     write_provenance,
 )
@@ -133,7 +134,7 @@ def run_config(
         if dry_run:
             _print_dry_run(config, condition, output_dir)
         else:
-            if condition != "official_baseline":
+            if condition != "official_baseline" or _uses_external_runner(config):
                 model_metadata = _preflight_ollama_models(config)
                 if model_metadata:
                     update_provenance_assets(
@@ -182,7 +183,44 @@ def _provenance_assets(config: dict, *, condition: str) -> list[dict]:
         git_identity(craft.get("repo_path", ""), required=True, name="craft", kind="submodule"),
         file_identity(craft.get("dataset_path", ""), name="craft_dataset", kind="dataset"),
     ]
+    if _uses_external_runner(config):
+        assets.extend([
+            file_identity(
+                craft.get("official_runner_interpreter", ""),
+                name="official_runner_interpreter",
+                kind="executable",
+            ),
+            python_environment_identity(
+                craft.get("official_runner_interpreter", ""),
+                name="official_runner_python_environment",
+            ),
+            file_identity(
+                craft.get("official_runner_dependencies", ""),
+                name="official_runner_dependencies",
+                kind="dependency_lock",
+            ),
+            file_identity(
+                craft.get("official_runner_bootstrap", ""),
+                name="official_runner_bootstrap",
+                kind="runner_bootstrap",
+            ),
+            file_identity(
+                config.get("_meta", {}).get("config_path", ""),
+                name="official_runner_config",
+                kind="config",
+            ),
+        ])
+        if craft.get("official_runner_ollama_proxy", {}).get("enabled", False):
+            assets.append(file_identity(
+                Path(__file__).with_name("ollama_openai_proxy.py"),
+                name="official_runner_compatibility_proxy",
+                kind="compatibility_proxy",
+            ))
     return assets + _model_identities(config, condition=condition)
+
+
+def _uses_external_runner(config: dict) -> bool:
+    return config.get("craft", {}).get("official_runner") == "external_cli"
 
 
 def _model_identities(
@@ -207,7 +245,7 @@ def _model_identities(
             provider=str(model_config.get("provider", "")),
             model=str(model_config.get("model", "")),
             metadata=selected,
-            required=condition != "official_baseline",
+            required=condition != "official_baseline" or _uses_external_runner(config),
         ))
     return identities
 

@@ -142,6 +142,10 @@ def test_load_gemma4_clarify_policy_manifests():
     assert official["overrides"]["turns"] == 20
     assert all(run["overrides"]["craft"]["oracle_n"] == 5 for run in official["runs"])
     assert all(run["structures"] == list(range(20)) for run in official["runs"])
+    assert official["runs"][0]["config"] == (
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml"
+    )
+    assert official["runs"][0]["suffix"] == "_full_upstream_baseline_oracle5"
     assert len(sensitivity["runs"]) == 19
     assert any(run.get("overrides", {}).get("turns") == 30 for run in sensitivity["runs"])
 

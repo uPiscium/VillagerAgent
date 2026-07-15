@@ -102,6 +102,25 @@ def test_resolved_config_preserves_credential_source_without_secret(tmp_path, mo
     assert "[REDACTED]" in json_text
 
 
+def test_external_runner_resolved_config_records_forward_names_not_parent_secret(tmp_path, monkeypatch):
+    secret = "parent-openai-secret-sentinel"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.example/v1")
+    config = load_config_without_runtime_assets("configs/craft/official_baseline_full.yaml")
+
+    assert "api_key" not in config["models"]["director"]
+    assert config["craft"]["official_runner_environment_forward"] == [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ]
+    save_resolved_config(config, tmp_path)
+    serialized = (tmp_path / "config.resolved.json").read_text(encoding="utf-8")
+
+    assert secret not in serialized
+    assert "official_runner_environment_forward" in serialized
+    assert "OPENAI_API_KEY" in serialized
+
+
 @pytest.mark.parametrize("run_name", ["../outside", "/tmp/outside", "nested/run", r"nested\run", ".", ""])
 def test_output_dir_rejects_unsafe_run_names(run_name):
     config = load_config_without_runtime_assets("configs/craft/official_baseline.yaml")
@@ -150,6 +169,73 @@ def test_official_baseline_matches_qwen_batch_eval_axis():
         assert config["run"]["turns"] == batch["run"]["turns"]
         assert condition_from_config(config) == "official_baseline"
     assert full_baseline["craft"]["official_runner"] == "external_cli"
+
+
+def test_full_upstream_ollama_config_matches_official_conditions():
+    config = load_config_without_runtime_assets(
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml"
+    )
+
+    assert config["run"]["structures"] == list(range(20))
+    assert config["run"]["turns"] == 20
+    assert config["craft"]["official_runner"] == "external_cli"
+    assert config["craft"]["use_oracle"] is True
+    assert config["craft"]["oracle_n"] == 5
+    assert config["craft"]["builder_tool_use"] is False
+    assert config["craft"]["official_runner_environment"] == {
+        "OPENAI_API_KEY": "ollama",
+    }
+    assert config["craft"]["official_runner_ollama_proxy"] == {
+        "enabled": True,
+        "upstream_base_url": "http://ollama.arc.upiscium.dev",
+        "request_timeout_seconds": 300,
+    }
+    assert config["craft"]["official_runner_require_semantic_output"] is True
+    assert config["models"]["director"]["model"] == "gemma4:12b"
+    assert config["models"]["builder"]["model"] == "gemma4:12b"
+
+
+def test_external_runner_rejects_unapproved_environment_key():
+    config = load_config_without_runtime_assets("configs/craft/official_baseline_full.yaml")
+    config["craft"]["official_runner_environment"] = {"AWS_SECRET_ACCESS_KEY": "secret"}
+
+    with pytest.raises(InvalidConfigError, match="may only set"):
+        validate_config(config, validate_runtime_assets=False)
+
+
+@pytest.mark.parametrize("unsafe_url", [
+    "http://user:secret@localhost:11434",
+    "http://localhost:11434?api_key=secret",
+    "http://localhost:11434/secret-token",
+    "http://localhost:11434#credential",
+])
+def test_external_runner_proxy_rejects_endpoint_credentials(unsafe_url):
+    config = load_config_without_runtime_assets(
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml"
+    )
+    config["craft"]["official_runner_ollama_proxy"]["upstream_base_url"] = unsafe_url
+
+    with pytest.raises(InvalidConfigError, match="must not contain credentials"):
+        validate_config(config, validate_runtime_assets=False)
+
+
+def test_external_runner_proxy_allows_clean_native_api_base_path():
+    config = load_config_without_runtime_assets(
+        "configs/craft/official_baseline_gemma4_12b_ollama.yaml"
+    )
+    config["craft"]["official_runner_ollama_proxy"]["upstream_base_url"] = (
+        "http://localhost:11434/api"
+    )
+
+    validate_config(config, validate_runtime_assets=False)
+
+
+def test_external_runner_rejects_null_proxy_config():
+    config = load_config_without_runtime_assets("configs/craft/official_baseline_full.yaml")
+    config["craft"]["official_runner_ollama_proxy"] = None
+
+    with pytest.raises(InvalidConfigError, match="must be a mapping"):
+        validate_config(config, validate_runtime_assets=False)
 
 
 def test_ollama_model_comparison_configs_share_eval_axis():

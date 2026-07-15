@@ -225,6 +225,54 @@ def model_identity(*, name: str, provider: str, model: str, metadata: dict[str, 
     return identity
 
 
+def python_environment_identity(
+    executable: str | Path,
+    *,
+    name: str,
+    required: bool = True,
+    timeout_seconds: float = 10.0,
+) -> dict[str, Any]:
+    """Fingerprint an interpreter and its installed Python distributions."""
+    candidate = Path(executable).expanduser()
+    identity: dict[str, Any] = {
+        "name": name,
+        "kind": "python_environment",
+        "path": str(candidate),
+        "required": required,
+        "available": False,
+    }
+    if not candidate.exists():
+        identity["reason"] = "missing"
+        return identity
+    script = (
+        "import importlib.metadata as m,json,platform;"
+        "packages=sorted((d.metadata.get('Name',''),d.version) for d in m.distributions());"
+        "print(json.dumps({'implementation':platform.python_implementation(),"
+        "'python_version':platform.python_version(),'packages':packages},sort_keys=True))"
+    )
+    try:
+        completed = subprocess.run(
+            [str(candidate), "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        payload = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
+        identity["reason"] = "python_environment_identity_unavailable"
+        return identity
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    identity.update({
+        "available": True,
+        "implementation": payload.get("implementation"),
+        "python_version": payload.get("python_version"),
+        "package_count": len(payload.get("packages", [])),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    })
+    return identity
+
+
 def dependency_lock_identity(root: Path) -> dict[str, Any]:
     identities = [file_identity(root / name, name=name, kind="dependency_lock") for name in _LOCK_FILES if (root / name).exists()]
     return {

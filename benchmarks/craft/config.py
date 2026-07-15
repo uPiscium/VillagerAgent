@@ -1,9 +1,9 @@
 import copy
 import json
 import os
-import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -11,10 +11,38 @@ from benchmarks.common.sanitization import sanitize_artifact_value
 
 
 SUPPORTED_PROVIDERS = {"openai", "openai_compatible", "ollama", "ollama_native"}
+OFFICIAL_RUNNER_ENVIRONMENT_KEYS = {"OPENAI_API_KEY", "OPENAI_BASE_URL"}
+OPENAI_BASE_URL_PATHS = {"", "/", "/api", "/api/v1", "/v1"}
+OLLAMA_UPSTREAM_PATHS = {"", "/", "/api"}
 
 
 class InvalidConfigError(ValueError):
     """Raised when a CRAFT integration config violates required constraints."""
+
+
+def validate_safe_http_endpoint(
+    value: str,
+    *,
+    field: str,
+    allowed_paths: set[str],
+) -> str:
+    try:
+        parsed = urlsplit(str(value).rstrip("/"))
+        port = parsed.port
+    except ValueError as exc:
+        raise InvalidConfigError(f"{field} must be a clean HTTP(S) endpoint URL.") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise InvalidConfigError(f"{field} must be a clean HTTP(S) endpoint URL.")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise InvalidConfigError(f"{field} must not contain credentials or URL parameters.")
+    path = parsed.path or ""
+    if path not in allowed_paths:
+        raise InvalidConfigError(
+            f"{field} path must be one of {sorted(allowed_paths)} and must not contain credentials."
+        )
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    authority = f"{host}:{port}" if port is not None else host
+    return f"{parsed.scheme}://{authority}{path}".rstrip("/")
 
 
 def repo_root() -> Path:
@@ -115,6 +143,13 @@ def load_config(
     for key in ("repo_path", "dataset_path"):
         if key in craft:
             craft[key] = _resolve_path(craft[key], root)
+    for key in (
+        "official_runner_interpreter",
+        "official_runner_dependencies",
+        "official_runner_bootstrap",
+    ):
+        if key in craft:
+            craft[key] = _resolve_path(craft[key], root)
 
     for model_name in ("director", "builder"):
         model_config = config.setdefault("models", {}).setdefault(model_name, {})
@@ -125,7 +160,7 @@ def load_config(
                 raise InvalidConfigError(
                     f"Environment variable {api_key_env} is not set"
                 )
-            if api_key:
+            if api_key and craft.get("official_runner") != "external_cli":
                 model_config["api_key"] = api_key
             else:
                 model_config["api_key_env"] = api_key_env
@@ -159,6 +194,90 @@ def validate_config(config: dict, *, validate_runtime_assets: bool = True) -> No
 
     if craft.get("oracle_n", 1) <= 0:
         raise InvalidConfigError("craft.oracle_n must be greater than 0.")
+
+    if craft.get("official_runner") == "external_cli":
+        interpreter = str(craft.get("official_runner_interpreter", "")).strip()
+        if not interpreter:
+            raise InvalidConfigError(
+                "craft.official_runner_interpreter is required for external_cli."
+            )
+        if "$" in interpreter:
+            raise InvalidConfigError(
+                "craft.official_runner_interpreter contains an unresolved environment variable."
+            )
+        if validate_runtime_assets and not Path(interpreter).is_file():
+            raise InvalidConfigError(
+                f"craft.official_runner_interpreter does not exist: {interpreter}"
+            )
+        dependencies = str(craft.get("official_runner_dependencies", "")).strip()
+        if not dependencies:
+            raise InvalidConfigError(
+                "craft.official_runner_dependencies is required for external_cli."
+            )
+        if validate_runtime_assets and not Path(dependencies).is_file():
+            raise InvalidConfigError(
+                f"craft.official_runner_dependencies does not exist: {dependencies}"
+            )
+        bootstrap = str(craft.get("official_runner_bootstrap", "")).strip()
+        if not bootstrap:
+            raise InvalidConfigError(
+                "craft.official_runner_bootstrap is required for external_cli."
+            )
+        if validate_runtime_assets and not Path(bootstrap).is_file():
+            raise InvalidConfigError(
+                f"craft.official_runner_bootstrap does not exist: {bootstrap}"
+            )
+        environment = craft.get("official_runner_environment", {})
+        if not isinstance(environment, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in environment.items()
+        ):
+            raise InvalidConfigError(
+                "craft.official_runner_environment must be a string-to-string mapping."
+            )
+        unsupported = sorted(set(environment) - OFFICIAL_RUNNER_ENVIRONMENT_KEYS)
+        if unsupported:
+            raise InvalidConfigError(
+                "craft.official_runner_environment may only set "
+                f"{sorted(OFFICIAL_RUNNER_ENVIRONMENT_KEYS)}; got {unsupported}."
+            )
+        forward = craft.get("official_runner_environment_forward", [])
+        if not isinstance(forward, list) or not all(isinstance(key, str) for key in forward):
+            raise InvalidConfigError(
+                "craft.official_runner_environment_forward must be a list of variable names."
+            )
+        unsupported_forward = sorted(set(forward) - OFFICIAL_RUNNER_ENVIRONMENT_KEYS)
+        if unsupported_forward:
+            raise InvalidConfigError(
+                "craft.official_runner_environment_forward may only contain "
+                f"{sorted(OFFICIAL_RUNNER_ENVIRONMENT_KEYS)}; got {unsupported_forward}."
+            )
+        if environment.get("OPENAI_BASE_URL"):
+            validate_safe_http_endpoint(
+                environment["OPENAI_BASE_URL"],
+                field="craft.official_runner_environment.OPENAI_BASE_URL",
+                allowed_paths=OPENAI_BASE_URL_PATHS,
+            )
+        timeout = craft.get("official_runner_timeout_seconds", 1800)
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise InvalidConfigError(
+                "craft.official_runner_timeout_seconds must be positive."
+            )
+        proxy_present = "official_runner_ollama_proxy" in craft
+        proxy = craft.get("official_runner_ollama_proxy", {})
+        if proxy_present and not isinstance(proxy, dict):
+            raise InvalidConfigError("craft.official_runner_ollama_proxy must be a mapping.")
+        if proxy.get("enabled", False):
+            validate_safe_http_endpoint(
+                proxy.get("upstream_base_url", ""),
+                field="craft.official_runner_ollama_proxy.upstream_base_url",
+                allowed_paths=OLLAMA_UPSTREAM_PATHS,
+            )
+            request_timeout = proxy.get("request_timeout_seconds", 300)
+            if not isinstance(request_timeout, (int, float)) or request_timeout <= 0:
+                raise InvalidConfigError(
+                    "craft.official_runner_ollama_proxy.request_timeout_seconds must be positive."
+                )
 
     if villageragent.get("enabled", False):
         if villageragent.get("num_agents") != 3:
