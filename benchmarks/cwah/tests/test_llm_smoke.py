@@ -8,6 +8,7 @@ import pytest
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
 from benchmarks.cwah import llm_smoke
 from benchmarks.cwah import provenance as cwah_provenance
+from benchmarks.cwah.adapter import CWAHConfig, CWAHSymbolicAdapter
 from benchmarks.cwah.llm_smoke import (
     action_failure_signature,
     action_navigation_signature,
@@ -17,6 +18,7 @@ from benchmarks.cwah.llm_smoke import (
     summarize_action_intents,
     summarize_observations,
 )
+from benchmarks.cwah.mock_env import mock_cwah_env_factory
 
 
 def test_direct_single_run_writes_and_finalizes_provenance(tmp_path, monkeypatch):
@@ -378,6 +380,357 @@ def test_action_from_decision_overrides_setup_required_selection():
         "action_id": "walktowards:agent_0:20",
         "action_type": "walktowards",
     }
+
+
+@pytest.mark.parametrize(
+    "placement",
+    [
+        ActionSpec(
+            action_id="putin:agent_0:20:30",
+            action_type="putin",
+            parameters={
+                "object_id": 20,
+                "target_id": 30,
+                "hand_state": "holding",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "placement_relation_compatibility": "goal_relation_match",
+                "placement_suitability": "goal_relation_match",
+                "precondition_status": "executable_now",
+            },
+        ),
+        ActionSpec(
+            action_id="putback:agent_0:20:31",
+            action_type="putback",
+            parameters={
+                "object_id": 20,
+                "target_id": 31,
+                "hand_state": "holding",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "placement_relation_compatibility": "goal_relation_match",
+                "placement_suitability": "goal_relation_match",
+                "precondition_status": "executable_now",
+            },
+        ),
+    ],
+)
+def test_action_from_decision_prioritizes_executable_goal_placement_after_grab(placement):
+    legal_actions = (
+        ActionSpec(
+            action_id="walktowards:agent_0:kitchen",
+            action_type="walktowards",
+            parameters={"object_id": "kitchen", "search_priority": "search_goal_object_room", "precondition_status": "executable_now"},
+        ),
+        placement,
+    )
+    decision = {"action_id": "walktowards:agent_0:kitchen"}
+
+    action = action_from_decision("agent_0", decision, legal_actions, prefer_physical=True)
+
+    assert action.action_id == placement.action_id
+    assert decision["policy_override"] == {
+        "reason": "post_grab_goal_transition",
+        "action_id": placement.action_id,
+        "action_type": placement.action_type,
+        "goal_action_id": placement.action_id,
+    }
+
+
+@pytest.mark.parametrize(
+    ("setup_action", "placement"),
+    [
+        (
+            ActionSpec(
+                action_id="walktowards:agent_0:30",
+                action_type="walktowards",
+                parameters={"object_id": 30, "goal_target_match": True, "precondition_status": "executable_now"},
+            ),
+            ActionSpec(
+                action_id="putin:agent_0:20:30",
+                action_type="putin",
+                parameters={
+                    "object_id": 20,
+                    "target_id": 30,
+                    "hand_state": "holding",
+                    "goal_object_match": True,
+                    "goal_target_match": True,
+                    "placement_relation_compatibility": "goal_relation_match",
+                    "placement_suitability": "goal_relation_match",
+                    "precondition_status": "setup_required",
+                    "setup_action_id": "walktowards:agent_0:30",
+                },
+            ),
+        ),
+        (
+            ActionSpec(
+                action_id="open:agent_0:30",
+                action_type="open",
+                parameters={"object_id": 30, "goal_target_match": True, "precondition_status": "executable_now"},
+            ),
+            ActionSpec(
+                action_id="putin:agent_0:20:30",
+                action_type="putin",
+                parameters={
+                    "object_id": 20,
+                    "target_id": 30,
+                    "hand_state": "holding",
+                    "goal_object_match": True,
+                    "goal_target_match": True,
+                    "placement_relation_compatibility": "goal_relation_match",
+                    "placement_suitability": "goal_relation_match",
+                    "precondition_status": "setup_required",
+                    "setup_action_id": "open:agent_0:30",
+                },
+            ),
+        ),
+    ],
+)
+def test_action_from_decision_prioritizes_concrete_goal_placement_setup_after_grab(setup_action, placement):
+    generic_search = ActionSpec(
+        action_id="walktowards:agent_0:kitchen",
+        action_type="walktowards",
+        parameters={"object_id": "kitchen", "search_priority": "search_goal_object_room", "precondition_status": "executable_now"},
+    )
+    legal_actions = (generic_search, setup_action, placement)
+    decision = {"action_id": generic_search.action_id}
+
+    action = action_from_decision("agent_0", decision, legal_actions, prefer_physical=True)
+
+    assert action.action_id == setup_action.action_id
+    assert decision["policy_override"] == {
+        "reason": "post_grab_goal_transition",
+        "action_id": setup_action.action_id,
+        "action_type": setup_action.action_type,
+        "goal_action_id": placement.action_id,
+    }
+
+
+def test_action_from_decision_does_not_accept_blocked_precondition_over_post_grab_transition():
+    blocked_selection = ActionSpec(
+        action_id="grab:agent_0:21",
+        action_type="grab",
+        parameters={
+            "object_id": 21,
+            "precondition_status": "blocked",
+            "precondition_reason": "blocked_by_holding_object",
+        },
+    )
+    placement = ActionSpec(
+        action_id="putback:agent_0:20:30",
+        action_type="putback",
+        parameters={
+            "object_id": 20,
+            "target_id": 30,
+            "hand_state": "holding",
+            "goal_object_match": True,
+            "goal_target_match": True,
+            "placement_relation_compatibility": "goal_relation_match",
+            "placement_suitability": "goal_relation_match",
+            "precondition_status": "executable_now",
+        },
+    )
+    decision = {"action_id": blocked_selection.action_id}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        (blocked_selection, placement),
+        prefer_physical=True,
+    )
+
+    assert action.action_id == placement.action_id
+    assert decision["policy_override"]["reason"] == "post_grab_goal_transition"
+
+
+def test_action_from_decision_never_returns_precondition_blocked_selection():
+    blocked_selection = ActionSpec(
+        action_id="walktowards:agent_0:20",
+        action_type="walktowards",
+        parameters={
+            "object_id": 20,
+            "precondition_status": "blocked",
+            "precondition_reason": "blocked_by_holding_target_object",
+        },
+    )
+    decision = {"action_id": blocked_selection.action_id}
+
+    action = action_from_decision("agent_0", decision, (blocked_selection,))
+
+    assert action.action_type == "send_message"
+    assert decision["policy_override"]["reason"] == "precondition_blocked"
+
+
+def test_preferred_physical_action_excludes_blocked_and_setup_required_actions():
+    actions = (
+        ActionSpec(
+            action_id="walktowards:agent_0:20",
+            action_type="walktowards",
+            parameters={"precondition_status": "blocked"},
+        ),
+        ActionSpec(
+            action_id="putback:agent_0:20:30",
+            action_type="putback",
+            parameters={"precondition_status": "setup_required"},
+        ),
+    )
+
+    assert preferred_physical_action(actions) is None
+
+
+def test_mock_post_grab_integration_searches_for_missing_concrete_target():
+    def env_factory(_config):
+        env = mock_cwah_env_factory(_config)
+        env.goal_spec = {0: {"on_apple_<coffeetable> (268)": [1, True, 2]}}
+        env._observations[0]["nodes"][2] = {
+            "id": 375,
+            "class_name": "apple",
+            "category": "Objects",
+            "states": [],
+            "properties": ["GRABBABLE"],
+        }
+        env._observations[0]["edges"].append({"from_id": 1, "to_id": 375, "relation_type": "HOLDS_RH"})
+        env.get_action_space = lambda: {0: [10, 375], 1: [11, 21, 268]}
+        return env
+
+    adapter = CWAHSymbolicAdapter(config=CWAHConfig(), env_factory=env_factory)
+    adapter.reset(episode_id="mock-post-grab", seed=0)
+    context = adapter.decision_context("agent_0")
+    decision = {"action_id": "walktowards:agent_0:375"}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        context.legal_actions,
+        prefer_physical=True,
+    )
+
+    assert action.action_id == "walktowards:agent_0:10"
+    assert action in context.legal_actions
+    assert any(candidate["candidate_id"] == action.action_id for candidate in context.visible_candidates)
+    assert decision["policy_override"]["reason"] == "prefer_physical_after_steps"
+
+
+def test_action_from_decision_does_not_prioritize_mismatched_or_fallback_placement():
+    generic_search = ActionSpec(
+        action_id="walktowards:agent_0:kitchen",
+        action_type="walktowards",
+        parameters={"object_id": "kitchen", "search_priority": "search_goal_target_room", "precondition_status": "executable_now"},
+    )
+    legal_actions = (
+        generic_search,
+        ActionSpec(
+            action_id="putin:agent_0:20:30",
+            action_type="putin",
+            parameters={
+                "object_id": 20,
+                "target_id": 30,
+                "hand_state": "holding",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "placement_relation_compatibility": "goal_relation_mismatch",
+                "placement_suitability": "fallback_receptacle",
+                "precondition_status": "executable_now",
+            },
+        ),
+    )
+    decision = {"action_id": generic_search.action_id}
+
+    action = action_from_decision("agent_0", decision, legal_actions, prefer_physical=True)
+
+    assert action.action_id == generic_search.action_id
+    assert "policy_override" not in decision
+
+
+def test_action_from_decision_preserves_failed_action_suppression_for_post_grab_transition():
+    generic_search = ActionSpec(
+        action_id="walktowards:agent_0:kitchen",
+        action_type="walktowards",
+        parameters={"object_id": "kitchen", "search_priority": "search_goal_target_room", "precondition_status": "executable_now"},
+    )
+    legal_actions = (
+        generic_search,
+        ActionSpec(
+            action_id="putin:agent_0:20:30",
+            action_type="putin",
+            parameters={
+                "object_id": 20,
+                "target_id": 30,
+                "hand_state": "holding",
+                "goal_object_match": True,
+                "goal_target_match": True,
+                "placement_relation_compatibility": "goal_relation_match",
+                "placement_suitability": "goal_relation_match",
+                "precondition_status": "executable_now",
+            },
+        ),
+    )
+    decision = {"action_id": generic_search.action_id}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        legal_actions,
+        prefer_physical=True,
+        blocked_action_signatures={"putin:20:30"},
+    )
+
+    assert action.action_id == generic_search.action_id
+    assert "policy_override" not in decision
+
+
+@pytest.mark.parametrize(
+    ("include_setup", "blocked_action_ids", "blocked_open_target_ids"),
+    [
+        (False, set(), set()),
+        (True, {"open:agent_0:30"}, set()),
+        (True, set(), {"30"}),
+    ],
+)
+def test_action_from_decision_requires_available_legal_setup_for_post_grab_transition(
+    include_setup,
+    blocked_action_ids,
+    blocked_open_target_ids,
+):
+    generic_search = ActionSpec(
+        action_id="walktowards:agent_0:kitchen",
+        action_type="walktowards",
+        parameters={"object_id": "kitchen", "search_priority": "search_goal_target_room", "precondition_status": "executable_now"},
+    )
+    placement = ActionSpec(
+        action_id="putin:agent_0:20:30",
+        action_type="putin",
+        parameters={
+            "object_id": 20,
+            "target_id": 30,
+            "hand_state": "holding",
+            "goal_object_match": True,
+            "goal_target_match": True,
+            "placement_relation_compatibility": "goal_relation_match",
+            "placement_suitability": "goal_relation_match",
+            "precondition_status": "setup_required",
+            "setup_action_id": "open:agent_0:30",
+        },
+    )
+    setup = ActionSpec(
+        action_id="open:agent_0:30",
+        action_type="open",
+        parameters={"object_id": 30, "goal_target_match": True, "precondition_status": "executable_now"},
+    )
+    legal_actions = (generic_search, placement, *((setup,) if include_setup else ()))
+    decision = {"action_id": generic_search.action_id}
+
+    action = action_from_decision(
+        "agent_0",
+        decision,
+        legal_actions,
+        prefer_physical=True,
+        blocked_action_ids=blocked_action_ids,
+        blocked_open_target_ids=blocked_open_target_ids,
+    )
+
+    assert action.action_id == generic_search.action_id
+    assert "policy_override" not in decision
 
 
 def test_summarize_observations_extracts_visible_objects_rooms_and_messages():

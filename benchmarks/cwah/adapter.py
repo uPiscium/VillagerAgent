@@ -127,6 +127,7 @@ class CWAHSymbolicAdapter:
         object_names = _visible_object_names(observation)
         nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
         nodes_by_id = {node.get("id"): node for node in nodes}
+        held_object_ids = _held_object_ids(observation, character_id=agent_index + 1)
         agent_goal_hints = self._task_goal_hints.get(agent_index, ())
         actions = [ActionSpec(action_id=f"wait:{agent_id}", action_type="wait", parameters={})]
         actions.extend(
@@ -136,15 +137,21 @@ class CWAHSymbolicAdapter:
                 parameters={
                     "object_id": object_id,
                     "object_name": object_names.get(object_id, "object"),
-                    "precondition_status": "executable_now",
-                    "precondition_reason": "navigation_action",
+                    **_navigation_preconditions(object_id, held_object_ids),
                     **_goal_relevance_for_object(object_id, object_names.get(object_id, "object"), agent_goal_hints),
                     **_navigation_search_metadata(object_id, object_names, nodes_by_id, agent_goal_hints),
                 },
             )
             for object_id in visible_object_ids
         )
-        actions.extend(_object_interaction_actions(agent_id, observation, visible_object_ids, object_names, agent_goal_hints))
+        actions.extend(_object_interaction_actions(
+            agent_id,
+            observation,
+            visible_object_ids,
+            object_names,
+            agent_goal_hints,
+            held_object_ids=held_object_ids,
+        ))
         actions.append(InformationActionSpec(
             action_id=f"send_message:{agent_id}",
             action_type="send_message",
@@ -300,10 +307,12 @@ def _object_interaction_actions(
     visible_object_ids: list[Any],
     object_names: dict[Any, str],
     task_goal_hints: tuple[dict[str, Any], ...] = (),
+    *,
+    held_object_ids: set[Any] | None = None,
 ) -> list[ActionSpec]:
     visible_ids = set(visible_object_ids)
     nodes = [node for node in observation.get("nodes", []) if isinstance(node, dict)]
-    held_ids = _held_object_ids(observation)
+    held_ids = held_object_ids or set()
     held_object_names = {held_id: object_names.get(held_id, "object") for held_id in held_ids}
     close_ids = _close_object_ids(observation)
     nodes_by_id = {node.get("id"): node for node in nodes}
@@ -466,6 +475,18 @@ def _interaction_preconditions(agent_id: str, object_id: Any, close_ids: set[Any
     }
 
 
+def _navigation_preconditions(object_id: Any, held_object_ids: set[Any]) -> dict[str, Any]:
+    if object_id in held_object_ids:
+        return {
+            "precondition_status": "blocked",
+            "precondition_reason": "blocked_by_holding_target_object",
+        }
+    return {
+        "precondition_status": "executable_now",
+        "precondition_reason": "navigation_action",
+    }
+
+
 def _placement_preconditions(agent_id: str, target_id: Any, close_ids: set[Any], target_node: dict[str, Any]) -> dict[str, Any]:
     if target_id not in close_ids:
         return {
@@ -531,7 +552,7 @@ def _parse_goal_predicate(predicate: str, value: Any) -> dict[str, Any] | None:
 def _goal_relevance_for_object(object_id: Any, object_name: str, task_goal_hints: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     normalized_name = _normalize_name(object_name)
     goal_object = any(_normalize_name(str(hint.get("object_class", ""))) == normalized_name for hint in task_goal_hints)
-    goal_target = any(hint.get("target_id") == object_id or _normalize_name(str(hint.get("target_class", ""))) == normalized_name for hint in task_goal_hints)
+    goal_target = any(_goal_target_matches(hint, object_id, normalized_name) for hint in task_goal_hints)
     return {
         "goal_object_match": goal_object,
         "goal_target_match": goal_target,
@@ -547,8 +568,10 @@ def _navigation_search_metadata(
     visible_names = {_normalize_name(name) for name in object_names.values()}
     missing_goal_object = any(_normalize_name(str(hint.get("object_class", ""))) not in visible_names for hint in task_goal_hints)
     missing_goal_target = any(
-        hint.get("target_id") not in object_names
-        and _normalize_name(str(hint.get("target_class", ""))) not in visible_names
+        not any(
+            _goal_target_matches(hint, object_id, _normalize_name(name))
+            for object_id, name in object_names.items()
+        )
         for hint in task_goal_hints
     )
     node = nodes_by_id.get(object_id, {})
@@ -585,29 +608,34 @@ def _goal_relevance_for_placement(
 ) -> dict[str, Any]:
     object_norm = _normalize_name(object_name)
     target_norm = _normalize_name(target_name)
+    target_hints = [
+        hint
+        for hint in task_goal_hints
+        if _goal_target_matches(hint, target_id, target_norm)
+    ]
     matched_relations = [
         str(hint.get("relation"))
-        for hint in task_goal_hints
+        for hint in target_hints
         if _normalize_name(str(hint.get("object_class", ""))) == object_norm
-        and (hint.get("target_id") == target_id or _normalize_name(str(hint.get("target_class", ""))) == target_norm)
     ]
     return {
         "goal_object_match": any(_normalize_name(str(hint.get("object_class", ""))) == object_norm for hint in task_goal_hints),
-        "goal_target_match": any(hint.get("target_id") == target_id or _normalize_name(str(hint.get("target_class", ""))) == target_norm for hint in task_goal_hints),
+        "goal_target_match": bool(target_hints),
         "goal_relation_matches": tuple(sorted(set(matched_relations))),
     }
+
+
+def _goal_target_matches(hint: dict[str, Any], target_id: Any, normalized_target_name: str) -> bool:
+    if hint.get("target_id") is not None:
+        return hint.get("target_id") == target_id
+    return _normalize_name(str(hint.get("target_class", ""))) == normalized_target_name
 
 
 def _normalize_name(value: str) -> str:
     return value.replace("_", "").replace(" ", "").lower()
 
 
-def _held_object_ids(observation: dict[str, Any]) -> set[Any]:
-    character_ids = {
-        node.get("id")
-        for node in observation.get("nodes", [])
-        if isinstance(node, dict) and node.get("category") == "Characters"
-    }
+def _held_object_ids(observation: dict[str, Any], *, character_id: int) -> set[Any]:
     held_ids: set[Any] = set()
     for edge in observation.get("edges", []):
         if not isinstance(edge, dict):
@@ -617,9 +645,9 @@ def _held_object_ids(observation: dict[str, Any]) -> set[Any]:
             continue
         from_id = edge.get("from_id")
         to_id = edge.get("to_id")
-        if from_id in character_ids and to_id is not None:
+        if from_id == character_id and to_id is not None:
             held_ids.add(to_id)
-        elif to_id in character_ids and from_id is not None:
+        elif to_id == character_id and from_id is not None:
             held_ids.add(from_id)
     return held_ids
 
