@@ -1,5 +1,7 @@
 # CRAFT Issue 291 Replication Plan
 
+<!-- benchmark-result: craft-issue291-upstream-smoke-v1 -->
+
 The replication matrix is declared in
 `configs/craft/experiments/gemma4_12b_clarify_policy_official.yaml`. It includes
 the full upstream CRAFT runner, the VillagerAgent baseline, Clarify-disabled
@@ -11,6 +13,11 @@ Issue #291 is not accepted or complete. The full matched matrix has not run,
 retrieval activation and downstream influence have not been established, and
 there is not yet evidence for the required Clarify recommendation. The bounded
 smokes below establish integration behavior only.
+
+The two-turn upstream integration smoke is retained as immutable release
+`benchmark-craft-issue291-smoke-v1`. Its sanitized archive and checksums are
+registered in `docs/benchmark_archives.json`; it is integration evidence only,
+not a performance result.
 
 ## Isolated Upstream Runtime
 

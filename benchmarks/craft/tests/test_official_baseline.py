@@ -21,11 +21,14 @@ from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
 
 def load_config_with_minimal_dataset(tmp_path, path, *, overrides=None):
     dataset_path = write_minimal_structures_dataset(tmp_path / "structures_dataset_20.json")
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text("openai==2.15.0\n", encoding="utf-8")
     merged_overrides = {
         **(overrides or {}),
         "craft": {
             "dataset_path": str(dataset_path),
             "official_runner_interpreter": sys.executable,
+            "official_runner_dependencies": str(requirements_path),
             **((overrides or {}).get("craft") or {}),
         },
     }
