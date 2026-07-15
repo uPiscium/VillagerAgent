@@ -17,8 +17,10 @@ from benchmarks.minecraft.real_smoke import (
     _ProcessIdentity,
     _bridge_child,
     _capture_process_identity,
+    _cleanup_identity_process,
     _collect_session_processes,
     _resolve_process_identity,
+    _stop_internal_javascript_bridge,
     _stop_process,
     main,
     run_bridge_smoke,
@@ -121,6 +123,8 @@ def test_minecraft_port_preflight_records_reachable_endpoint(tmp_path):
 
 
 def test_bridge_records_exact_runnable_command(monkeypatch, tmp_path):
+    cleanup_calls = []
+
     class Process:
         pid = 123
         returncode = 0
@@ -142,6 +146,10 @@ def test_bridge_records_exact_runnable_command(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "benchmarks.minecraft.real_smoke._capture_process_identity",
         lambda pid: _ProcessIdentity(pid=pid, create_time=1.0),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._stop_process",
+        lambda process, **kwargs: cleanup_calls.append(process) or True,
     )
 
     run_bridge_smoke(
@@ -167,6 +175,84 @@ def test_bridge_records_exact_runnable_command(monkeypatch, tmp_path):
         "7.0",
         "--overwrite",
     ])
+    assert len(cleanup_calls) == 1
+
+
+def test_bridge_rejects_normal_result_when_final_session_cleanup_is_incomplete(monkeypatch, tmp_path):
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def __init__(self, command):
+            result_path = Path(command[command.index("--result-path") + 1])
+            result_path.write_text(json.dumps({"bridge_ping": {"status": True}}), encoding="utf-8")
+
+        def communicate(self, timeout):
+            return "", ""
+
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke.subprocess.Popen",
+        lambda command, **kwargs: Process(command) if "_bridge-child" in command else real_popen(command, **kwargs),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._capture_process_identity",
+        lambda pid: _ProcessIdentity(pid=pid, create_time=1.0),
+    )
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke._stop_process", lambda process, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match="final cleanup left verified session members alive"):
+        run_bridge_smoke(
+            output_root=tmp_path,
+            host="127.0.0.1",
+            port=25565,
+            timeout_seconds=2,
+            overwrite=False,
+        )
+
+
+def test_bridge_fast_exit_with_identity_capture_failure_records_cleanup_failure(monkeypatch, tmp_path):
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def __init__(self, command):
+            result_path = Path(command[command.index("--result-path") + 1])
+            result_path.write_text(json.dumps({"bridge_ping": {"status": True}}), encoding="utf-8")
+
+        def communicate(self, timeout):
+            return "", ""
+
+        def poll(self):
+            return 0
+
+        def terminate(self):
+            pytest.fail("an exited child with unavailable identity must not be signaled")
+
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke.subprocess.Popen",
+        lambda command, **kwargs: Process(command) if "_bridge-child" in command else real_popen(command, **kwargs),
+    )
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke._capture_process_identity", lambda pid: None)
+
+    with pytest.raises(RuntimeError, match="final cleanup incomplete: child identity unavailable"):
+        run_bridge_smoke(
+            output_root=tmp_path,
+            host="127.0.0.1",
+            port=25565,
+            timeout_seconds=2,
+            overwrite=False,
+        )
+
+    verification = json.loads(
+        (tmp_path / "minecraft_bridge" / "verification.json").read_text(encoding="utf-8")
+    )
+    assert verification["status"] == "failure"
+    assert verification["error_type"] == "RuntimeError"
+    assert verification["error"] == (
+        "env_type.none bridge smoke final cleanup incomplete: child identity unavailable"
+    )
 
 
 @pytest.mark.parametrize("timeout", ["0", "-1", "nan", "inf", "-inf"])
@@ -221,7 +307,7 @@ def test_bridge_timeout_reports_endpoint_and_phase(monkeypatch, tmp_path):
         "benchmarks.minecraft.real_smoke._capture_process_identity",
         lambda pid: _ProcessIdentity(pid=pid, create_time=1.0),
     )
-    monkeypatch.setattr("benchmarks.minecraft.real_smoke._stop_process", lambda process, **kwargs: None)
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke._stop_process", lambda process, **kwargs: True)
 
     with pytest.raises(
         TimeoutError,
@@ -250,7 +336,7 @@ def test_bridge_child_prepares_runtime_directories_before_environment_init(monke
             return None
 
         def stop(self):
-            return None
+            pytest.fail("bridge cleanup must not use Environment.stop Popen signaling")
 
     class Agent:
         agent_process = {}
@@ -282,6 +368,165 @@ def test_bridge_child_prepares_runtime_directories_before_environment_init(monke
 
     assert _bridge_child(args) == 0
     assert (tmp_path / ".cache").is_dir()
+    assert (tmp_path / "phase.txt").read_text(encoding="utf-8").strip() == "bridge cleanup complete"
+
+
+def test_internal_bridge_child_exit_stops_inherited_pipe_holder_and_ignores_non_daemon_thread(tmp_path):
+    marker_path = tmp_path / "child-complete.txt"
+    code = (
+        "import subprocess, sys, threading, time, types\n"
+        "from pathlib import Path\n"
+        "import benchmarks.minecraft.real_smoke as smoke\n"
+        "old_identity = smoke._capture_internal_javascript_identity()\n"
+        "smoke._stop_internal_javascript_bridge(None, old_identity)\n"
+        "holder = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "smoke.sys.modules['javascript.connection'] = types.SimpleNamespace(proc=holder)\n"
+        "def child(args):\n"
+        "    threading.Thread(target=time.sleep, args=(60,), daemon=False).start()\n"
+        f"    Path({str(marker_path)!r}).write_text('closed', encoding='utf-8')\n"
+        "    print('bridge child complete')\n"
+        "    return 0\n"
+        "smoke._bridge_child = child\n"
+        "smoke._exit_bridge_child(None)\n"
+    )
+
+    started = time.monotonic()
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert time.monotonic() - started < 5
+    assert completed.stdout.strip() == "bridge child complete"
+    assert marker_path.read_text(encoding="utf-8") == "closed"
+
+
+def test_internal_bridge_child_cleanup_exceptions_still_force_nonzero_exit():
+    code = (
+        "import types\n"
+        "import benchmarks.minecraft.real_smoke as smoke\n"
+        "old_identity = smoke._capture_internal_javascript_identity()\n"
+        "smoke._stop_internal_javascript_bridge(None, old_identity)\n"
+        "smoke.sys.modules['javascript.connection'] = types.SimpleNamespace(proc=None)\n"
+        "def fail_capture():\n"
+        "    raise RuntimeError('capture failed')\n"
+        "def fail_cleanup(args, identity):\n"
+        "    raise RuntimeError('cleanup failed')\n"
+        "smoke._capture_internal_javascript_identity = fail_capture\n"
+        "smoke._stop_internal_javascript_bridge = fail_cleanup\n"
+        "smoke._bridge_child = lambda args: 0\n"
+        "smoke._exit_bridge_child(None)\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "initial JavaScript identity capture failed" in completed.stderr
+    assert "internal JavaScript cleanup failed" in completed.stderr
+
+
+def test_identity_cleanup_kills_stalled_verified_survivor(monkeypatch, tmp_path):
+    calls = []
+
+    class Process:
+        pid = 123
+
+        def create_time(self):
+            return 1.0
+
+        def is_running(self):
+            return True
+
+        def terminate(self):
+            calls.append("terminate")
+
+        def kill(self):
+            calls.append("kill")
+
+    process = Process()
+    phase_path = tmp_path / "phase.txt"
+    waits = iter([[process], [process]])
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._collect_process_tree",
+        lambda identity: [process],
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._wait_processes",
+        lambda processes, timeout_seconds: next(waits),
+    )
+
+    complete = _cleanup_identity_process(
+        _ProcessIdentity(pid=123, create_time=1.0),
+        label="bridge agent process Alice",
+        phase_path=phase_path,
+    )
+
+    assert complete is False
+    assert calls == ["terminate", "kill"]
+    assert phase_path.read_text(encoding="utf-8").strip() == "bridge agent process Alice survived kill"
+
+
+def test_internal_node_cleanup_rejects_reused_pid(monkeypatch, tmp_path):
+    class ReusedProcess:
+        pid = 123
+
+        def create_time(self):
+            return 2.0
+
+    monkeypatch.setattr("benchmarks.minecraft.real_smoke.psutil.Process", lambda pid: ReusedProcess())
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._signal_processes",
+        lambda *args, **kwargs: pytest.fail("reused PID must not be signaled"),
+    )
+    phase_path = tmp_path / "phase.txt"
+
+    _stop_internal_javascript_bridge(
+        SimpleNamespace(phase_path=str(phase_path)),
+        _ProcessIdentity(pid=123, create_time=1.0),
+    )
+
+    assert phase_path.read_text(encoding="utf-8").strip() == "internal JavaScript bridge already stopped"
+
+
+def test_parent_fallback_post_kill_wait_is_bounded(monkeypatch):
+    class Process:
+        pid = 123
+
+        def __init__(self):
+            self.calls = []
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.calls.append("terminate")
+
+        def kill(self):
+            self.calls.append("kill")
+
+        def wait(self, timeout):
+            self.calls.append(("wait", timeout))
+            raise subprocess.TimeoutExpired("bridge-child", timeout)
+
+    process = Process()
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._capture_process_identity",
+        lambda pid: None,
+    )
+
+    assert _stop_process(process) is False
+
+    assert process.calls == ["terminate", ("wait", 2), "kill", ("wait", 2)]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX session regression")
@@ -314,7 +559,7 @@ def test_bridge_timeout_stops_orphaned_descendant_after_leader_exits(tmp_path):
         process.wait(timeout=2)
         assert _resolve_process_identity(leader_identity) is None
 
-        _stop_process(process, leader_identity=leader_identity)
+        assert _stop_process(process, leader_identity=leader_identity) is True
 
         assert _resolve_process_identity(descendant_identity) is None
         assert _collect_session_processes(leader_identity) == []
@@ -341,6 +586,47 @@ def test_session_collection_rejects_reused_leader_identity(monkeypatch):
     )
 
     assert _collect_session_processes(_ProcessIdentity(pid=123, create_time=100.0)) == []
+
+
+def test_parent_cleanup_kills_late_session_descendant_and_rescans_after_kill(monkeypatch):
+    calls = []
+
+    class Process:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return float(self.pid)
+
+        def is_running(self):
+            return True
+
+        def terminate(self):
+            calls.append(("terminate", self.pid))
+
+        def kill(self):
+            calls.append(("kill", self.pid))
+
+    leader = Process(1)
+    late_descendant = Process(2)
+    scans = iter([[leader], [late_descendant], []])
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._collect_session_processes",
+        lambda identity: next(scans),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.real_smoke._wait_processes",
+        lambda processes, timeout_seconds: [],
+    )
+
+    complete = _stop_process(
+        object(),
+        leader_identity=_ProcessIdentity(pid=1, create_time=1.0),
+        posix=True,
+    )
+
+    assert complete is True
+    assert calls == [("terminate", 1), ("kill", 2)]
 
 
 def test_non_posix_cleanup_terminates_descendants_before_parent_and_escalates(monkeypatch):
