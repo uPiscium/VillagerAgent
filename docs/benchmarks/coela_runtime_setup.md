@@ -22,7 +22,7 @@ external/CoELA/
   virtualhome/
   executable/
     linux_exec.v2.3.0.x86_64
-    linux_exec.v3_Data/
+    linux_exec.v2.3.0_Data/
 ```
 
 These paths are ignored by git:
@@ -112,6 +112,13 @@ The matrix runner writes per-run artifacts plus:
 - `matrix_metrics.csv`
 
 Run and matrix directories must be new or empty. Use `--overwrite` only when the complete previous bundle should be replaced with a new attempt ID.
+
+For retained real diagnostics, record the CoELA and VirtualHome `wah` commits,
+the model digest, the executable checksum, and a deterministic checksum of the
+complete Unity data directory. Runtime paths and raw simulator output are local
+evidence and must not be copied into a public bundle. Publish only allowlisted,
+managed summaries after scanning for goals, evaluator or hidden state,
+credentials, prompts/reasoning, debug fields, and personal absolute paths.
 
 ## Troubleshooting
 
