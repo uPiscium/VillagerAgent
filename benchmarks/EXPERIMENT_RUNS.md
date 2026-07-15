@@ -36,7 +36,7 @@ Each new run directory should include:
 
 - `command.txt`: exact harness command.
 - `config.resolved.yaml` and/or `config.resolved.json`: resolved config used by the run.
-- `provenance.json`: benchmark, schema version, commit hash, command, and environment notes.
+- `provenance.json`: benchmark, schema version, repository identity, lifecycle, command, effective settings, and environment fingerprints.
 - Normalized benchmark artifacts such as CRAFT `normalized/summary.json` or Minecraft `summary.json` and `metrics.json`.
 
 Re-running the same config and seed should produce comparable artifact shapes even when timestamps, UUIDs, or real environment outcomes differ.

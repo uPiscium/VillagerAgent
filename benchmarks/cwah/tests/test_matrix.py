@@ -1,7 +1,10 @@
 import argparse
 import json
 import subprocess
+from pathlib import Path
 
+import httpx
+from openai import APITimeoutError
 import pytest
 
 from benchmarks.common.run_artifacts import RunDirectoryExistsError
@@ -11,6 +14,7 @@ from benchmarks.cwah.matrix import (
     build_matrix,
     matrix_port,
     parse_int_list,
+    _provider_metadata,
     run_matrix_item,
     write_matrix_summary,
 )
@@ -81,6 +85,18 @@ def test_write_matrix_summary(tmp_path):
     assert '0,0,1,6314,True,False,0.5,2,1,2,1,1,3,"{""script_impossible"": 2}","{""already_open"": 1}"' in metrics_csv
 
 
+def test_provider_metadata_reads_exposed_immutable_identity(tmp_path):
+    raw_output = tmp_path / "raw.json"
+    raw_output.write_text(json.dumps({
+        "events": [{
+            "event": "policy_step",
+            "decision": {"provider_metadata": {"system_fingerprint": "fp_immutable"}},
+        }],
+    }), encoding="utf-8")
+
+    assert _provider_metadata(raw_output) == {"system_fingerprint": "fp_immutable"}
+
+
 def test_matrix_uses_environment_credential_without_argv_or_artifact_leak(tmp_path, monkeypatch):
     secret = "sentinel-secret-value-12345"
     captured_command = []
@@ -123,6 +139,60 @@ def test_matrix_uses_environment_credential_without_argv_or_artifact_leak(tmp_pa
     assert secret not in json.dumps(result)
     assert result["stdout"] == "provider output [REDACTED]"
     assert result["stderr"] == "provider error [REDACTED]"
+    provenance = json.loads((tmp_path / "task_0_seed_0" / "provenance.json").read_text())
+    assert provenance["lifecycle"]["status"] == "failure"
+    settings = provenance["effective_settings"]
+    assert settings["episode_id"] == "cwah-task_0_seed_0"
+    assert settings["temperature"] == 0.0
+    assert settings["max_tokens"] == 128
+    assert Path(settings["coela_cwah_path"]).is_absolute()
+    assert Path(settings["dataset_path"]).is_absolute()
+    assert Path(settings["executable_file"]).is_absolute()
+    assert settings["output"].endswith("task_0_seed_0/raw.json")
+    assert settings["artifact_dir"].endswith("task_0_seed_0/normalized")
+    assert captured_command[captured_command.index("--temperature") + 1] == "0.0"
+    assert captured_command[captured_command.index("--max-tokens") + 1] == "128"
+    assert secret not in json.dumps(provenance)
+
+
+def test_matrix_ollama_model_uses_preflight_digest(tmp_path, monkeypatch):
+    args = _matrix_args()
+    args.base_url = "https://ollama.example.test/v1"
+    monkeypatch.setattr(
+        "benchmarks.cwah.matrix.model_metadata",
+        lambda base_url, model: {"digest": "sha256:matrix-ollama"},
+    )
+    monkeypatch.setattr(
+        "benchmarks.cwah.matrix.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, stdout="", stderr="failed"),
+    )
+
+    run_matrix_item(args=args, output_dir=tmp_path, run=MatrixRun(index=0, task_id=0, seed=0))
+
+    provenance = json.loads((tmp_path / "task_0_seed_0" / "provenance.json").read_text())
+    model = next(asset for asset in provenance["assets"] if asset["name"] == "policy_model")
+    assert model["provider"] == "ollama"
+    assert model["digest"] == "sha256:matrix-ollama"
+
+
+def test_matrix_openai_timeout_finalizes_child_as_timeout(tmp_path, monkeypatch):
+    args = _matrix_args()
+    monkeypatch.setattr(
+        "benchmarks.cwah.matrix.subprocess.run",
+        lambda *unused_args, **unused_kwargs: (_ for _ in ()).throw(
+            APITimeoutError(request=httpx.Request("POST", args.base_url))
+        ),
+    )
+
+    with pytest.raises(APITimeoutError):
+        run_matrix_item(
+            args=args,
+            output_dir=tmp_path,
+            run=MatrixRun(index=0, task_id=0, seed=0),
+        )
+
+    provenance = json.loads((tmp_path / "task_0_seed_0" / "provenance.json").read_text())
+    assert provenance["lifecycle"]["status"] == "timeout"
 
 
 def test_matrix_rejects_stale_child_summary_before_execution(tmp_path):
@@ -172,6 +242,10 @@ def test_matrix_rejects_summary_from_another_attempt(tmp_path, monkeypatch):
         (tmp_path / "task_0_seed_0" / "artifact_manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["status"] == "failed"
+    provenance = json.loads(
+        (tmp_path / "task_0_seed_0" / "provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["lifecycle"]["status"] == "failure"
 
 
 def test_matrix_child_exception_finalizes_failed_attempt(tmp_path, monkeypatch):
@@ -202,6 +276,8 @@ def _matrix_args():
         navigation_loop_threshold=12,
         base_url="http://example.test/v1",
         model="model",
+        temperature=0.0,
+        max_tokens=128,
         full_episode=False,
         coela_cwah_path="",
         dataset_path="",

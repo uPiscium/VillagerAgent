@@ -12,7 +12,7 @@ from benchmarks.common.run_artifacts import (
     read_attempt_id,
     validate_run_attempt,
 )
-from benchmarks.common.sanitization import collect_secret_values, redact_text
+from benchmarks.common.sanitization import collect_secret_values, redact_text, sanitize_artifact_value
 from benchmarks.craft.config import (
     condition_from_config,
     load_config,
@@ -30,7 +30,7 @@ from benchmarks.craft.experiment_summary import (
 )
 from benchmarks.craft.report import build_comparison_report, write_csv_report, write_json_report
 from benchmarks.craft.run import run_config
-from benchmarks.experiment_provenance import write_provenance
+from benchmarks.experiment_provenance import finalize_provenance, write_provenance
 
 
 class ExperimentConfigError(ValueError):
@@ -77,14 +77,23 @@ def run_experiment(
         command += " --overwrite"
 
     run_names = []
+    run_records = []
     failures = []
     continue_on_error = bool(experiment.get("continue_on_error", False))
-    for run_spec in _expand_run_specs(experiment["runs"], run_overrides):
+    expanded_run_specs = _expand_run_specs(experiment["runs"], run_overrides)
+    for run_spec in expanded_run_specs:
         config_path = run_spec["config"]
         spec_overrides = run_spec["overrides"]
         config = load_config(config_path, overrides=spec_overrides)
         output_dir = output_dir_for_config(config)
         run_names.append(output_dir.name)
+        run_record = {
+            "config": config_path,
+            "overrides": spec_overrides,
+            "run_name": output_dir.name,
+            "provenance": str(output_dir / "provenance.json"),
+        }
+        run_records.append(run_record)
         try:
             completed_run_dir = run_config(
                 config_path,
@@ -109,15 +118,14 @@ def run_experiment(
                 command=command,
                 error=exc,
             )
-            failures.append({"run_name": output_dir.name, "error": str(exc)})
-
-    if dry_run:
-        return []
+            failures.append({
+                "run_name": output_dir.name,
+                "error": redact_text(str(exc), secret_values=collect_secret_values(config)),
+            })
 
     result_root = Path(experiment.get("result_root", "result/craft"))
     if not result_root.is_absolute():
         result_root = root / result_root
-    rows = build_comparison_report(run_names, result_root=result_root)
     report = experiment.get("report", {})
     output = _report_path(
         report.get("output", "result/craft/comparison_summary.csv"),
@@ -125,6 +133,27 @@ def run_experiment(
     )
     if not output.is_absolute():
         output = root / output
+    manifest_output = Path(report.get("manifest_output") or output.with_suffix(".manifest.json"))
+    if not manifest_output.is_absolute():
+        manifest_output = root / manifest_output
+    manifest_output.parent.mkdir(parents=True, exist_ok=True)
+    manifest_payload = sanitize_artifact_value({
+        "schema_version": 1,
+        "benchmark": "craft",
+        "experiment": experiment.get("name", ""),
+        "dry_run": dry_run,
+        "run_plan": run_records,
+        "failures": failures,
+    })
+    manifest_output.write_text(
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    if dry_run:
+        return []
+
+    rows = build_comparison_report(run_names, result_root=result_root)
     write_csv_report(rows, output)
     json_output = report.get("json_output")
     if json_output:
@@ -294,13 +323,16 @@ def _write_failure_artifacts(
         )
     config.setdefault("_meta", {})["attempt_id"] = attempt_id
     save_resolved_config(config, output_dir)
-    write_provenance(
-        output_dir,
-        benchmark="craft",
-        command=command,
-        resolved_config=config,
-        environment_notes=f"condition={condition_from_config(config)}; failure_artifact=true",
-    )
+    provenance_path = output_dir / "provenance.json"
+    if not provenance_path.exists():
+        write_provenance(
+            output_dir,
+            benchmark="craft",
+            command=command,
+            resolved_config=config,
+            environment_notes=f"condition={condition_from_config(config)}; failure_artifact=true",
+        )
+        finalize_provenance(output_dir, status="failure")
     normalized_dir = output_dir / "normalized"
     normalized_dir.mkdir(parents=True, exist_ok=True)
     secret_values = collect_secret_values(config)

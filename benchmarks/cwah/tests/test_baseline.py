@@ -12,6 +12,7 @@ from benchmarks.common.run_artifacts import (
     validate_run_attempt,
 )
 from benchmarks.cwah.baseline import build_manifest, build_matrix_command, main
+from benchmarks.experiment_provenance import finalize_provenance, write_provenance
 
 
 def test_build_matrix_command_forwards_baseline_options(tmp_path):
@@ -165,6 +166,13 @@ def test_baseline_writes_default_report_inside_completed_matrix(tmp_path, monkey
             }),
             encoding="utf-8",
         )
+        write_provenance(
+            output_dir,
+            benchmark="cwah",
+            command=command,
+            resolved_config={"attempt_id": matrix_attempt},
+        )
+        finalize_provenance(output_dir, status="success")
         finalize_run_directory(
             output_dir,
             attempt_id=matrix_attempt,
@@ -183,6 +191,18 @@ def test_baseline_writes_default_report_inside_completed_matrix(tmp_path, monkey
     manifest = json.loads((report_dir / "baseline_manifest.json").read_text(encoding="utf-8"))
     assert manifest["runs"] == 1
     assert manifest["matrix_attempt_id"]
+    assert manifest["outputs"]["matrix_provenance"] == str(output_dir / "provenance.json")
+    report_provenance = json.loads((report_dir / "provenance.json").read_text(encoding="utf-8"))
+    matrix_asset = next(
+        asset for asset in report_provenance["assets"] if asset["name"] == "matrix_provenance"
+    )
+    assert report_provenance["schema_version"] == "2.0.0"
+    assert report_provenance["lifecycle"]["status"] == "success"
+    assert report_provenance["effective_settings"]["matrix_provenance"] == str(
+        output_dir / "provenance.json"
+    )
+    assert matrix_asset["available"] is True
+    assert matrix_asset["sha256"]
 
 
 def test_baseline_finalizes_nested_report_and_matrix_after_report_error(tmp_path, monkeypatch):
@@ -252,6 +272,8 @@ def test_failed_matrix_writes_failed_default_report_without_reusing_stale_attemp
     assert report_manifest["status"] == "failed"
     assert matrix_manifest["status"] == "failed"
     assert json.loads((report_dir / "baseline_manifest.json").read_text(encoding="utf-8"))["runs"] == 1
+    report_provenance = json.loads((report_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert report_provenance["lifecycle"]["status"] == "failure"
 
 
 def test_baseline_rejects_report_directory_containing_matrix(tmp_path, monkeypatch):
@@ -279,6 +301,8 @@ def _baseline_args(*, output_dir, report_dir):
         navigation_loop_threshold=12,
         base_url="http://example.test/v1",
         model="model",
+        temperature=0.0,
+        max_tokens=128,
         coela_cwah_path="",
         dataset_path="",
         executable_file="",

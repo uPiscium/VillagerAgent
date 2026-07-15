@@ -77,7 +77,10 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert "api_key" not in launch_config
     provenance = json.loads((output_dir / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["benchmark"] == "minecraft"
-    assert provenance["schema_version"] == "1.0.0"
+    assert provenance["schema_version"] == "2.0.0"
+    assert provenance["lifecycle"]["status"] == "success"
+    assert provenance["repository"]["dirty"] in {True, False}
+    assert "secret" not in json.dumps(provenance)
     runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
     artifact = json.loads((output_dir / "dual_dag_artifact.json").read_text(encoding="utf-8"))
     decision_support = json.loads((output_dir / "decision_support.json").read_text(encoding="utf-8"))
@@ -346,6 +349,11 @@ def test_minecraft_experiment_rejects_unknown_task_selection_policy(tmp_path):
             task_selection_policy="bad-policy",
         )
 
+    run_dir = tmp_path / "result" / "bounded_execute"
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["lifecycle"]["status"] == "failure"
+    assert provenance["effective_settings"]["task_selection_policy"] == "bad-policy"
+
 
 def test_minecraft_metrics_extracts_representative_counts_without_secrets():
     metrics = build_minecraft_metrics(
@@ -606,6 +614,9 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert (output_dir / "action_log.json").exists()
     persisted = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert persisted["timed_out"] is True
+    provenance = json.loads((output_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["lifecycle"]["status"] == "timeout"
+    assert provenance["environment_unverifiable"] is True
     common_rows = summarize_inputs([output_dir])
     assert common_rows[0]["error_type"] == "timeout"
 

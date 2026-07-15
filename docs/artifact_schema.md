@@ -87,13 +87,20 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 
 ## Provenance Files
 
-- Producer: `benchmarks.experiment_provenance.write_provenance()`.
+- Producers: the CRAFT, C-WAH, and Minecraft single-run and matrix harnesses through `benchmarks.experiment_provenance`.
 - Output: `command.txt`, `config.resolved.json`, and `provenance.json`.
 - Modes: dry-run and execute.
-- Failure behavior: written after normalized artifacts are produced.
+- Failure behavior: started before benchmark execution and finalized before the artifact manifest on success, runtime failure, or timeout. Partial bundles therefore retain terminal provenance.
 - Classification: public sanitized command/config/provenance metadata.
 - Credential values are recursively replaced with `[REDACTED]`; credential-source fields such as `api_key_env` remain so the authentication setup is reproducible without exposing the value.
 - Commands redact credential flags and known secret literals before writing. Benchmark subprocess output and failure summaries apply the same literal redaction when a runtime credential is available.
+- `provenance.json` schema `2.0.0` is shared by all three benchmarks. Common fields are `benchmark`, `lifecycle` (`started_at`, `ended_at`, `duration_seconds`, `status`), safe `argv`, `interpreter`, `platform`, `repository` (`sha`, `dirty`), `dependency_lock`, sanitized `effective_settings`, `assets`, `environment_unverifiable`, and `unverifiable_reasons`. The top-level `commit` field remains as an additive compatibility alias for `repository.sha`.
+- Terminal provenance status is `success`, `failure`, or `timeout`; this is more specific than the artifact manifest's `completed`/`failed` status.
+- Local files record byte size and SHA-256. Directory fingerprints hash sorted relative paths, sizes, and contents. Used Git repositories record HEAD SHA and dirty state. Dependency identity fingerprints recognized lock files, including `flake.lock`.
+- Required assets that are absent or cannot expose an immutable identity do not prevent failure artifacts from being written. They set `environment_unverifiable: true` and add a machine-readable reason.
+- Model assets require an immutable digest, revision, or provider system fingerprint. CRAFT and C-WAH Ollama runs record the tag digest returned by `/api/tags`; C-WAH hosted-provider runs retain immutable metadata exposed on responses. Minecraft accepts `model_digest`, `model_revision`, or `model_system_fingerprint` from the launch config. Providers that do not expose immutable metadata are explicitly unverifiable rather than treating a mutable model name as identity.
+- C-WAH records CoELA repository state, dataset, VirtualHome executable, and model identity. Minecraft execute mode records server version/protocol, world/reset snapshot, bridge, selected task config, judger, and model identity. Configure Minecraft file identities with `world_snapshot_path` (or `reset_snapshot_path`) and `bridge_path`, and server identity with `server_version` and `server_protocol`.
+- Matrix provenance contains the expanded `run_plan`; each matrix summary run has a `provenance` path referencing its child record. The C-WAH baseline report directory has its own shared-schema provenance and fingerprints the matrix provenance it reports. CRAFT experiments write `<report-name>.manifest.json` (or `report.manifest_output`) with the expanded overrides and child provenance paths.
 
 ## Run Attempt And Artifact Manifest
 

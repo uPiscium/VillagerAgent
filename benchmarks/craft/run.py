@@ -15,7 +15,14 @@ from benchmarks.craft.config import (
 from benchmarks.craft.adapters.ollama_preflight import preflight_ollama_model
 from benchmarks.craft.craft_env_adapter import CraftEnvAdapter
 from benchmarks.craft.result_converter import normalize_results
-from benchmarks.experiment_provenance import write_provenance
+from benchmarks.experiment_provenance import (
+    file_identity,
+    finalize_provenance,
+    git_identity,
+    model_identity,
+    update_provenance_assets,
+    write_provenance,
+)
 
 
 CONDITIONS = {"official_baseline", "villageragent_directors", "single_director_ablation"}
@@ -104,8 +111,6 @@ def run_config(
     )
     config.setdefault("_meta", {})["attempt_id"] = attempt_id
     try:
-        if not dry_run and condition != "official_baseline":
-            _require_runtime_api_keys(config)
         save_resolved_config(config, output_dir)
         write_provenance(
             output_dir,
@@ -118,7 +123,10 @@ def run_config(
             ),
             resolved_config=config,
             environment_notes=f"condition={condition}",
+            assets=_provenance_assets(config, condition=condition),
         )
+        if not dry_run and condition != "official_baseline":
+            _require_runtime_api_keys(config)
         (output_dir / "logs").mkdir(parents=True, exist_ok=True)
         (output_dir / "raw").mkdir(parents=True, exist_ok=True)
         (output_dir / "normalized").mkdir(parents=True, exist_ok=True)
@@ -126,7 +134,12 @@ def run_config(
             _print_dry_run(config, condition, output_dir)
         else:
             if condition != "official_baseline":
-                _preflight_ollama_models(config)
+                model_metadata = _preflight_ollama_models(config)
+                if model_metadata:
+                    update_provenance_assets(
+                        output_dir,
+                        _model_identities(config, condition=condition, metadata=model_metadata),
+                    )
             adapter = CraftEnvAdapter(config, output_dir)
             raw_result = adapter.run(condition)
             normalize_results(
@@ -136,6 +149,10 @@ def run_config(
                 output_dir=output_dir,
             )
     except BaseException as exc:
+        finalize_provenance(
+            output_dir,
+            status="timeout" if isinstance(exc, TimeoutError) else "failure",
+        )
         _write_failure_artifacts(
             config=config,
             condition=condition,
@@ -149,6 +166,7 @@ def run_config(
             status="failed",
         )
         raise
+    finalize_provenance(output_dir, status="success")
     finalize_run_directory(
         output_dir,
         attempt_id=attempt_id,
@@ -156,6 +174,47 @@ def run_config(
         status="completed",
     )
     return output_dir
+
+
+def _provenance_assets(config: dict, *, condition: str) -> list[dict]:
+    craft = config.get("craft", {})
+    assets = [
+        git_identity(craft.get("repo_path", ""), required=True, name="craft", kind="submodule"),
+        file_identity(craft.get("dataset_path", ""), name="craft_dataset", kind="dataset"),
+    ]
+    return assets + _model_identities(config, condition=condition)
+
+
+def _model_identities(
+    config: dict,
+    *,
+    condition: str,
+    metadata: list[dict] | None = None,
+) -> list[dict]:
+    observed = {
+        (_normalized_model_base_url(item.get("base_url", "")), item.get("model")): item
+        for item in (metadata or [])
+    }
+    identities = []
+    for role in ("director", "builder"):
+        model_config = config.get("models", {}).get(role, {})
+        selected = observed.get((
+            _normalized_model_base_url(model_config.get("base_url", "")),
+            model_config.get("model"),
+        ), {})
+        identities.append(model_identity(
+            name=f"{role}_model",
+            provider=str(model_config.get("provider", "")),
+            model=str(model_config.get("model", "")),
+            metadata=selected,
+            required=condition != "official_baseline",
+        ))
+    return identities
+
+
+def _normalized_model_base_url(base_url: str) -> str:
+    normalized = str(base_url).rstrip("/")
+    return normalized[:-3] if normalized.endswith("/v1") else normalized
 
 
 def _write_failure_artifacts(

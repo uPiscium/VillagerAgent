@@ -1,6 +1,16 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import platform
 import re
+import shlex
 import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from subprocess import run as run_process
 
 import yaml
 
@@ -8,8 +18,13 @@ from benchmarks.common.sanitization import (
     collect_secret_values,
     redact_command_text,
     sanitize_artifact_value,
+    sanitize_command,
 )
-from benchmarks.craft.dual_dag.schema import DUAL_DAG_SCHEMA_VERSION
+
+
+PROVENANCE_SCHEMA_VERSION = "2.0.0"
+PROVENANCE_FILE = "provenance.json"
+_LOCK_FILES = ("flake.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "requirements.txt")
 
 
 def standard_run_name(*parts: object) -> str:
@@ -23,51 +38,269 @@ def write_provenance(
     output_dir: Path,
     *,
     benchmark: str,
-    command: str,
-    resolved_config,
+    command: str | list[str],
+    resolved_config: Any,
     environment_notes: str = "",
-) -> dict:
+    assets: list[dict[str, Any]] | None = None,
+    required_identities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Start a sanitized provenance record that is finalized on every terminal path."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    commit = _git_commit()
     secret_values = collect_secret_values(resolved_config)
-    sanitized_command = redact_command_text(command, secret_values=secret_values)
-    sanitized_config = sanitize_artifact_value(resolved_config, secret_values=secret_values)
+    argv = _command_argv(command)
+    safe_argv = sanitize_command(argv, secret_values=secret_values)
+    sanitized_command = redact_command_text(
+        command if isinstance(command, str) else shlex.join(command),
+        secret_values=secret_values,
+    )
+    settings = sanitize_artifact_value(resolved_config, secret_values=secret_values)
+    repository = git_identity(_repository_root(), required=True, name="villageragent")
+    lock_identity = dependency_lock_identity(_repository_root())
+    recorded_assets = [sanitize_artifact_value(item, secret_values=secret_values) for item in (assets or [])]
+    recorded_assets.extend(
+        sanitize_artifact_value(item, secret_values=secret_values)
+        for item in (required_identities or [])
+    )
+    reasons = _unverifiable_reasons([repository, lock_identity, *recorded_assets])
+    started_at = _utc_now()
     provenance = {
-        "schema_version": DUAL_DAG_SCHEMA_VERSION,
+        "schema_version": PROVENANCE_SCHEMA_VERSION,
         "benchmark": benchmark,
-        "commit": commit,
+        "commit": repository.get("sha", "unknown"),
+        "lifecycle": {
+            "started_at": started_at,
+            "ended_at": None,
+            "duration_seconds": None,
+            "status": "running",
+        },
+        "argv": safe_argv,
         "command": sanitized_command,
+        "interpreter": {
+            "executable": sys.executable,
+            "implementation": platform.python_implementation(),
+            "python_version": platform.python_version(),
+        },
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+        },
+        "repository": repository,
+        "dependency_lock": lock_identity,
+        "effective_settings": settings,
+        "assets": recorded_assets,
         "environment_notes": environment_notes,
+        "environment_unverifiable": bool(reasons),
+        "unverifiable_reasons": reasons,
     }
     (output_dir / "command.txt").write_text(sanitized_command + "\n", encoding="utf-8")
-    _write_resolved_config(output_dir, sanitized_config)
-    with (output_dir / "provenance.json").open("w", encoding="utf-8") as f:
-        import json
-
-        json.dump(provenance, f, indent=2)
-        f.write("\n")
+    _write_resolved_config(output_dir, settings)
+    _write_json(output_dir / PROVENANCE_FILE, provenance)
     return provenance
 
 
-def _write_resolved_config(output_dir: Path, resolved_config) -> None:
-    if isinstance(resolved_config, dict):
-        with (output_dir / "config.resolved.json").open("w", encoding="utf-8") as f:
-            import json
+def finalize_provenance(output_dir: Path, *, status: str) -> dict[str, Any]:
+    if status not in {"success", "failure", "timeout"}:
+        raise ValueError(f"Unsupported provenance terminal status: {status}")
+    path = output_dir / PROVENANCE_FILE
+    if not path.exists():
+        return {}
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    ended_at = _utc_now()
+    started = datetime.fromisoformat(provenance["lifecycle"]["started_at"].replace("Z", "+00:00"))
+    ended = datetime.fromisoformat(ended_at.replace("Z", "+00:00"))
+    provenance["lifecycle"].update({
+        "ended_at": ended_at,
+        "duration_seconds": max(0.0, round((ended - started).total_seconds(), 6)),
+        "status": status,
+    })
+    _write_json(path, provenance)
+    return provenance
 
-            json.dump(resolved_config, f, indent=2)
-            f.write("\n")
+
+def update_provenance_assets(output_dir: Path, assets: list[dict[str, Any]]) -> dict[str, Any]:
+    path = output_dir / PROVENANCE_FILE
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    updates = sanitize_artifact_value(assets)
+    update_names = {item.get("name") for item in updates}
+    provenance["assets"] = [
+        item for item in provenance["assets"] if item.get("name") not in update_names
+    ] + updates
+    reasons = _unverifiable_reasons([
+        provenance["repository"],
+        provenance["dependency_lock"],
+        *provenance["assets"],
+    ])
+    provenance["environment_unverifiable"] = bool(reasons)
+    provenance["unverifiable_reasons"] = reasons
+    _write_json(path, provenance)
+    return provenance
+
+
+def update_provenance_settings(output_dir: Path, resolved_config: Any) -> dict[str, Any]:
+    path = output_dir / PROVENANCE_FILE
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    secret_values = collect_secret_values(resolved_config)
+    settings = sanitize_artifact_value(resolved_config, secret_values=secret_values)
+    provenance["effective_settings"] = settings
+    _write_resolved_config(output_dir, settings)
+    _write_json(path, provenance)
+    return provenance
+
+
+def file_identity(path: str | Path, *, name: str, kind: str, required: bool = True) -> dict[str, Any]:
+    if not str(path).strip():
+        return {
+            "name": name,
+            "kind": kind,
+            "path": "",
+            "required": required,
+            "available": False,
+            "reason": "path_not_configured",
+        }
+    candidate = Path(path).expanduser()
+    identity: dict[str, Any] = {
+        "name": name,
+        "kind": kind,
+        "path": str(candidate),
+        "required": required,
+        "available": candidate.exists(),
+    }
+    if not candidate.exists():
+        identity["reason"] = "missing"
+        return identity
+    if candidate.is_file():
+        identity.update({"type": "file", "size": candidate.stat().st_size, "sha256": _sha256_file(candidate)})
+        return identity
+    if candidate.is_dir():
+        size, digest = _directory_fingerprint(candidate)
+        identity.update({"type": "directory", "size": size, "sha256": digest})
+        return identity
+    identity.update({"available": False, "reason": "unsupported_file_type"})
+    return identity
+
+
+def git_identity(path: str | Path, *, required: bool, name: str, kind: str = "repository") -> dict[str, Any]:
+    if not str(path).strip():
+        return {
+            "name": name,
+            "kind": kind,
+            "path": "",
+            "required": required,
+            "available": False,
+            "reason": "path_not_configured",
+        }
+    candidate = Path(path).expanduser()
+    identity: dict[str, Any] = {
+        "name": name,
+        "kind": kind,
+        "path": str(candidate),
+        "required": required,
+        "available": False,
+    }
+    try:
+        sha = _git(candidate, "rev-parse", "HEAD")
+        dirty = bool(_git(candidate, "status", "--porcelain", "--untracked-files=normal"))
+    except (OSError, subprocess.SubprocessError):
+        identity["reason"] = "git_identity_unavailable"
+        return identity
+    identity.update({"available": True, "sha": sha, "dirty": dirty})
+    return identity
+
+
+def model_identity(*, name: str, provider: str, model: str, metadata: dict[str, Any] | None = None, required: bool = True) -> dict[str, Any]:
+    metadata = metadata or {}
+    immutable_id = metadata.get("digest") or metadata.get("revision") or metadata.get("system_fingerprint")
+    identity = {
+        "name": name,
+        "kind": "model",
+        "provider": provider,
+        "model": model,
+        "required": required,
+        "available": bool(immutable_id),
+    }
+    identity.update({key: value for key, value in metadata.items() if value is not None})
+    if not immutable_id:
+        identity["reason"] = "immutable_model_identity_unavailable"
+    return identity
+
+
+def dependency_lock_identity(root: Path) -> dict[str, Any]:
+    identities = [file_identity(root / name, name=name, kind="dependency_lock") for name in _LOCK_FILES if (root / name).exists()]
+    return {
+        "name": "dependency_lock",
+        "kind": "dependency_lock_set",
+        "required": True,
+        "available": bool(identities),
+        "files": identities,
+        **({} if identities else {"reason": "dependency_lock_missing"}),
+    }
+
+
+def _write_resolved_config(output_dir: Path, resolved_config: Any) -> None:
+    if isinstance(resolved_config, dict):
+        _write_json(output_dir / "config.resolved.json", resolved_config)
     with (output_dir / "config.resolved.yaml").open("w", encoding="utf-8") as f:
         yaml.safe_dump(resolved_config, f, sort_keys=False, allow_unicode=True)
 
 
-def _git_commit() -> str:
+def _command_argv(command: str | list[str]) -> list[str]:
+    if isinstance(command, list):
+        return [str(argument) for argument in command]
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except Exception:
-        return "unknown"
-    return result.stdout.strip() or "unknown"
+        return shlex.split(command)
+    except ValueError:
+        return [command]
+
+
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _git(path: Path, *arguments: str) -> str:
+    return run_process(
+        ["git", "-C", str(path), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _directory_fingerprint(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    for child in sorted(item for item in path.rglob("*") if item.is_file() and not item.is_symlink()):
+        relative = child.relative_to(path).as_posix().encode()
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        child_size = child.stat().st_size
+        size += child_size
+        digest.update(child_size.to_bytes(8, "big"))
+        with child.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return size, digest.hexdigest()
+
+
+def _unverifiable_reasons(identities: list[dict[str, Any]]) -> list[str]:
+    return sorted({
+        f"{identity.get('kind', 'asset')}:{identity.get('name', 'unknown')}:{identity.get('reason', 'identity_unavailable')}"
+        for identity in identities
+        if identity.get("required") and not identity.get("available")
+    })
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

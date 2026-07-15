@@ -3,8 +3,12 @@ import socket
 import pytest
 import requests
 
-from benchmarks.craft.adapters.ollama_preflight import OllamaPreflightError, preflight_ollama_model
-from benchmarks.craft.run import _preflight_ollama_models
+from benchmarks.craft.adapters.ollama_preflight import (
+    OllamaPreflightError,
+    OllamaPreflightTimeoutError,
+    preflight_ollama_model,
+)
+from benchmarks.craft.run import _model_identities, _preflight_ollama_models
 
 
 def test_ollama_preflight_accepts_available_model_and_strips_v1(monkeypatch):
@@ -17,7 +21,12 @@ def test_ollama_preflight_accepts_available_model_and_strips_v1(monkeypatch):
 
     def fake_get(url, *, timeout):
         calls.append({"url": url, "timeout": timeout})
-        return _FakeResponse({"models": [{"name": "qwen3.5:9b"}]})
+        return _FakeResponse({"models": [{
+            "name": "qwen3.5:9b",
+            "digest": "sha256:immutable",
+            "size": 123,
+            "modified_at": "2026-07-15T00:00:00Z",
+        }]})
 
     monkeypatch.setattr("benchmarks.craft.adapters.ollama_preflight.requests.get", fake_get)
 
@@ -33,6 +42,9 @@ def test_ollama_preflight_accepts_available_model_and_strips_v1(monkeypatch):
         "base_url": "https://ollama.example.test",
         "model": "qwen3.5:9b",
         "available_model_count": 1,
+        "digest": "sha256:immutable",
+        "size": 123,
+        "modified_at": "2026-07-15T00:00:00Z",
     }
 
 
@@ -59,6 +71,22 @@ def test_ollama_preflight_reports_connectivity_failure(monkeypatch):
 
     with pytest.raises(OllamaPreflightError, match="connectivity failure"):
         preflight_ollama_model(base_url="https://ollama.example.test", model="qwen3.5:9b")
+
+
+def test_ollama_preflight_preserves_timeout_classification(monkeypatch):
+    monkeypatch.setattr(
+        "benchmarks.craft.adapters.ollama_preflight.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, None)],
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.adapters.ollama_preflight.requests.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(requests.exceptions.Timeout("slow")),
+    )
+
+    with pytest.raises(OllamaPreflightTimeoutError) as exc_info:
+        preflight_ollama_model(base_url="https://ollama.example.test", model="qwen3.5:9b")
+
+    assert isinstance(exc_info.value, TimeoutError)
 
 
 def test_ollama_preflight_reports_missing_model(monkeypatch):
@@ -101,6 +129,32 @@ def test_preflight_ollama_models_deduplicates_and_includes_ollama_urls(monkeypat
 
     assert calls == [("https://ollama.example.test/v1", "qwen3.5:9b")]
     assert results == [{"base_url": "https://ollama.example.test/v1", "model": "qwen3.5:9b"}]
+
+
+def test_model_identities_match_digest_by_base_url_and_model():
+    config = {
+        "models": {
+            "director": {
+                "provider": "ollama",
+                "base_url": "https://director.example.test/v1",
+                "model": "shared:latest",
+            },
+            "builder": {
+                "provider": "ollama",
+                "base_url": "https://builder.example.test/v1",
+                "model": "shared:latest",
+            },
+        },
+    }
+    metadata = [
+        {"base_url": "https://director.example.test", "model": "shared:latest", "digest": "director-digest"},
+        {"base_url": "https://builder.example.test", "model": "shared:latest", "digest": "builder-digest"},
+    ]
+
+    identities = _model_identities(config, condition="villageragent_directors", metadata=metadata)
+
+    assert identities[0]["digest"] == "director-digest"
+    assert identities[1]["digest"] == "builder-digest"
 
 
 class _FakeResponse:

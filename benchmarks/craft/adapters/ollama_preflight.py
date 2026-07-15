@@ -8,6 +8,10 @@ class OllamaPreflightError(RuntimeError):
     """Raised when an Ollama endpoint is unavailable before a run starts."""
 
 
+class OllamaPreflightTimeoutError(OllamaPreflightError, TimeoutError):
+    """Raised when an Ollama endpoint times out before a run starts."""
+
+
 def preflight_ollama_model(*, base_url: str, model: str, timeout: float = 5.0) -> dict:
     root_url = _ollama_root_url(base_url)
     parsed = urlparse(root_url)
@@ -29,7 +33,7 @@ def preflight_ollama_model(*, base_url: str, model: str, timeout: float = 5.0) -
         response = requests.get(tags_url, timeout=timeout)
         response.raise_for_status()
     except requests.exceptions.Timeout as exc:
-        raise OllamaPreflightError(
+        raise OllamaPreflightTimeoutError(
             f"Ollama preflight connectivity timeout for {model} at {tags_url}."
         ) from exc
     except requests.exceptions.ConnectionError as exc:
@@ -53,10 +57,13 @@ def preflight_ollama_model(*, base_url: str, model: str, timeout: float = 5.0) -
             f"Ollama preflight invalid JSON for {model} at {tags_url}."
         ) from exc
 
+    model_records = [
+        item for item in payload.get("models", [])
+        if isinstance(item, dict) and (item.get("name") or item.get("model"))
+    ]
     available_models = sorted(
         item.get("name") or item.get("model")
-        for item in payload.get("models", [])
-        if isinstance(item, dict) and (item.get("name") or item.get("model"))
+        for item in model_records
     )
     if model not in available_models:
         preview = ", ".join(available_models[:10]) or "none"
@@ -64,11 +71,15 @@ def preflight_ollama_model(*, base_url: str, model: str, timeout: float = 5.0) -
             f"Ollama preflight model unavailable at {root_url}: requested={model!r}, available={preview}."
         )
 
+    selected = next(item for item in model_records if (item.get("name") or item.get("model")) == model)
     return {
         "provider": "ollama",
         "base_url": root_url,
         "model": model,
         "available_model_count": len(available_models),
+        "digest": selected.get("digest"),
+        "size": selected.get("size"),
+        "modified_at": selected.get("modified_at"),
     }
 
 
