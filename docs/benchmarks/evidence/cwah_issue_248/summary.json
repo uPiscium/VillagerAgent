@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0.0",
+  "id": "cwah-issue248-post-grab-diagnostic-v3",
+  "classification": "diagnostic",
+  "performance_claim": false,
+  "policy_commit": "1495175f41928fb53559a5434636a421e826a470",
+  "policy_repository_dirty": false,
+  "scope": {
+    "tasks": [0, 1, 2],
+    "seeds": [0, 1],
+    "steps": 25,
+    "runs": 6
+  },
+  "aggregate": {
+    "runtime_passed_runs": 6,
+    "runtime_failed_runs": 0,
+    "task_successes": 0,
+    "mean_normalized_progress": 0.5920745920745921,
+    "action_counts": {"walktowards": 142, "grab": 8},
+    "placement_actions": 0,
+    "failed_action_records": 0,
+    "result_failures": 0,
+    "navigation_loop_suppressions": 4
+  },
+  "matched_source": {
+    "id": "cwah-issue292-dual-dag-diagnostic-v2",
+    "action_counts": {"walktowards": 144, "grab": 6},
+    "placement_actions": 0,
+    "navigation_loop_suppressions": 8,
+    "task_successes": 0,
+    "mean_normalized_progress": 0.5920745920745921,
+    "paired_progress_effect": 0.0,
+    "paired_progress_interval": [0.0, 0.0],
+    "strict_equivalence_claim": false
+  },
+  "release": {
+    "tag": "benchmark-cwah-issue248-post-grab-diagnostic-v3",
+    "tag_target": "e56cbc9555b761c5930d2f98c551ef0b8ce01758",
+    "tag_target_is_policy_commit": false,
+    "tag_target_is_ancestor_of_policy_commit": true,
+    "archive_sha256": "058d7f0187267b098d4ca5563e540a778843addaf1373f0496b716d28bbae4ca",
+    "metadata_sha256": "f3efa6702f937028517bedcbaca339cb79477bac23b1acc0b02a20fe4defd82d",
+    "manifest_sha256": "c5c8212ab67baa3a9b2eccfa19f7347f67cb0bce8013035ff9e339e446a9753e",
+    "immutable": true,
+    "supersedes": [
+      "benchmark-cwah-issue248-post-grab-diagnostic-v1",
+      "benchmark-cwah-issue248-post-grab-diagnostic-v2"
+    ]
+  }
+}

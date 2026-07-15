@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0.0",
+  "id": "cwah-issue248-post-grab-diagnostic-v3",
+  "benchmark": "cwah",
+  "classification": "diagnostic",
+  "performance_claim": false,
+  "source_attempt_id": "8ea8f3533ce14adbaf2bf88b9e9174a8",
+  "source_manifest_sha256": "a439a34d17fa74692234ab9d07d479aaea9670870138c974cc3856de9661a990",
+  "source_policy": {
+    "commit": "1495175f41928fb53559a5434636a421e826a470",
+    "repository_dirty": false,
+    "captured_by_matrix_provenance": true,
+    "remote_branch": "origin/issue-248-post-grab-placement",
+    "remote_branch_reachable": true
+  },
+  "matched_source": {
+    "id": "cwah-issue292-dual-dag-diagnostic-v2",
+    "release": "benchmark-cwah-issue292-dual-dag-diagnostic-v2",
+    "archive_sha256": "7bdc6a69140630b988cb1b518cbff2c1b754b57c234c847a5435a1d83db4db79"
+  },
+  "matrix": {
+    "tasks": [0, 1, 2],
+    "seeds": [0, 1],
+    "max_steps": 25,
+    "full_episode": true,
+    "prefer_physical_after_steps": 0,
+    "navigation_loop_threshold": 12,
+    "temperature": 0.0,
+    "max_tokens": 128
+  },
+  "publication": {
+    "release": "benchmark-cwah-issue248-post-grab-diagnostic-v3",
+    "exclude": [
+      "raw stdout and stderr",
+      "agent-goal payloads",
+      "hidden state",
+      "credentials",
+      "prompts and reasoning",
+      "absolute paths",
+      "simulator transforms, grounding, and debug fields"
+    ]
+  }
+}

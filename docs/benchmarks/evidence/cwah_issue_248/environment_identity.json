@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "benchmark": "cwah",
+  "source_attempt_id": "8ea8f3533ce14adbaf2bf88b9e9174a8",
+  "directly_captured_by_matrix_provenance": {
+    "policy_commit": "1495175f41928fb53559a5434636a421e826a470",
+    "policy_repository_dirty": false,
+    "coela_commit": "3e12dea925d735eefce33da71806ae9da6fcaf3f",
+    "coela_worktree_dirty": true,
+    "dataset_sha256": "7780e1aebff70c840a1ca66ea27904c2dfe203b09b30f04aa6c001e594f432a0",
+    "unity_executable_sha256": "19d9b4735933c6ff013a05831a69acd3a10269b2934b38e51ff641b0202e01b1",
+    "model": "gemma4:e4b",
+    "model_digest": "c6eb396dbd5992bbe3f5cdb947e8bbc0ee413d7c17e2beaae69f5d569cf982eb",
+    "temperature": 0.0,
+    "max_tokens": 128
+  },
+  "post_run_supplemental_verification": {
+    "virtualhome_wah_commit": "6773be207680d47985091b90568e2a12fd3d321f",
+    "unity_data_tree_sha256": "f63c17e80e0624c2f48398f12d33c8f1af1f9bee746431cd58b4b3444678b40b",
+    "unity_data_tree_hash_method": "GNU tar stream sorted by name with epoch mtime and numeric zero owner/group"
+  },
+  "interpretation": {
+    "supplemental_fields_captured_by_original_matrix_provenance": false,
+    "strict_runtime_equivalence_claim": false,
+    "reason": "Supplemental identities were verified post-run but were not fields captured by the matrix provenance; no auditable verification timestamp is claimed, and the captured CoELA worktree was dirty."
+  }
+}

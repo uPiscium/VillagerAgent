@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0.0",
+  "comparison_id": "issue-248-post-grab-v3-vs-issue-292-v2-bounded-diagnostic",
+  "benchmark": "cwah",
+  "conditions": {
+    "baseline": "issue_292_dual_dag_v2",
+    "candidate": "issue_248_post_grab_v3"
+  },
+  "metric": {"name": "normalized_progress", "role": "primary", "higher_is_better": true},
+  "pairing_keys": ["task_id", "seed"],
+  "observations": [
+    {"condition": "issue_292_dual_dag_v2", "pairing": {"task_id": 0, "seed": 0}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": null},
+    {"condition": "issue_248_post_grab_v3", "pairing": {"task_id": 0, "seed": 0}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip#runs/task_0_seed_0/artifact_manifest.json"},
+    {"condition": "issue_292_dual_dag_v2", "pairing": {"task_id": 0, "seed": 1}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": null},
+    {"condition": "issue_248_post_grab_v3", "pairing": {"task_id": 0, "seed": 1}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip#runs/task_0_seed_1/artifact_manifest.json"},
+    {"condition": "issue_292_dual_dag_v2", "pairing": {"task_id": 1, "seed": 0}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": null},
+    {"condition": "issue_248_post_grab_v3", "pairing": {"task_id": 1, "seed": 0}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip#runs/task_1_seed_0/artifact_manifest.json"},
+    {"condition": "issue_292_dual_dag_v2", "pairing": {"task_id": 1, "seed": 1}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": null},
+    {"condition": "issue_248_post_grab_v3", "pairing": {"task_id": 1, "seed": 1}, "status": "completed", "metric_value": 0.6153846153846154, "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip#runs/task_1_seed_1/artifact_manifest.json"},
+    {"condition": "issue_292_dual_dag_v2", "pairing": {"task_id": 2, "seed": 0}, "status": "completed", "metric_value": 0.5454545454545454, "run_manifest": null},
+    {"condition": "issue_248_post_grab_v3", "pairing": {"task_id": 2, "seed": 0}, "status": "completed", "metric_value": 0.5454545454545454, "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip#runs/task_2_seed_0/artifact_manifest.json"},
+    {"condition": "issue_292_dual_dag_v2", "pairing": {"task_id": 2, "seed": 1}, "status": "completed", "metric_value": 0.5454545454545454, "run_manifest": null},
+    {"condition": "issue_248_post_grab_v3", "pairing": {"task_id": 2, "seed": 1}, "status": "completed", "metric_value": 0.5454545454545454, "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip#runs/task_2_seed_1/artifact_manifest.json"}
+  ],
+  "analysis": {"seed": 248, "bootstrap_samples": 10000, "confidence_level": 0.95},
+  "evidence": {
+    "requested_claim": "diagnostic",
+    "execution_scope": "bounded",
+    "prespecified": false,
+    "multiple_comparisons": {
+      "family_id": "issue-248-post-grab-bounded-diagnostic",
+      "family_size": 1,
+      "method": "none"
+    }
+  }
+}

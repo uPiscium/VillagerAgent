@@ -33,6 +33,17 @@
       "run_accounting": {"expected": 6, "completed": 6, "failed": 0, "missing": 0}
     },
     {
+      "id": "cwah-issue248-post-grab-diagnostic-v3",
+      "benchmark": "cwah",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue248-post-grab-diagnostic-v3/cwah-issue248-post-grab-diagnostic-v3.zip.metadata.json",
+      "archive_sha256": "058d7f0187267b098d4ca5563e540a778843addaf1373f0496b716d28bbae4ca",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "c5c8212ab67baa3a9b2eccfa19f7347f67cb0bce8013035ff9e339e446a9753e",
+      "run_accounting": {"expected": 6, "completed": 6, "failed": 0, "missing": 0}
+    },
+    {
       "id": "craft-qwen-final-diagnostic",
       "benchmark": "craft",
       "classification": "legacy-diagnostic-unarchived",
