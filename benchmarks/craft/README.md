@@ -1,5 +1,9 @@
 # CRAFT Integration
 
+<!-- benchmark-result: craft-qwen-final-diagnostic -->
+
+The recorded result below is an explicitly legacy pre-publication-policy diagnostic. Its source bundle is unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+
 CRAFT is a partial-information multi-agent benchmark where three Directors each see an incomplete private 2D view of a hidden 3D target structure. The Directors coordinate through public natural language messages, and a Builder constructs the final structure.
 
 This integration evaluates VillagerAgent on CRAFT by adapting VillagerAgent's director-side coordination components to CRAFT's Director protocol. It is not intended to wrap CRAFT as a standalone executable.
@@ -156,7 +160,7 @@ The comparison report includes run condition, number of games, turns, final prog
 
 ## Final Qwen Dual-DAG Evaluation
 
-The current paper-facing CRAFT evaluation uses `configs/craft/experiments/qwen_dual_dag_v1.yaml`. It runs four comparable conditions over the configured seed, structures, and turn budget:
+The current CRAFT evaluation configuration uses `configs/craft/experiments/qwen_dual_dag_v1.yaml`. It is not paper-facing until its sanitized bundle is published and declared in `docs/benchmark_archives.json`. It runs four comparable conditions over the configured seed, structures, and turn budget:
 
 - qwen/Ollama 3-Director VillagerAgent Directors
 - qwen/Ollama 3-Director VillagerAgent Directors with Dual-DAG gated clarification

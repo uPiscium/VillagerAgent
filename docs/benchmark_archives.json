@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "id": "cwah-goal-policy-diagnostics",
+      "benchmark": "cwah",
+      "classification": "legacy-diagnostic-unarchived",
+      "legacy_pre_policy": true,
+      "publication_satisfied": false,
+      "claim_eligible": false,
+      "reason": "Historical diagnostic source bundles were stored only under /tmp before archive publication was available.",
+      "run_accounting": {"expected": 66, "completed": 0, "failed": 0, "missing": 66}
+    },
+    {
+      "id": "cwah-bounded-baseline-diagnostic",
+      "benchmark": "cwah",
+      "classification": "legacy-diagnostic-unarchived",
+      "legacy_pre_policy": true,
+      "publication_satisfied": false,
+      "claim_eligible": false,
+      "reason": "Historical diagnostic source bundles were stored only under /tmp before archive publication was available.",
+      "run_accounting": {"expected": 6, "completed": 0, "failed": 0, "missing": 6}
+    },
+    {
+      "id": "craft-qwen-final-diagnostic",
+      "benchmark": "craft",
+      "classification": "legacy-diagnostic-unarchived",
+      "legacy_pre_policy": true,
+      "publication_satisfied": false,
+      "claim_eligible": false,
+      "reason": "The documented local result predates public bundle publication and is explicitly not paper-facing.",
+      "run_accounting": {"expected": 4, "completed": 0, "failed": 0, "missing": 4}
+    },
+    {
+      "id": "craft-dual-dag-ablation-diagnostic",
+      "benchmark": "craft",
+      "classification": "legacy-diagnostic-unarchived",
+      "legacy_pre_policy": true,
+      "publication_satisfied": false,
+      "claim_eligible": false,
+      "reason": "The smoke artifacts predate public bundle publication and are retained only as diagnostic notes.",
+      "run_accounting": {"expected": 21, "completed": 0, "failed": 0, "missing": 21}
+    },
+    {
+      "id": "craft-v5-action-selection-diagnostic",
+      "benchmark": "craft",
+      "classification": "legacy-diagnostic-unarchived",
+      "legacy_pre_policy": true,
+      "publication_satisfied": false,
+      "claim_eligible": false,
+      "reason": "The temporary diagnostic artifacts predate public bundle publication.",
+      "run_accounting": {"expected": 3, "completed": 0, "failed": 0, "missing": 3}
+    },
+    {
+      "id": "craft-clarification-policy-evaluations",
+      "benchmark": "craft",
+      "classification": "legacy-diagnostic-unarchived",
+      "legacy_pre_policy": true,
+      "publication_satisfied": false,
+      "claim_eligible": false,
+      "reason": "The smoke, official, and sensitivity artifacts predate public bundle publication and cannot be reconstructed from committed files.",
+      "run_accounting": {"expected": 78, "completed": 0, "failed": 0, "missing": 78}
+    }
+  ]
+}

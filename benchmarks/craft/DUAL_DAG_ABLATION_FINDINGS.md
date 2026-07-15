@@ -1,5 +1,9 @@
 # CRAFT Dual-DAG Ablation Findings
 
+<!-- benchmark-result: craft-dual-dag-ablation-diagnostic -->
+
+This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+
 This records the Gemma4 12B C0-C6 ablation smoke results for #136.
 
 The run is diagnostic smoke, not final performance evaluation. It uses `gemma4:12b`, 5 turns, structures `[0, 1, 2, 3, 4]`, and seeds `[1, 3, 5]`.

@@ -1,5 +1,9 @@
 # CRAFT Clarification Policy Findings
 
+<!-- benchmark-result: craft-clarification-policy-evaluations -->
+
+This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+
 This records the Gemma4 12B Clarify policy smoke and official results for #148.
 
 The run is diagnostic smoke, not final performance evaluation. It uses `gemma4:12b`, 5 turns, structures `[0, 1, 2, 3, 4]`, and seeds `[1, 3, 5]`.
