@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
@@ -35,6 +36,7 @@ ENABLE_ENV = {
 }
 DEFAULT_TIMEOUT_SECONDS = 30.0
 JUDGED_PARENT_RUN_NAME = "minecraft_judged_smoke"
+BRIDGE_PROCESS_WAIT_SECONDS = 2.0
 
 
 def run_ollama_preflight(*, output_root: Path, timeout_seconds: float, overwrite: bool) -> dict:
@@ -178,15 +180,32 @@ def run_bridge_smoke(
             start_new_session=os.name == "posix",
         )
         leader_identity = _capture_process_identity(process.pid)
+        timeout_error = None
+        cleanup_error = None
+        cleanup_complete = False
         try:
-            stdout, stderr = process.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as exc:
-            _stop_process(process, leader_identity=leader_identity)
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                timeout_error = exc
+        finally:
+            try:
+                cleanup_complete = _stop_process(process, leader_identity=leader_identity)
+            except BaseException as exc:
+                cleanup_error = exc
+        if timeout_error is not None:
             phase = phase_path.read_text(encoding="utf-8").strip() or "unknown phase"
+            cleanup_note = "" if cleanup_complete else "; final session cleanup incomplete"
             raise TimeoutError(
                 f"env_type.none bridge smoke to {host}:{port} timed out during {phase} "
-                f"after {timeout_seconds} seconds"
-            ) from exc
+                f"after {timeout_seconds} seconds{cleanup_note}"
+            ) from timeout_error
+        if cleanup_error is not None:
+            raise RuntimeError(f"env_type.none bridge smoke final cleanup failed: {cleanup_error}") from cleanup_error
+        if not cleanup_complete:
+            if leader_identity is None:
+                raise RuntimeError("env_type.none bridge smoke final cleanup incomplete: child identity unavailable")
+            raise RuntimeError("env_type.none bridge smoke final cleanup left verified session members alive")
         if process.returncode != 0:
             raise RuntimeError(
                 f"env_type.none bridge smoke failed with exit code {process.returncode}: "
@@ -390,6 +409,7 @@ def _bridge_child(args: argparse.Namespace) -> int:
     _write_phase(phase_path, "loading bridge runtime")
     from env.env import Agent, VillagerBench, env_type
 
+    args._javascript_identity = _capture_internal_javascript_identity()
     _write_phase(phase_path, "initializing bridge environment")
     environment = VillagerBench(
         env_type.none,
@@ -402,9 +422,11 @@ def _bridge_child(args: argparse.Namespace) -> int:
     )
     environment.base_port = args.local_port
     environment.agent_register(agent_number=1, name_list=[args.agent_name])
+    agent_identities = {}
     try:
         _write_phase(phase_path, "launching bridge agent")
         Agent.launch(host=args.host, port=args.port, world=args.world, fast=True)
+        agent_identities = _capture_agent_identities(Agent.agent_process)
         environment.running = True
         _write_phase(phase_path, "pinging bridge agent")
         ping = Agent.ping(args.agent_name)
@@ -425,20 +447,136 @@ def _bridge_child(args: argparse.Namespace) -> int:
         })
         return 0
     finally:
-        _write_phase(phase_path, "stopping bridge agent")
-        environment.stop()
-        for process in Agent.agent_process.values():
+        for name, identity in _capture_agent_identities(Agent.agent_process).items():
+            if name not in agent_identities or agent_identities[name] is None:
+                agent_identities[name] = identity
+        if not _cleanup_bridge_agents(environment, agent_identities, phase_path):
+            raise RuntimeError("bridge agent cleanup incomplete")
+
+
+def _capture_agent_identities(agent_processes: dict) -> dict[str, _ProcessIdentity | None]:
+    return {
+        name: _capture_process_identity(process.pid)
+        for name, process in agent_processes.items()
+    }
+
+
+def _cleanup_bridge_agents(
+    environment,
+    agent_identities: dict[str, _ProcessIdentity | None],
+    phase_path: Path,
+) -> bool:
+    environment.running = False
+    complete = True
+    _write_phase(phase_path, "bridge environment marked stopped")
+    for name, identity in agent_identities.items():
+        if identity is None:
+            complete = False
+            _write_phase(phase_path, f"bridge agent process {name} identity unavailable")
+            continue
+        complete = _cleanup_identity_process(
+            identity,
+            label=f"bridge agent process {name}",
+            phase_path=phase_path,
+        ) and complete
+    _write_phase(phase_path, "bridge cleanup complete" if complete else "bridge cleanup incomplete")
+    return complete
+
+
+def _cleanup_identity_process(
+    identity: _ProcessIdentity,
+    *,
+    label: str,
+    phase_path: Path | None,
+) -> bool:
+    targets = _collect_process_tree(identity)
+    if not targets:
+        if phase_path is not None:
+            _write_phase(phase_path, f"{label} already stopped")
+        return True
+    if phase_path is not None:
+        _write_phase(phase_path, f"terminating {label}")
+    _signal_processes(targets, "terminate")
+    survivors = _wait_processes(targets, timeout_seconds=BRIDGE_PROCESS_WAIT_SECONDS)
+    survivors = _unique_processes([*survivors, *_collect_process_tree(identity)])
+    if survivors:
+        if phase_path is not None:
+            _write_phase(phase_path, f"killing {label}")
+        _signal_processes(survivors, "kill")
+        survivors = _wait_processes(survivors, timeout_seconds=BRIDGE_PROCESS_WAIT_SECONDS)
+    if phase_path is not None:
+        _write_phase(phase_path, f"{label} survived kill" if survivors else f"{label} stopped")
+    return not survivors
+
+
+def _exit_bridge_child(args: argparse.Namespace) -> None:
+    exit_code = 1
+    javascript_identity = None
+    try:
+        try:
+            javascript_identity = _capture_internal_javascript_identity()
+        except BaseException:
+            _log_bridge_child_exception("initial JavaScript identity capture failed")
+        try:
+            exit_code = _bridge_child(args)
+        except BaseException:
+            exit_code = 1
+            _log_bridge_child_exception("bridge child failed")
+        try:
+            javascript_identity = javascript_identity or getattr(args, "_javascript_identity", None)
+            if not _stop_internal_javascript_bridge(args, javascript_identity):
+                exit_code = 1
+        except BaseException:
+            exit_code = 1
+            _log_bridge_child_exception("internal JavaScript cleanup failed")
+    finally:
+        for stream in (sys.stdout, sys.stderr):
             try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                stream.flush()
+            except Exception:
+                pass
+        os._exit(exit_code)
+
+
+def _log_bridge_child_exception(message: str) -> None:
+    try:
+        print(message, file=sys.stderr)
+        traceback.print_exc()
+    except Exception:
+        pass
+
+
+def _capture_internal_javascript_identity() -> _ProcessIdentity | None:
+    connection = sys.modules.get("javascript.connection")
+    process = getattr(connection, "proc", None) if connection is not None else None
+    if process is None:
+        return None
+    return _capture_process_identity(process.pid)
+
+
+def _stop_internal_javascript_bridge(
+    args: argparse.Namespace | None,
+    identity: _ProcessIdentity | None,
+) -> bool:
+    phase_path = Path(args.phase_path) if args is not None else None
+    if identity is None:
+        connection = sys.modules.get("javascript.connection")
+        process = getattr(connection, "proc", None) if connection is not None else None
+        if process is None:
+            return True
+        if phase_path is not None:
+            _write_phase(phase_path, "internal JavaScript bridge identity unavailable")
+        return False
+    return _cleanup_identity_process(identity, label="internal JavaScript bridge", phase_path=phase_path)
 
 
 @dataclass(frozen=True)
 class _ProcessIdentity:
     pid: int
     create_time: float
+
+
+_UNSET_PROCESS_IDENTITY = object()
 
 
 def _capture_process_identity(pid: int) -> _ProcessIdentity | None:
@@ -452,10 +590,11 @@ def _capture_process_identity(pid: int) -> _ProcessIdentity | None:
 def _stop_process(
     process: subprocess.Popen,
     *,
-    leader_identity: _ProcessIdentity | None = None,
+    leader_identity=_UNSET_PROCESS_IDENTITY,
     posix: bool | None = None,
-) -> None:
-    leader_identity = leader_identity or _capture_process_identity(process.pid)
+) -> bool:
+    if leader_identity is _UNSET_PROCESS_IDENTITY:
+        leader_identity = _capture_process_identity(process.pid)
     if leader_identity is None:
         if process.poll() is None:
             process.terminate()
@@ -463,8 +602,11 @@ def _stop_process(
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait()
-        return
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    return False
+        return False
 
     use_posix_session = os.name == "posix" if posix is None else posix
     collect = _collect_session_processes if use_posix_session else _collect_process_tree
@@ -475,7 +617,9 @@ def _stop_process(
     if use_posix_session:
         survivors = _unique_processes([*survivors, *collect(leader_identity)])
     _signal_processes(survivors, "kill")
-    _wait_processes(survivors, timeout_seconds=2)
+    survivors = _wait_processes(survivors, timeout_seconds=2)
+    survivors = _unique_processes([*survivors, *collect(leader_identity)])
+    return not survivors
 
 
 def _collect_session_processes(leader_identity: _ProcessIdentity) -> list[psutil.Process]:
@@ -772,4 +916,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "_bridge-child":
+        _exit_bridge_child(_parser().parse_args())
     raise SystemExit(main())
