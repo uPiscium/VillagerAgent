@@ -65,6 +65,10 @@ def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
 
     persisted = json.loads((matrix_dir / "matrix_summary.json").read_text(encoding="utf-8"))
     assert persisted["runs"][0]["run_name"] == "bell_run"
+    assert persisted["runs"][0]["provenance"].endswith("bell_run/provenance.json")
+    matrix_provenance = json.loads((matrix_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert len(matrix_provenance["effective_settings"]["run_plan"]) == 2
+    assert matrix_provenance["lifecycle"]["status"] == "success"
     common_rows = summarize_inputs([matrix_dir])
     assert [row["run_name"] for row in common_rows] == ["bell_run", "chest_run"]
     assert [row["benchmark"] for row in common_rows] == ["minecraft", "minecraft"]

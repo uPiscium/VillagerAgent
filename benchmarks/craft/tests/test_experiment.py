@@ -4,7 +4,7 @@ import json
 import pytest
 import yaml
 
-from benchmarks.common.run_artifacts import RunDirectoryExistsError
+from benchmarks.common.run_artifacts import RunDirectoryExistsError, prepare_run_directory
 from benchmarks.craft.config import repo_root
 from benchmarks.craft.experiment import (
     ExperimentConfigError,
@@ -16,6 +16,7 @@ from benchmarks.craft.experiment import (
     run_experiment,
 )
 from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
+from benchmarks.experiment_provenance import finalize_provenance, write_provenance
 
 
 def test_load_experiment_manifest():
@@ -313,7 +314,12 @@ def test_run_experiment_dry_run_creates_run_output(tmp_path):
     assert resolved_config["models"]["builder"]["api_key"] == "[REDACTED]"
     assert "--run-name-suffix _smoke" in command_text
     assert provenance["benchmark"] == "craft"
-    assert provenance["schema_version"] == "1.0.0"
+    assert provenance["schema_version"] == "2.0.0"
+    experiment_manifest = json.loads(
+        (tmp_path / "comparison_smoke.manifest.json").read_text(encoding="utf-8")
+    )
+    assert experiment_manifest["run_plan"][0]["provenance"] == str(output / "provenance.json")
+    assert experiment_manifest["run_plan"][0]["overrides"]["seed"] == 9
 
     with pytest.raises(RunDirectoryExistsError, match="not empty"):
         run_experiment(
@@ -391,7 +397,25 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
         encoding="utf-8",
     )
 
+    original_provenance = {}
+
     def fail_run(*args, **kwargs):
+        run_dir = tmp_path / "results" / "craft_failed_model"
+        prepare_run_directory(run_dir, producer="benchmarks.craft.run")
+        write_provenance(
+            run_dir,
+            benchmark="craft",
+            command="python -m benchmarks.craft.run",
+            resolved_config={"api_key": secret},
+            assets=[{
+                "name": "craft_dataset",
+                "kind": "dataset",
+                "required": True,
+                "available": True,
+                "sha256": "preserved-digest",
+            }],
+        )
+        original_provenance.update(finalize_provenance(run_dir, status="failure"))
         raise RuntimeError(f"model unavailable with {secret}")
 
     monkeypatch.setattr("benchmarks.craft.experiment.run_config", fail_run)
@@ -404,6 +428,12 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
     normalized = tmp_path / "results" / "craft_failed_model" / "normalized"
     failure_summary = json.loads((normalized / "summary.json").read_text(encoding="utf-8"))
     assert failure_summary["failure"]["message"] == "model unavailable with [REDACTED]"
+    persisted_provenance = json.loads(
+        (tmp_path / "results" / "craft_failed_model" / "provenance.json").read_text(encoding="utf-8")
+    )
+    assert persisted_provenance["lifecycle"] == original_provenance["lifecycle"]
+    assert persisted_provenance["assets"] == original_provenance["assets"]
+    assert persisted_provenance["assets"][0]["sha256"] == "preserved-digest"
     for artifact in (tmp_path / "results" / "craft_failed_model").rglob("*"):
         if artifact.is_file():
             assert secret not in artifact.read_text(encoding="utf-8")

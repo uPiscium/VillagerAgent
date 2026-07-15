@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from openai import OpenAI
@@ -13,10 +14,63 @@ from benchmarks.cwah.adapter import CWAHConfig, CWAHSymbolicAdapter
 from benchmarks.cwah.artifacts import write_normalized_artifacts
 from benchmarks.cwah.coela_env import coela_cwah_env_factory
 from benchmarks.cwah.mock_env import mock_cwah_env_factory
+from benchmarks.cwah.provenance import (
+    is_provider_timeout,
+    model_metadata,
+    model_provider,
+    provenance_assets,
+    resolved_external_paths,
+)
+from benchmarks.experiment_provenance import finalize_provenance, model_identity, update_provenance_assets, write_provenance
 
 
 def main() -> None:
     args = parse_args()
+    provenance_dir = _provenance_dir(args)
+    owns_provenance = bool(
+        provenance_dir and not (provenance_dir / "provenance.json").exists()
+    )
+    immutable_model_metadata = model_metadata(args.base_url, args.model) if owns_provenance else {}
+    if owns_provenance:
+        api_key = os.environ.get("CWAH_LLM_API_KEY", "ollama")
+        effective_settings = {
+            **vars(args),
+            **resolved_external_paths(args),
+            "api_key": api_key,
+        }
+        write_provenance(
+            provenance_dir,
+            benchmark="cwah",
+            command=[sys.executable, "-m", "benchmarks.cwah.llm_smoke", *sys.argv[1:]],
+            resolved_config=effective_settings,
+            environment_notes=f"single_run=true; env={args.env}",
+            assets=provenance_assets(args, metadata=immutable_model_metadata),
+        )
+    try:
+        events = _run(args)
+    except BaseException as exc:
+        if provenance_dir and (provenance_dir / "provenance.json").exists():
+            finalize_provenance(
+                provenance_dir,
+                status="timeout" if is_provider_timeout(exc) else "failure",
+            )
+        raise
+    if owns_provenance:
+        provider_metadata = {**immutable_model_metadata, **_provider_metadata(events)}
+        if provider_metadata:
+            update_provenance_assets(
+                provenance_dir,
+                [model_identity(
+                    name="policy_model",
+                    provider=model_provider(args.base_url),
+                    model=args.model,
+                    metadata=provider_metadata,
+                )],
+            )
+        finalize_provenance(provenance_dir, status="success")
+
+
+def _run(args: argparse.Namespace) -> list[dict]:
     adapter = CWAHSymbolicAdapter(
         config=CWAHConfig(
             episode_id=args.episode_id,
@@ -147,6 +201,25 @@ def main() -> None:
             secret_values=(api_key,),
         )
     print(json.dumps({"passed": True, "env": args.env, "run_config": run_config, "metrics": metrics}, sort_keys=True))
+    return events
+
+
+def _provenance_dir(args: argparse.Namespace) -> Path | None:
+    if args.artifact_dir:
+        return Path(args.artifact_dir).parent
+    if args.output:
+        return Path(args.output).parent
+    return None
+
+
+def _provider_metadata(events: list[dict]) -> dict:
+    for event in events:
+        metadata = event.get("decision", {}).get("provider_metadata", {})
+        if isinstance(metadata, dict) and any(
+            metadata.get(key) for key in ("digest", "revision", "system_fingerprint")
+        ):
+            return metadata
+    return {}
 
 
 def _json_default(value):
@@ -212,6 +285,12 @@ def decide_with_llm(
     except json.JSONDecodeError:
         decision = {"action_type": "send_message", "message": content.strip()[:200] or "I am checking my local observation."}
     decision["raw_content"] = content
+    decision["provider_metadata"] = {
+        "model": getattr(response, "model", None),
+        "system_fingerprint": getattr(response, "system_fingerprint", None),
+        "revision": getattr(response, "revision", None),
+        "digest": getattr(response, "digest", None),
+    }
     return decision
 
 

@@ -15,6 +15,7 @@ from benchmarks.common.run_artifacts import (
     validate_run_attempt,
 )
 from benchmarks.common.sanitization import redact_text, sanitize_command
+from benchmarks.experiment_provenance import file_identity, finalize_provenance, write_provenance
 
 
 def main() -> None:
@@ -64,6 +65,26 @@ def main() -> None:
     report_finalized = False
     manifest_path = report_dir / "baseline_manifest.json"
     try:
+        matrix_provenance = output_dir / "provenance.json"
+        write_provenance(
+            report_dir,
+            benchmark="cwah",
+            command=[sys.executable, "-m", "benchmarks.cwah.baseline", *sys.argv[1:]],
+            resolved_config={
+                **vars(args),
+                "api_key": os.environ.get("CWAH_LLM_API_KEY", ""),
+                "attempt_id": report_attempt_id,
+                "matrix_attempt_id": matrix_attempt_id,
+                "matrix_provenance": str(matrix_provenance),
+            },
+            environment_notes=f"baseline_report=true; env={args.env}",
+            assets=[file_identity(
+                matrix_provenance,
+                name="matrix_provenance",
+                kind="provenance",
+                required=bool(matrix_attempt_id),
+            )],
+        )
         if rows:
             write_csv_report(rows, csv_path)
             write_json_report(rows, json_path)
@@ -81,6 +102,12 @@ def main() -> None:
             matrix_attempt_id=matrix_attempt_id,
         )
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        provenance_status = (
+            "success"
+            if completed.returncode == 0 and matrix_status == "completed"
+            else "failure"
+        )
+        finalize_provenance(report_dir, status=provenance_status)
         finalize_run_directory(
             report_dir,
             attempt_id=report_attempt_id,
@@ -90,6 +117,7 @@ def main() -> None:
         report_finalized = True
     finally:
         if not report_finalized:
+            finalize_provenance(report_dir, status="failure")
             finalize_run_directory(
                 report_dir,
                 attempt_id=report_attempt_id,
@@ -135,6 +163,10 @@ def build_matrix_command(*, args: argparse.Namespace, output_dir: Path) -> list[
         args.base_url,
         "--model",
         args.model,
+        "--temperature",
+        str(getattr(args, "temperature", 0.0)),
+        "--max-tokens",
+        str(getattr(args, "max_tokens", 128)),
         "--base-port",
         str(args.base_port),
         "--port-stride",
@@ -188,6 +220,8 @@ def build_manifest(
             "prefer_physical_after_steps": args.prefer_physical_after_steps,
             "navigation_loop_threshold": args.navigation_loop_threshold,
             "model": args.model,
+            "temperature": getattr(args, "temperature", 0.0),
+            "max_tokens": getattr(args, "max_tokens", 128),
             "base_port": args.base_port,
             "port_stride": args.port_stride,
         },
@@ -199,9 +233,11 @@ def build_manifest(
             "matrix_dir": str(output_dir),
             "matrix_summary": str(output_dir / "matrix_summary.json"),
             "matrix_metrics": str(output_dir / "matrix_metrics.csv"),
+            "matrix_provenance": str(output_dir / "provenance.json"),
             "common_report_dir": str(report_dir),
             "common_report_csv": str(report_dir / "common_report.csv"),
             "common_report_json": str(report_dir / "common_report.json"),
+            "report_provenance": str(report_dir / "provenance.json"),
         },
         "runs": len(common_rows),
     }
@@ -221,6 +257,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--navigation-loop-threshold", type=int, default=12)
     parser.add_argument("--base-url", default="http://ollama.arc.upiscium.dev/v1")
     parser.add_argument("--model", default="gemma4:e4b")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--coela-cwah-path", default="")
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")

@@ -10,7 +10,15 @@ from pathlib import Path
 
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 from benchmarks.common.sanitization import collect_secret_values, sanitize_artifact_value
-from benchmarks.experiment_provenance import standard_run_name, write_provenance
+from benchmarks.experiment_provenance import (
+    file_identity,
+    finalize_provenance,
+    model_identity,
+    standard_run_name,
+    update_provenance_assets,
+    update_provenance_settings,
+    write_provenance,
+)
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from env.minecraft_dual_dag import (
     build_minecraft_dual_dag_artifact,
@@ -77,6 +85,10 @@ def run_minecraft_experiment(
         if attempt_state:
             attempt_state["error"] = str(exc)
             attempt_state["error_type"] = exc.__class__.__name__
+            finalize_provenance(
+                attempt_state["output_dir"],
+                status="timeout" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "failure",
+            )
             _write_minimal_failure_artifacts(attempt_state)
             _sanitize_runtime_checkpoint(
                 attempt_state["output_dir"] / ".runtime" / "runtime_result.json",
@@ -128,19 +140,68 @@ def _run_minecraft_experiment_attempt(
         "execute": execute,
         "run_name": selected_run_name,
     })
+    runtime_llm_config = {}
+    requested_policy = task_selection_policy or launch_config.get("task_selection_policy")
+    effective_settings = _minecraft_effective_settings(
+        launch_config=launch_config,
+        config_path=config_path,
+        config_index=config_index,
+        run_name=selected_run_name,
+        task_selection_policy=requested_policy,
+        execute=execute,
+        execute_timeout_seconds=execute_timeout_seconds,
+        retain_runtime_result=retain_runtime_result,
+        runtime_llm_config=runtime_llm_config,
+        attempt_id=attempt_id,
+    )
+    write_provenance(
+        output_dir,
+        benchmark="minecraft",
+        command=command_text or _command_text(),
+        resolved_config=effective_settings,
+        environment_notes="real_environment_execute=" + str(bool(execute)).lower(),
+        assets=_minecraft_provenance_assets(
+            config_path=Path(config_path),
+            launch_config=launch_config,
+            execute=execute,
+            runtime_llm_config=runtime_llm_config,
+        ),
+    )
     if execute:
         from model.ollama_config import make_ollama_llm_config
 
-        runtime_secret_values = collect_secret_values(make_ollama_llm_config())
+        runtime_llm_config = make_ollama_llm_config()
+        runtime_secret_values = collect_secret_values(runtime_llm_config)
         secret_values = tuple(dict.fromkeys((*secret_values, *runtime_secret_values)))
         attempt_state["secret_values"] = secret_values
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     selected_policy = _task_selection_policy(
-        task_selection_policy or launch_config.get("task_selection_policy"),
+        requested_policy,
         enable_dual_dag_task_selection=enable_dual_dag_task_selection,
     )
     dual_dag_config = _dual_dag_config(selected_policy)
+    effective_settings = _minecraft_effective_settings(
+        launch_config=launch_config,
+        config_path=config_path,
+        config_index=config_index,
+        run_name=selected_run_name,
+        task_selection_policy=selected_policy,
+        execute=execute,
+        execute_timeout_seconds=execute_timeout_seconds,
+        retain_runtime_result=retain_runtime_result,
+        runtime_llm_config=runtime_llm_config,
+        attempt_id=attempt_id,
+    )
+    update_provenance_settings(output_dir, effective_settings)
+    update_provenance_assets(
+        output_dir,
+        [_minecraft_model_identity(
+            launch_config=launch_config,
+            runtime_llm_config=runtime_llm_config,
+            required=execute,
+        )],
+    )
     tasks, graph, task_store = _task_graph_from_config(launch_config)
     action_log: dict = _fixture_action_log(launch_config)
     action_log_available = "smoke_action_log" in launch_config
@@ -291,17 +352,12 @@ def _run_minecraft_experiment_attempt(
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
     _write_json(output_dir / "summary.json", summary)
-    write_provenance(
-        output_dir,
-        benchmark="minecraft",
-        command=command_text or _command_text(),
-        resolved_config=sanitized_launch_config,
-        environment_notes="real_environment_execute=" + str(bool(execute)).lower(),
-    )
     if execute and not retain_runtime_result:
         _remove_runtime_result(runtime_result_path)
     elif execute:
         _sanitize_runtime_checkpoint(runtime_result_path, secret_values=secret_values)
+    provenance_status = "timeout" if timed_out else "failure" if error else "success"
+    finalize_provenance(output_dir, status=provenance_status)
     finalize_run_directory(
         output_dir,
         attempt_id=attempt_id,
@@ -309,6 +365,111 @@ def _run_minecraft_experiment_attempt(
         status="failed" if error else "completed",
     )
     return summary
+
+
+def _minecraft_provenance_assets(
+    *,
+    config_path: Path,
+    launch_config: dict,
+    execute: bool,
+    runtime_llm_config: dict,
+) -> list[dict]:
+    task_type = str(launch_config.get("task_type", ""))
+    judgers = {
+        "construction": "env/build_judger.py",
+        "farming": "env/farm_craft_judger.py",
+        "puzzle": "env/escape_room_judger.py",
+        "meta": "env/meta_judger.py",
+        "gen": "env/llm_gen_judger.py",
+    }
+    root = Path(__file__).resolve().parents[2]
+    server_version = launch_config.get("server_version")
+    server_protocol = launch_config.get("server_protocol")
+    server_identity = {
+        "name": "minecraft_server",
+        "kind": "runtime",
+        "required": execute,
+        "available": bool(server_version and server_protocol),
+        "host": launch_config.get("host"),
+        "port": launch_config.get("port"),
+        "version": server_version,
+        "protocol": server_protocol,
+    }
+    if not server_identity["available"]:
+        server_identity["reason"] = "server_version_or_protocol_unavailable"
+    return [
+        file_identity(config_path, name="task_config", kind="task"),
+        file_identity(
+            launch_config.get("world_snapshot_path") or launch_config.get("reset_snapshot_path", ""),
+            name="world_reset_snapshot",
+            kind="dataset",
+            required=execute,
+        ),
+        file_identity(
+            launch_config.get("bridge_path", ""),
+            name="minecraft_bridge",
+            kind="runtime",
+            required=execute,
+        ),
+        file_identity(
+            root / judgers[task_type] if task_type in judgers else "",
+            name="judger",
+            kind="executable",
+            required=execute,
+        ),
+        server_identity,
+        _minecraft_model_identity(
+            launch_config=launch_config,
+            runtime_llm_config=runtime_llm_config,
+            required=execute,
+        ),
+    ]
+
+
+def _minecraft_model_identity(
+    *,
+    launch_config: dict,
+    runtime_llm_config: dict,
+    required: bool,
+) -> dict:
+    return model_identity(
+        name="runtime_model",
+        provider=str(runtime_llm_config.get("provider", "ollama")),
+        model=str(runtime_llm_config.get("api_model", "")),
+        metadata={
+            "digest": launch_config.get("model_digest"),
+            "revision": launch_config.get("model_revision"),
+            "system_fingerprint": launch_config.get("model_system_fingerprint"),
+        },
+        required=required,
+    )
+
+
+def _minecraft_effective_settings(
+    *,
+    launch_config: dict,
+    config_path: str | Path,
+    config_index: int,
+    run_name: str,
+    task_selection_policy: str | None,
+    execute: bool,
+    execute_timeout_seconds: float | None,
+    retain_runtime_result: bool,
+    runtime_llm_config: dict,
+    attempt_id: str,
+) -> dict:
+    return {
+        "launch_config": launch_config,
+        "config_path": str(Path(config_path)),
+        "config_index": config_index,
+        "run_name": run_name,
+        "task_selection_policy": task_selection_policy,
+        "execute": execute,
+        "execute_timeout_seconds": execute_timeout_seconds,
+        "retain_runtime_result": retain_runtime_result,
+        "llm": runtime_llm_config,
+        "attempt_id": attempt_id,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,4 +1,13 @@
+import argparse
+import json
+
+import httpx
+from openai import APITimeoutError
+import pytest
+
 from benchmarks.common.actions import ActionSpec, InformationActionSpec
+from benchmarks.cwah import llm_smoke
+from benchmarks.cwah import provenance as cwah_provenance
 from benchmarks.cwah.llm_smoke import (
     action_failure_signature,
     action_navigation_signature,
@@ -8,6 +17,121 @@ from benchmarks.cwah.llm_smoke import (
     summarize_action_intents,
     summarize_observations,
 )
+
+
+def test_direct_single_run_writes_and_finalizes_provenance(tmp_path, monkeypatch):
+    secret = "single-run-secret-12345"
+    run_dir = tmp_path / "single"
+    args = argparse.Namespace(
+        env="mock",
+        episode_id="direct-single",
+        task_id=0,
+        seed=1,
+        max_steps=1,
+        max_policy_steps=1,
+        full_episode=False,
+        model="hosted-model",
+        base_url="https://ollama.example.test/v1",
+        temperature=0.0,
+        max_tokens=64,
+        prefer_physical_after_steps=0,
+        navigation_loop_threshold=12,
+        coela_cwah_path="",
+        dataset_path="",
+        executable_file="",
+        base_port=6314,
+        output=str(run_dir / "raw.json"),
+        artifact_dir=str(run_dir / "normalized"),
+        attempt_id="",
+    )
+    monkeypatch.setenv("CWAH_LLM_API_KEY", secret)
+    monkeypatch.setattr(llm_smoke, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        llm_smoke,
+        "model_metadata",
+        lambda base_url, model: {"digest": "sha256:ollama-direct"},
+    )
+    monkeypatch.setattr(llm_smoke, "_run", lambda selected: [{
+        "event": "policy_step",
+        "decision": {"provider_metadata": {"system_fingerprint": "fp_direct"}},
+    }])
+
+    llm_smoke.main()
+
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    policy_model = next(asset for asset in provenance["assets"] if asset["name"] == "policy_model")
+    assert provenance["lifecycle"]["status"] == "success"
+    assert provenance["effective_settings"]["api_key"] == "[REDACTED]"
+    assert policy_model["digest"] == "sha256:ollama-direct"
+    assert policy_model["system_fingerprint"] == "fp_direct"
+    assert secret not in json.dumps(provenance)
+
+
+def test_cwah_ollama_metadata_uses_shared_tags_preflight(monkeypatch):
+    calls = []
+    cwah_provenance.model_metadata.cache_clear()
+    monkeypatch.setattr(
+        cwah_provenance,
+        "preflight_ollama_model",
+        lambda **kwargs: calls.append(kwargs) or {"digest": "sha256:shared-preflight"},
+    )
+
+    metadata = cwah_provenance.model_metadata(
+        "https://ollama.example.test/v1",
+        "gemma4:e4b",
+    )
+
+    assert metadata["digest"] == "sha256:shared-preflight"
+    assert calls == [{
+        "base_url": "https://ollama.example.test/v1",
+        "model": "gemma4:e4b",
+    }]
+    cwah_provenance.model_metadata.cache_clear()
+
+
+def test_direct_openai_timeout_finalizes_provenance_as_timeout(tmp_path, monkeypatch):
+    run_dir = tmp_path / "timeout"
+    args = _direct_args(run_dir)
+    monkeypatch.setattr(llm_smoke, "parse_args", lambda: args)
+    monkeypatch.setattr(llm_smoke, "model_metadata", lambda base_url, model: {})
+    monkeypatch.setattr(
+        llm_smoke,
+        "_run",
+        lambda selected: (_ for _ in ()).throw(
+            APITimeoutError(request=httpx.Request("POST", args.base_url))
+        ),
+    )
+
+    with pytest.raises(APITimeoutError):
+        llm_smoke.main()
+
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["lifecycle"]["status"] == "timeout"
+
+
+def _direct_args(run_dir):
+    return argparse.Namespace(
+        env="mock",
+        episode_id="direct-timeout",
+        task_id=0,
+        seed=1,
+        max_steps=1,
+        max_policy_steps=1,
+        full_episode=False,
+        model="hosted-model",
+        base_url="https://provider.example.test/v1",
+        temperature=0.0,
+        max_tokens=64,
+        prefer_physical_after_steps=0,
+        navigation_loop_threshold=12,
+        coela_cwah_path="",
+        dataset_path="",
+        executable_file="",
+        base_port=6314,
+        output=str(run_dir / "raw.json"),
+        artifact_dir=str(run_dir / "normalized"),
+        attempt_id="",
+    )
 
 
 def test_action_from_decision_uses_selected_legal_action_id():

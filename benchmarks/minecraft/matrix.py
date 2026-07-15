@@ -11,7 +11,12 @@ from benchmarks.common.run_artifacts import (
     prepare_run_directory,
     validate_run_attempt,
 )
-from benchmarks.experiment_provenance import standard_run_name
+from benchmarks.experiment_provenance import (
+    file_identity,
+    finalize_provenance,
+    standard_run_name,
+    write_provenance,
+)
 from benchmarks.minecraft.experiment import TASK_SELECTION_POLICIES, run_minecraft_experiment, validate_minecraft_config
 
 
@@ -50,6 +55,7 @@ def run_minecraft_matrix(
         )
     except BaseException:
         if attempt_state:
+            finalize_provenance(attempt_state["output_dir"], status="failure")
             finalize_run_directory(
                 attempt_state["output_dir"],
                 attempt_id=attempt_state["attempt_id"],
@@ -97,6 +103,35 @@ def _run_minecraft_matrix_attempt(
     attempt_state.update({"output_dir": matrix_dir, "attempt_id": attempt_id})
     run_output_root.mkdir(parents=True, exist_ok=True)
 
+    run_plan = [
+        {
+            "matrix_index": matrix_index,
+            "config_index": config_index,
+            "run_name": (
+                run_names[matrix_index]
+                if run_names is not None
+                else _default_matrix_run_name(configs[config_index], config_index=config_index)
+            ),
+        }
+        for matrix_index, config_index in enumerate(selected_indices)
+    ]
+    write_provenance(
+        matrix_dir,
+        benchmark="minecraft",
+        command=command_text or _command_text(),
+        resolved_config={
+            "config_path": str(config_path),
+            "run_plan": run_plan,
+            "task_selection_policy": task_selection_policy,
+            "execute": execute,
+            "execute_timeout_seconds": execute_timeout_seconds,
+            "retain_runtime_result": retain_runtime_result,
+            "attempt_id": attempt_id,
+        },
+        environment_notes="matrix=true; real_environment_execute=" + str(bool(execute)).lower(),
+        assets=[file_identity(config_path, name="matrix_config", kind="task")],
+    )
+
     results = []
     common_rows = []
     for matrix_index, config_index in enumerate(selected_indices):
@@ -134,6 +169,7 @@ def _run_minecraft_matrix_attempt(
             "run_name": summary.get("run_name", ""),
             "attempt_id": summary.get("attempt_id", ""),
             "run_dir": str(run_dir),
+            "provenance": str(run_dir / "provenance.json"),
             "mode": summary.get("mode", ""),
             "execute_timeout_seconds": summary.get("execute_timeout_seconds"),
             "passed": summary.get("error") is None,
@@ -166,6 +202,8 @@ def _run_minecraft_matrix_attempt(
         "runs": results,
     }
     _write_json(matrix_dir / "matrix_summary.json", payload)
+    provenance_status = "success" if all(run["passed"] for run in results) else "failure"
+    finalize_provenance(matrix_dir, status=provenance_status)
     finalize_run_directory(
         matrix_dir,
         attempt_id=attempt_id,

@@ -17,6 +17,19 @@ from benchmarks.common.run_artifacts import (
 )
 from benchmarks.common.sanitization import redact_text
 from benchmarks.cwah.failure_diagnostics import failure_reason_counts_from_process_output, merge_count_dicts
+from benchmarks.cwah.provenance import (
+    is_provider_timeout,
+    model_metadata,
+    model_provider,
+    provenance_assets,
+    resolved_external_paths,
+)
+from benchmarks.experiment_provenance import (
+    finalize_provenance,
+    model_identity,
+    update_provenance_assets,
+    write_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +41,7 @@ class MatrixRun:
 
 def main() -> None:
     args = parse_args()
+    immutable_model_metadata = model_metadata(args.base_url, args.model)
     output_dir = Path(args.output_dir)
     attempt_id = prepare_run_directory(
         output_dir,
@@ -36,11 +50,28 @@ def main() -> None:
     )
     try:
         runs = build_matrix(parse_int_list(args.tasks), parse_int_list(args.seeds))
+        write_provenance(
+            output_dir,
+            benchmark="cwah",
+            command=[sys.executable, "-m", "benchmarks.cwah.matrix", *sys.argv[1:]],
+            resolved_config={
+                **vars(args),
+                "api_key": os.environ.get("CWAH_LLM_API_KEY", ""),
+                "run_plan": [run.__dict__ for run in runs],
+                "attempt_id": attempt_id,
+            },
+            environment_notes=f"matrix=true; env={args.env}",
+            assets=provenance_assets(args, metadata=immutable_model_metadata),
+        )
         results = []
         for run in runs:
             results.append(run_matrix_item(args=args, output_dir=output_dir, run=run))
         write_matrix_summary(output_dir=output_dir, results=results, attempt_id=attempt_id)
-    except BaseException:
+    except BaseException as exc:
+        finalize_provenance(
+            output_dir,
+            status="timeout" if is_provider_timeout(exc) else "failure",
+        )
         finalize_run_directory(
             output_dir,
             attempt_id=attempt_id,
@@ -49,6 +80,8 @@ def main() -> None:
             stamp_nested=False,
         )
         raise
+    provenance_status = _matrix_provenance_status(results)
+    finalize_provenance(output_dir, status=provenance_status)
     finalize_run_directory(
         output_dir,
         attempt_id=attempt_id,
@@ -95,8 +128,12 @@ def run_matrix_item(*, args: argparse.Namespace, output_dir: Path, run: MatrixRu
             run=run,
             attempt_state=attempt_state,
         )
-    except BaseException:
+    except BaseException as exc:
         if attempt_state:
+            finalize_provenance(
+                attempt_state["run_dir"],
+                status="timeout" if is_provider_timeout(exc) else "failure",
+            )
             finalize_run_directory(
                 attempt_state["run_dir"],
                 attempt_id=attempt_state["attempt_id"],
@@ -115,6 +152,7 @@ def _run_matrix_item_attempt(
 ) -> dict[str, Any]:
     run_name = f"task_{run.task_id}_seed_{run.seed}"
     run_dir = output_dir / run_name
+    immutable_model_metadata = model_metadata(args.base_url, args.model)
     attempt_id = prepare_run_directory(
         run_dir,
         producer="benchmarks.cwah.matrix.run",
@@ -122,6 +160,11 @@ def _run_matrix_item_attempt(
     attempt_state.update({"run_dir": run_dir, "attempt_id": attempt_id})
     raw_output = run_dir / "raw.json"
     artifact_dir = run_dir / "normalized"
+    episode_id = f"cwah-{run_name}"
+    temperature = getattr(args, "temperature", 0.0)
+    max_tokens = getattr(args, "max_tokens", 128)
+    effective_max_policy_steps = args.max_steps if args.full_episode else args.max_policy_steps
+    external_paths = resolved_external_paths(args)
     command = [
         sys.executable,
         "-m",
@@ -129,7 +172,7 @@ def _run_matrix_item_attempt(
         "--env",
         args.env,
         "--episode-id",
-        f"cwah-{run_name}",
+        episode_id,
         "--task-id",
         str(run.task_id),
         "--seed",
@@ -146,6 +189,10 @@ def _run_matrix_item_attempt(
         args.base_url,
         "--model",
         args.model,
+        "--temperature",
+        str(temperature),
+        "--max-tokens",
+        str(max_tokens),
         "--output",
         str(raw_output),
         "--artifact-dir",
@@ -155,16 +202,43 @@ def _run_matrix_item_attempt(
     ]
     if args.full_episode:
         command.append("--full-episode")
-    if args.coela_cwah_path:
-        command.extend(["--coela-cwah-path", args.coela_cwah_path])
-    if args.dataset_path:
-        command.extend(["--dataset-path", args.dataset_path])
-    if args.executable_file:
-        command.extend(["--executable-file", args.executable_file])
+    command.extend(["--coela-cwah-path", external_paths["coela_cwah_path"]])
+    command.extend(["--dataset-path", external_paths["dataset_path"]])
+    command.extend(["--executable-file", external_paths["executable_file"]])
     assigned_port = None
     if args.base_port:
         assigned_port = matrix_port(base_port=args.base_port, run=run, port_stride=args.port_stride)
         command.extend(["--base-port", str(assigned_port)])
+
+    write_provenance(
+        run_dir,
+        benchmark="cwah",
+        command=command,
+        resolved_config={
+            "env": args.env,
+            "episode_id": episode_id,
+            "task_id": run.task_id,
+            "seed": run.seed,
+            "matrix_index": run.index,
+            "max_steps": args.max_steps,
+            "max_policy_steps": effective_max_policy_steps,
+            "full_episode": args.full_episode,
+            "prefer_physical_after_steps": args.prefer_physical_after_steps,
+            "navigation_loop_threshold": args.navigation_loop_threshold,
+            "base_url": args.base_url,
+            "model": args.model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "api_key": os.environ.get("CWAH_LLM_API_KEY", ""),
+            "base_port": assigned_port,
+            "output": str(raw_output),
+            "artifact_dir": str(artifact_dir),
+            "attempt_id": attempt_id,
+            **external_paths,
+        },
+        environment_notes=f"matrix_child=true; env={args.env}",
+        assets=provenance_assets(args, metadata=immutable_model_metadata),
+    )
 
     completed = subprocess.run(command, cwd=Path.cwd(), text=True, capture_output=True, check=False)
     secret_values = (
@@ -187,6 +261,7 @@ def _run_matrix_item_attempt(
         "stderr": stderr,
         "raw_output": str(raw_output),
         "artifact_dir": str(artifact_dir),
+        "provenance": str(run_dir / "provenance.json"),
     }
     summary_path = artifact_dir / "summary.json"
     if passed and summary_path.exists():
@@ -214,6 +289,20 @@ def _run_matrix_item_attempt(
             output_failure_counts,
         )
         result["diagnostics"] = diagnostics
+    provider_metadata = {**immutable_model_metadata, **_provider_metadata(raw_output)}
+    if provider_metadata:
+        update_provenance_assets(
+            run_dir,
+            [model_identity(
+                name="policy_model",
+                provider=model_provider(args.base_url),
+                model=args.model,
+                metadata=provider_metadata,
+            )],
+        )
+    provenance_status = _child_provenance_status(run_dir, passed=result["passed"])
+    result["provenance_status"] = provenance_status
+    finalize_provenance(run_dir, status=provenance_status)
     finalize_run_directory(
         run_dir,
         attempt_id=attempt_id,
@@ -226,6 +315,41 @@ def _run_matrix_item_attempt(
         require_completed=result["passed"],
     )
     return result
+
+
+def _provider_metadata(raw_output: Path) -> dict[str, Any]:
+    if not raw_output.exists():
+        return {}
+    try:
+        payload = json.loads(raw_output.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    for event in payload.get("events", []):
+        metadata = event.get("decision", {}).get("provider_metadata", {})
+        if isinstance(metadata, dict) and any(
+            metadata.get(key) for key in ("digest", "revision", "system_fingerprint")
+        ):
+            return metadata
+    return {}
+
+
+def _child_provenance_status(run_dir: Path, *, passed: bool) -> str:
+    if passed:
+        return "success"
+    path = run_dir / "provenance.json"
+    if path.exists():
+        lifecycle = json.loads(path.read_text(encoding="utf-8")).get("lifecycle", {})
+        if lifecycle.get("status") == "timeout":
+            return "timeout"
+    return "failure"
+
+
+def _matrix_provenance_status(results: list[dict[str, Any]]) -> str:
+    if all(result.get("passed") for result in results):
+        return "success"
+    if any(result.get("provenance_status") == "timeout" for result in results):
+        return "timeout"
+    return "failure"
 
 
 def aggregate_results(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -305,6 +429,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--navigation-loop-threshold", type=int, default=12, help="Suppress repeated walktowards signatures after this many episode-local selections; use 0 to disable.")
     parser.add_argument("--base-url", default="http://ollama.arc.upiscium.dev/v1")
     parser.add_argument("--model", default="gemma4:e4b")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--max-tokens", type=int, default=128)
     parser.add_argument("--coela-cwah-path", default="")
     parser.add_argument("--dataset-path", default="")
     parser.add_argument("--executable-file", default="")
