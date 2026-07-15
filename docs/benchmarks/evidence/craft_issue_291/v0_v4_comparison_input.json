@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "comparison_id": "issue-291-v4-vs-v0-bounded-diagnostic",
+  "benchmark": "craft",
+  "conditions": {
+    "baseline": "v0_villageragent_baseline",
+    "candidate": "v4_dual_dag_value_of_information"
+  },
+  "metric": {"name": "final_progress", "role": "primary", "higher_is_better": true},
+  "pairing_keys": ["structure_id", "seed"],
+  "observations": [
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {"structure_id": 0, "seed": 3},
+      "status": "completed",
+      "metric_value": 0.11384863123993559,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v0-diagnostic-v1/craft-issue291-v0-diagnostic-v1.zip#artifact_manifest.json"
+    },
+    {
+      "condition": "v4_dual_dag_value_of_information",
+      "pairing": {"structure_id": 0, "seed": 3},
+      "status": "completed",
+      "metric_value": 0.13051529790660224,
+      "run_manifest": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v4-diagnostic-v1/craft-issue291-v4-diagnostic-v1.zip#artifact_manifest.json"
+    }
+  ],
+  "analysis": {"seed": 291, "bootstrap_samples": 10000, "confidence_level": 0.95},
+  "evidence": {
+    "requested_claim": "diagnostic",
+    "execution_scope": "bounded",
+    "prespecified": false,
+    "multiple_comparisons": {
+      "family_id": "issue-291-v0-v1-v4-bounded-diagnostics",
+      "family_size": 2,
+      "method": "bonferroni"
+    }
+  }
+}

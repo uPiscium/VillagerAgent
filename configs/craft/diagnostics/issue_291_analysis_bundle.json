@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0.0",
+  "bundle_id": "craft-issue291-analysis-diagnostic-v1",
+  "benchmark": "craft",
+  "classification": "diagnostic",
+  "artifacts": [
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_291/v0_v1_comparison_input.json",
+      "destination": "analysis/v0_v1_comparison_input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_291/v0_v1_comparison_report.json",
+      "destination": "analysis/v0_v1_comparison_report.json"
+    },
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_291/v0_v4_comparison_input.json",
+      "destination": "analysis/v0_v4_comparison_input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_291/v0_v4_comparison_report.json",
+      "destination": "analysis/v0_v4_comparison_report.json"
+    },
+    {
+      "kind": "retrieval_probe_input",
+      "source": "benchmarks/craft/fixtures/issue_291_retrieval_probe_input.json",
+      "destination": "retrieval/retrieval_probe_input.json"
+    },
+    {
+      "kind": "retrieval_probe_output",
+      "source": "docs/benchmarks/evidence/craft_issue_291/retrieval_probe_output.json",
+      "destination": "retrieval/retrieval_probe_output.json"
+    }
+  ],
+  "source_releases": [
+    {
+      "condition": "v0_villageragent_baseline",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v0-diagnostic-v1/craft-issue291-v0-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v0-diagnostic-v1/craft-issue291-v0-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "c70b293d3e995a8c5cf5ee1ca2496ca1e95337233750fcf788ade35295cc13e4",
+      "manifest_sha256": "966870f3343cd84fcc096b03b7f95d7663511ce5436e3500aaf72e545ef8621c"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v1-diagnostic-v1/craft-issue291-v1-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v1-diagnostic-v1/craft-issue291-v1-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "2b52cb5a8c4521151ee67e71b8900ed278ef8c646125013cbdc7832d765c7d03",
+      "manifest_sha256": "28a0e8cc38ce52327eb9c3bc30ae9b933d45c4d6dbda1ed5c851983b77564ad8"
+    },
+    {
+      "condition": "v4_dual_dag_value_of_information",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v4-diagnostic-v1/craft-issue291-v4-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v4-diagnostic-v1/craft-issue291-v4-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "a92193a688830a3757df6aa89a0e566327fc17af947ab448c783a3e3158e4fd2",
+      "manifest_sha256": "45213f6747f174419dc05aada7bb09a642fbc95339ddddc6213dc3930c6b74b2"
+    }
+  ]
+}
