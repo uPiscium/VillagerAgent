@@ -71,6 +71,17 @@
       "manifest_path": "artifact_manifest.json",
       "manifest_sha256": "c96bfd1cda71dc4259940a8d93cea85407d817c213b20043f7302e2f4617633d",
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "minecraft-ollama-real-smoke-v1",
+      "benchmark": "minecraft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-minecraft-ollama-smoke-v1/minecraft-real-smoke-ollama-20260715-public-v2.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-minecraft-ollama-smoke-v1/minecraft-real-smoke-ollama-20260715-public-v2.zip.metadata.json",
+      "archive_sha256": "0e18169bdd6ee39a72ea65695f1c81ec1c054ac70328a6a17cd306dd4f26a4e6",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "522ef857d452b4359c2e93fd59acc73495b1ab4a3157a58bc1d5d8e295910e53",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     }
   ]
 }

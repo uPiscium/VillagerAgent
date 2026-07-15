@@ -19,15 +19,18 @@ from benchmarks.common.publish_bundle import (
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 
 
-def _bundle(tmp_path, *, extra=None):
+def _bundle(tmp_path, *, extra=None, verification_only=False):
     bundle = tmp_path / "bundle"
     attempt_id = prepare_run_directory(bundle, producer="benchmarks.minecraft.matrix")
     files = {
         "provenance.json": {"benchmark": "minecraft", "lifecycle": {"status": "success"}},
         "config.resolved.json": {"model": "test", "api_key": "[REDACTED]"},
-        "matrix_summary.json": {"benchmark": "minecraft", "runs": 1},
-        "metrics.json": {"success_rate": 1.0},
     }
+    if verification_only:
+        files["verification.json"] = {"check": "ollama_preflight", "status": "success"}
+    else:
+        files["matrix_summary.json"] = {"benchmark": "minecraft", "runs": 1}
+        files["metrics.json"] = {"success_rate": 1.0}
     files.update(extra or {})
     for name, payload in files.items():
         path = bundle / name
@@ -57,6 +60,13 @@ def test_validates_bundle_and_builds_byte_identical_archive(tmp_path):
     with zipfile.ZipFile(first) as archive:
         assert "artifact_manifest.json" in archive.namelist()
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
+
+
+def test_validates_real_smoke_verification_bundle(tmp_path):
+    validation = validate_public_bundle(_bundle(tmp_path, verification_only=True))
+
+    assert validation.benchmark == "minecraft"
+    assert validation.run_statuses == {"completed": 1}
 
 
 def test_validator_does_not_treat_model_token_limit_as_credential(tmp_path):
