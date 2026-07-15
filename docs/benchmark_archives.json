@@ -73,6 +73,50 @@
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     },
     {
+      "id": "craft-issue291-v0-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v0-diagnostic-v1/craft-issue291-v0-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v0-diagnostic-v1/craft-issue291-v0-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "c70b293d3e995a8c5cf5ee1ca2496ca1e95337233750fcf788ade35295cc13e4",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "966870f3343cd84fcc096b03b7f95d7663511ce5436e3500aaf72e545ef8621c",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-v1-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v1-diagnostic-v1/craft-issue291-v1-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v1-diagnostic-v1/craft-issue291-v1-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "2b52cb5a8c4521151ee67e71b8900ed278ef8c646125013cbdc7832d765c7d03",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "28a0e8cc38ce52327eb9c3bc30ae9b933d45c4d6dbda1ed5c851983b77564ad8",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-v4-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v4-diagnostic-v1/craft-issue291-v4-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-v4-diagnostic-v1/craft-issue291-v4-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "a92193a688830a3757df6aa89a0e566327fc17af947ab448c783a3e3158e4fd2",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "45213f6747f174419dc05aada7bb09a642fbc95339ddddc6213dc3930c6b74b2",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "craft-issue291-analysis-diagnostic-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-analysis-diagnostic-v1/craft-issue291-analysis-diagnostic-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-analysis-diagnostic-v1/craft-issue291-analysis-diagnostic-v1.zip.metadata.json",
+      "archive_sha256": "be2c5378eebf3a2a8bf48e505a0dc32ae51122f9e7c65165ce27ffd4672cb119",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "65e78f77bdf9fb3add729a5d5d46f87a7c245334710778c6ffc187587ce09cce",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
       "id": "minecraft-ollama-real-smoke-v1",
       "benchmark": "minecraft",
       "classification": "archived",
@@ -81,6 +125,17 @@
       "archive_sha256": "0e18169bdd6ee39a72ea65695f1c81ec1c054ac70328a6a17cd306dd4f26a4e6",
       "manifest_path": "artifact_manifest.json",
       "manifest_sha256": "522ef857d452b4359c2e93fd59acc73495b1ab4a3157a58bc1d5d8e295910e53",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "minecraft-port-real-smoke-v1",
+      "benchmark": "minecraft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-minecraft-port-smoke-v1/minecraft-real-smoke-port-20260715-public.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-minecraft-port-smoke-v1/minecraft-real-smoke-port-20260715-public.zip.metadata.json",
+      "archive_sha256": "0558cdfddf27135b1e2153a509331bf88948ea5e1c09b48adc3e7ed690f3a359",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "7e9c34dfee0ad56f11a95a1d56c7aba79b74310bc86ea7c57448fcfc069c64e7",
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     }
   ]

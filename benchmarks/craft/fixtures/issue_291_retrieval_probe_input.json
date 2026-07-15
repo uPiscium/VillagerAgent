@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0.0",
+  "probe_id": "craft-issue291-public-history-retrieval-v1",
+  "turn_index": 2,
+  "director_ids": ["D1", "D2", "D3"],
+  "public_history": {
+    "reported_claims": [
+      {
+        "director_id": "D1",
+        "turn_index": 1,
+        "message": "Place a red block at bottom left."
+      }
+    ],
+    "builder_actions": []
+  },
+  "candidates": [
+    {
+      "node_id": "candidate:a",
+      "action": {"action": "place", "block": "bs", "position": "(2,2)", "layer": 0},
+      "state": "candidate",
+      "confidence": 0.7,
+      "supported_by": [],
+      "conflicts_with": [],
+      "required_evidence": []
+    },
+    {
+      "node_id": "candidate:b",
+      "action": {"action": "place", "block": "rs", "position": "(0,0)", "layer": 0},
+      "state": "candidate",
+      "confidence": 0.68,
+      "supported_by": [],
+      "conflicts_with": [],
+      "required_evidence": []
+    }
+  ]
+}

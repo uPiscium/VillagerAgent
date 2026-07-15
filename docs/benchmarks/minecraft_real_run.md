@@ -1,6 +1,7 @@
 # Minecraft Real-Run Validation
 
 <!-- benchmark-result: minecraft-ollama-real-smoke-v1 -->
+<!-- benchmark-result: minecraft-port-real-smoke-v1 -->
 
 Issues: #226, #243
 
@@ -14,6 +15,12 @@ recorded immutable model digest
 Its sanitized immutable archive is registered as
 `minecraft-ollama-real-smoke-v1`. This validates only model availability and
 provenance; it is not Minecraft bridge, judged-task, or performance evidence.
+
+A non-destructive TCP reachability smoke also connected to the configured
+Minecraft endpoint at `10.12.3.1:40000`. Its sanitized evidence is registered
+as immutable release `benchmark-minecraft-port-smoke-v1`. Port reachability does
+not establish bridge actions, world reset behavior, judged scoring, or benchmark
+performance.
 
 ## Required Runtime Assets
 

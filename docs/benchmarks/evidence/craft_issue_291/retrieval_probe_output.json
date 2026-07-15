@@ -1,0 +1,145 @@
+{
+  "classification": "diagnostic",
+  "input_sha256": "bedb251dc3251ef4e8ab07e4a073318d72b61add54562491806a2c2f6085c3f6",
+  "input_visibility": "public_history_only",
+  "probe_id": "craft-issue291-public-history-retrieval-v1",
+  "retrieval": {
+    "retrieval_changed_top_action_count": 1,
+    "retrieval_used_in_top_action_count": 1,
+    "retrieved_action_count": 0,
+    "retrieved_claim_count": 1,
+    "retrieved_node_count": 1
+  },
+  "schema_version": "1.0.0",
+  "top_action": {
+    "influenced": true,
+    "with_retrieval": "candidate:b",
+    "without_retrieval": "candidate:a"
+  },
+  "turn_index": 2,
+  "with_retrieval": {
+    "candidate_count": 2,
+    "candidates": [
+      {
+        "action": {
+          "action": "place",
+          "block": "bs",
+          "layer": 0,
+          "position": "(2,2)"
+        },
+        "claim_conflict_count": 0,
+        "claim_required_evidence_count": 0,
+        "claim_support_count": 0,
+        "confidence": 0.7,
+        "graph_context": {
+          "query": {
+            "action": {
+              "action": "place",
+              "block": "bs",
+              "layer": 0,
+              "position": "(2,2)"
+            },
+            "location_keywords": [
+              "right",
+              "top"
+            ],
+            "turn_index": 2
+          },
+          "relevant_public_actions": [],
+          "relevant_public_claims": []
+        },
+        "node_id": "candidate:a",
+        "state": "candidate"
+      },
+      {
+        "action": {
+          "action": "place",
+          "block": "rs",
+          "layer": 0,
+          "position": "(0,0)"
+        },
+        "claim_conflict_count": 0,
+        "claim_required_evidence_count": 0,
+        "claim_support_count": 1,
+        "confidence": 0.7300000000000001,
+        "graph_context": {
+          "query": {
+            "action": {
+              "action": "place",
+              "block": "rs",
+              "layer": 0,
+              "position": "(0,0)"
+            },
+            "location_keywords": [
+              "bottom",
+              "left"
+            ],
+            "turn_index": 2
+          },
+          "relevant_public_actions": [],
+          "relevant_public_claims": [
+            {
+              "content": {
+                "director_id": "D1",
+                "keywords": [
+                  "place",
+                  "red",
+                  "bottom",
+                  "left"
+                ],
+                "message": "Place a red block at bottom left.",
+                "uncertain": false
+              },
+              "node_id": "claim:D1:1",
+              "relation": "supports",
+              "turn_index": 1
+            }
+          ]
+        },
+        "node_id": "candidate:b",
+        "state": "candidate"
+      }
+    ],
+    "has_conflicts": false,
+    "has_required_evidence": false,
+    "recommended_candidate_id": "candidate:b",
+    "turn_index": 2
+  },
+  "without_retrieval": {
+    "candidate_count": 2,
+    "candidates": [
+      {
+        "action": {
+          "action": "place",
+          "block": "bs",
+          "layer": 0,
+          "position": "(2,2)"
+        },
+        "claim_conflict_count": 0,
+        "claim_required_evidence_count": 0,
+        "claim_support_count": 0,
+        "confidence": 0.7,
+        "node_id": "candidate:a",
+        "state": "candidate"
+      },
+      {
+        "action": {
+          "action": "place",
+          "block": "rs",
+          "layer": 0,
+          "position": "(0,0)"
+        },
+        "claim_conflict_count": 0,
+        "claim_required_evidence_count": 0,
+        "claim_support_count": 0,
+        "confidence": 0.68,
+        "node_id": "candidate:b",
+        "state": "candidate"
+      }
+    ],
+    "has_conflicts": false,
+    "has_required_evidence": false,
+    "recommended_candidate_id": "candidate:a",
+    "turn_index": 2
+  }
+}

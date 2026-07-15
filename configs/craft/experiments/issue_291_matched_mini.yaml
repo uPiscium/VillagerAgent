@@ -1,0 +1,37 @@
+experiment:
+  name: craft_issue_291_matched_mini
+  description: Diagnostic-only matched V0/V1/V4 mini-evaluation for Issue 291.
+  result_root: result/craft
+  continue_on_error: true
+  overrides:
+    turns: 3
+  runs:
+    - config: configs/craft/eval_gemma4_12b_ollama.yaml
+      suffix: _issue291_v0_oracle5_turns3
+      seeds: [3]
+      structures: [0]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_retrieval.yaml
+      suffix: _issue291_v1_oracle5_turns3
+      seeds: [3]
+      structures: [0]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml
+      suffix: _issue291_v4_oracle5_turns3
+      seeds: [3]
+      structures: [0]
+      overrides:
+        craft:
+          oracle_n: 5
+  report:
+    output: result/craft/comparison_issue_291_matched_mini.csv
+    json_output: result/craft/comparison_issue_291_matched_mini.json
+    compact_summary_output: result/craft/summary_issue_291_matched_mini.csv
+    compact_summary_json_output: result/craft/summary_issue_291_matched_mini.json
+    variance_summary_output: result/craft/variance_issue_291_matched_mini.csv
+    variance_summary_json_output: result/craft/variance_issue_291_matched_mini.json
+    variance_group_by: run_group
