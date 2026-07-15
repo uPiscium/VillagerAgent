@@ -60,6 +60,17 @@
       "claim_eligible": false,
       "reason": "The smoke, official, and sensitivity artifacts predate public bundle publication and cannot be reconstructed from committed files.",
       "run_accounting": {"expected": 78, "completed": 0, "failed": 0, "missing": 78}
+    },
+    {
+      "id": "craft-issue291-upstream-smoke-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-smoke-v1/issue-291-final-two-turn-public.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-smoke-v1/issue-291-final-two-turn-public.zip.metadata.json",
+      "archive_sha256": "58b75847ca4cd99e393ff396e52bc0380788e7e1a3f5f7a8081fd9c4ab7b827b",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "c96bfd1cda71dc4259940a8d93cea85407d817c213b20043f7302e2f4617633d",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     }
   ]
 }

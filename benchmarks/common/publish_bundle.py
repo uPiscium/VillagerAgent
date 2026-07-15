@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import tempfile
 import urllib.request
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
 import yaml
+import certifi
 
 from benchmarks.common.run_artifacts import (
     ARTIFACT_MANIFEST_FILE,
@@ -927,7 +929,8 @@ def _verify_registry_archive(entry: dict[str, Any], *, fetcher: Callable[[str], 
 
 
 def _fetch_url(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=30) as response:
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(url, timeout=30, context=context) as response:
         return response.read()
 
 
