@@ -38,3 +38,5 @@ The output JSON contains:
 Matrix runs also write `matrix_summary.json` and `matrix_metrics.csv`. Use `python -m benchmarks.common.report <matrix-output-dir> --output <report.csv> --json-output <report.json>` to convert them into the shared benchmark report schema documented in `docs/benchmarks/common_reporting.md`.
 
 The policy used by `benchmarks.cwah.llm_smoke` is intentionally simple and intended for integration validation. It does not claim task-solving performance.
+
+For paired comparisons, `normalized_progress` is the prespecified primary outcome, one task episode is the comparison unit, and `(task_id, seed)` is the pairing key. Analyze other fields separately as exploratory metrics using `benchmarks.common.analysis`; never substitute `task_success` for one side of a `normalized_progress` comparison. The bounded post-Dual-DAG evaluation in #292 remains diagnostic-only as specified by that issue, even when it has matched pairs. See `docs/benchmarks/paired_comparisons.md`.

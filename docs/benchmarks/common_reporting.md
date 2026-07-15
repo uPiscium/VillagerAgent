@@ -43,3 +43,5 @@ For C-WAH inputs, common reports also include policy diagnostics when available:
 - `policy_override_reason_counts`
 
 The JSON report aggregate sums these diagnostics across runs.
+
+Common report schema v2 does not assign statistical significance or evidence labels. For matched baseline/candidate effects, deterministic bootstrap intervals, failed/missing-run accounting, and claim gates, use the separate versioned contract in `docs/benchmarks/paired_comparisons.md` and the `python -m benchmarks.common.analysis` CLI. Do not feed mixed-benchmark aggregate metrics into paired analysis.
