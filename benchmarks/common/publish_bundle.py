@@ -347,9 +347,12 @@ def validate_public_bundle(
         ):
             raise PublicBundleValidationError("Derivative bundle has invalid source run accounting")
         statuses = source_statuses
-    if not ({"summary.json", "matrix_summary.json"} & present_names):
+    if not ({"summary.json", "matrix_summary.json", "verification.json"} & present_names):
         raise PublicBundleValidationError("Public bundle must include per-run or matrix status summaries")
-    if not any("metrics" in path.name or "report" in path.name for path in paths):
+    if not any(
+        "metrics" in path.name or "report" in path.name or path.name == "verification.json"
+        for path in paths
+    ):
         raise PublicBundleValidationError("Public bundle must include metrics or aggregate report tables")
 
     manifest_path = bundle_dir / ARTIFACT_MANIFEST_FILE

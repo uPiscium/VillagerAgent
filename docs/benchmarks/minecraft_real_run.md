@@ -1,10 +1,19 @@
 # Minecraft Real-Run Validation
 
+<!-- benchmark-result: minecraft-ollama-real-smoke-v1 -->
+
 Issues: #226, #243
 
 ## Purpose
 
 Minecraft/Villager Agent benchmark execute mode is optional and must stay outside CI. The default benchmark paths remain dry-run artifact validation. Real execute mode is for local, bounded checks against an explicitly configured Minecraft server and judger.
+
+The opt-in Ollama preflight completed against `gemma4:12b` on 2026-07-15 and
+recorded immutable model digest
+`4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c`.
+Its sanitized immutable archive is registered as
+`minecraft-ollama-real-smoke-v1`. This validates only model availability and
+provenance; it is not Minecraft bridge, judged-task, or performance evidence.
 
 ## Required Runtime Assets
 
