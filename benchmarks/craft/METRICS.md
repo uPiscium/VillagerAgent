@@ -19,6 +19,8 @@ This document explains the CRAFT metrics emitted by the VillagerAgent CRAFT inte
 - `mean_progress_delta_per_turn`: Mean progress delta across observed turns.
 - `mean_progress_delta_per_physical_action`: Mean progress delta divided by physical `place`/`remove` action count. This helps separate action quality from action throughput.
 
+For baseline/candidate inference, `final_progress` is the prespecified primary outcome and each structure is the comparison unit. Pair observations by `(structure_id, seed)` with `benchmarks.common.analysis`; do not pair run-level `mean_final_progress` values from runs containing different structures. All other task, behavior, and Dual-DAG metrics are exploratory unless a new versioned analysis contract prespecifies them. See `docs/benchmarks/paired_comparisons.md`.
+
 ## Runtime And Configuration
 
 - `status`: Run status in aggregate reports. Completed runs default to `completed`; experiment-level failure artifacts use `failed`.
