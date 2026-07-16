@@ -14,6 +14,7 @@ import tempfile
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
@@ -87,6 +88,7 @@ _INLINE_CREDENTIAL = re.compile(
 )
 _PAPER_RESULT = re.compile(r"<!--\s*paper-result:\s*([A-Za-z0-9_.-]+)\s*-->")
 _BENCHMARK_RESULT = re.compile(r"<!--\s*benchmark-result:\s*([A-Za-z0-9_.-]+)\s*-->")
+_HISTORICAL_RESULT = re.compile(r"<!--\s*historical-result:\s*([A-Za-z0-9_.-]+)\s*-->")
 _REPORTED_EVALUATION = re.compile(
     r"Observed common-report aggregate:|^## Aggregate Results|For the latest verified .*run, the generated compact summary was:",
     re.IGNORECASE | re.MULTILINE,
@@ -539,28 +541,76 @@ def check_paper_result_archives(
         _validate_registry_entry(entry, fetcher=fetcher)
         by_id[result_id] = entry
 
+    repository_root = registry_path.parent.parent.resolve()
+    for entry in entries:
+        if entry.get("classification") != "legacy-diagnostic-unarchived":
+            continue
+        recovery_record = Path(entry["recovery_record"])
+        resolved_record = (repository_root / recovery_record).resolve()
+        if (
+            recovery_record.is_absolute()
+            or ".." in recovery_record.parts
+            or recovery_record.suffix.lower() != ".md"
+            or not resolved_record.is_relative_to(repository_root)
+            or not resolved_record.is_file()
+        ):
+            raise PublicBundleValidationError(
+                f"Unarchived diagnostic {entry['id']} has an invalid recovery_record"
+            )
+
     roots = list(report_roots or [docs_root])
     default_benchmarks = registry_path.parent.parent / "benchmarks"
     if report_roots is None and default_benchmarks.exists():
         roots.append(default_benchmarks)
     declarations: list[str] = []
     paper_declarations: list[str] = []
+    benchmark_declarations: list[str] = []
+    historical_declarations: list[str] = []
     undeclared_reports: list[str] = []
     paths = sorted({path for root in roots for path in root.rglob("*.md")})
     for path in paths:
         text = path.read_text(encoding="utf-8")
         paper_ids = _PAPER_RESULT.findall(text)
         benchmark_ids = _BENCHMARK_RESULT.findall(text)
-        for result_id in benchmark_ids:
+        historical_ids = _HISTORICAL_RESULT.findall(text)
+        for result_id in historical_ids:
             legacy_path = _LEGACY_UNARCHIVED_DECLARATION_PATHS.get(result_id)
-            if legacy_path and not path.as_posix().endswith(legacy_path):
+            if not legacy_path:
                 raise PublicBundleValidationError(
-                    f"Legacy result {result_id} may only be declared in {legacy_path}"
+                    f"Historical result {result_id} is not an approved retired pre-policy diagnostic"
+                )
+            expected_path = (registry_path.parent.parent / legacy_path).resolve()
+            if path.resolve() != expected_path:
+                raise PublicBundleValidationError(
+                    f"Historical result {result_id} may only be declared in {legacy_path}"
                 )
         paper_declarations.extend(paper_ids)
-        declarations.extend([*paper_ids, *benchmark_ids])
+        benchmark_declarations.extend(benchmark_ids)
+        historical_declarations.extend(historical_ids)
+        declarations.extend([*paper_ids, *benchmark_ids, *historical_ids])
         if _REPORTED_EVALUATION.search(text) and not (paper_ids or benchmark_ids):
             undeclared_reports.append(str(path))
+    duplicate_historical = sorted(
+        result_id
+        for result_id in set(historical_declarations)
+        if historical_declarations.count(result_id) != 1
+    )
+    if duplicate_historical:
+        raise PublicBundleValidationError(
+            "Historical results must be declared exactly once: "
+            + ", ".join(duplicate_historical)
+        )
+    missing_historical = sorted(
+        result_id
+        for result_id, entry in by_id.items()
+        if entry.get("classification") == "legacy-diagnostic-unarchived"
+        and result_id not in historical_declarations
+    )
+    if missing_historical:
+        raise PublicBundleValidationError(
+            "Historical results must be declared exactly once: "
+            + ", ".join(missing_historical)
+        )
     if undeclared_reports:
         raise PublicBundleValidationError(
             "Reported evaluations lack archive declarations: " + ", ".join(undeclared_reports)
@@ -578,6 +628,26 @@ def check_paper_result_archives(
     if invalid_paper:
         raise PublicBundleValidationError(
             "Paper-facing results must resolve to verified archives: " + ", ".join(invalid_paper)
+        )
+    invalid_benchmark = sorted(
+        result_id
+        for result_id in set(benchmark_declarations)
+        if by_id[result_id].get("classification") != "archived"
+    )
+    if invalid_benchmark:
+        raise PublicBundleValidationError(
+            "Benchmark-facing results must resolve to verified archives: "
+            + ", ".join(invalid_benchmark)
+        )
+    invalid_historical = sorted(
+        result_id
+        for result_id in set(historical_declarations)
+        if by_id[result_id].get("classification") != "legacy-diagnostic-unarchived"
+    )
+    if invalid_historical:
+        raise PublicBundleValidationError(
+            "Historical results must resolve to retired legacy inventory entries: "
+            + ", ".join(invalid_historical)
         )
     return sorted(set(declarations))
 
@@ -854,6 +924,26 @@ def _validate_registry_entry(
             raise PublicBundleValidationError(
                 f"Unarchived diagnostic {result_id} must be ineligible for publication and claims"
             )
+        retired_at = entry.get("retired_at")
+        recovery_record = entry.get("recovery_record")
+        if (
+            entry.get("retired") is not True
+            or entry.get("paper_facing") is not False
+            or entry.get("recovery_status") != "exhausted"
+            or not isinstance(retired_at, str)
+            or not retired_at.strip()
+            or not isinstance(recovery_record, str)
+            or not recovery_record.strip()
+        ):
+            raise PublicBundleValidationError(
+                f"Unarchived diagnostic {result_id} lacks permanent retirement metadata"
+            )
+        try:
+            date.fromisoformat(retired_at)
+        except ValueError as error:
+            raise PublicBundleValidationError(
+                f"Unarchived diagnostic {result_id} has invalid retired_at date"
+            ) from error
         if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
             raise PublicBundleValidationError(f"Unarchived diagnostic {result_id} lacks a reason")
         if counts[3] != counts[0]:

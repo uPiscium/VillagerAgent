@@ -1,8 +1,8 @@
 # CRAFT Clarification Policy Findings
 
-<!-- benchmark-result: craft-clarification-policy-evaluations -->
+<!-- historical-result: craft-clarification-policy-evaluations -->
 
-This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+This is a permanently retired historical diagnostic. Recovery was exhausted on 2026-07-15 with no source bundle or backup available. Its aggregate values are context only and must not support paper, benchmark, or performance claims. Any comparative interpretation or recommendation below is preserved as contemporaneous commentary, not current evidence.
 
 This records the Gemma4 12B Clarify policy smoke and official results for #148.
 
@@ -22,7 +22,7 @@ Artifacts:
 - `result/craft/summary_gemma4_12b_clarify_policy_smoke.csv`
 - `result/craft/variance_gemma4_12b_clarify_policy_smoke.csv`
 
-## Aggregate Results
+## Retired Historical Aggregate
 
 | Policy | n | mean_final_progress | delta vs V0 | progress_auc | physical_action_count | clarify_count | beneficial_clarification_count | neutral_clarification_count | failed_clarification_count | builder_fallback_rate | retrieved_node_count |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

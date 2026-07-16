@@ -1,9 +1,8 @@
 # C-WAH Goal-Aware Policy Notes
 
-<!-- benchmark-result: cwah-goal-policy-diagnostics -->
-<!-- benchmark-result: cwah-issue292-dual-dag-diagnostic-v2 -->
+<!-- historical-result: cwah-goal-policy-diagnostics -->
 
-This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+The pre-publication-policy results in this note are permanently retired historical diagnostics. Recovery was exhausted on 2026-07-15 with no source bundle or backup available. Their aggregate values are context only and must not support paper, benchmark, or performance claims. Any comparative interpretation or recommendation attached to those values is preserved as contemporaneous commentary, not current evidence. The separately declared Issue #292 result remains archived evidence.
 
 This note records the first goal-aware policy improvement after the 2026-07-04 bounded baseline. The change is still an integration/policy-maturation step, not a benchmark-performance claim.
 
@@ -148,7 +147,7 @@ Configuration matched the baseline in `docs/benchmarks/cwah_real_baseline.md`:
 - Full episode mode: enabled
 - Physical-action preference: from step `0`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -174,7 +173,7 @@ Configuration matched the previous bounded comparisons:
 - Full episode mode: enabled
 - Physical-action preference: from step `0`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -202,7 +201,7 @@ Configuration matched the previous bounded comparisons:
 - Full episode mode: enabled
 - Physical-action preference: from step `0`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -230,7 +229,7 @@ Configuration matched the previous bounded comparisons:
 - Full episode mode: enabled
 - Physical-action preference: from step `0`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -258,7 +257,7 @@ Configuration matched the previous bounded comparisons, with `navigation_loop_th
 - Full episode mode: enabled
 - Physical-action preference: from step `0`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -288,7 +287,7 @@ Configuration matched the previous bounded comparisons:
 - Physical-action preference: from step `0`
 - Navigation-loop threshold: `12`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -318,7 +317,7 @@ Configuration matched the previous bounded comparisons:
 - Physical-action preference: from step `0`
 - Navigation-loop threshold: `12`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -349,7 +348,7 @@ Configuration matched the previous bounded comparisons:
 - Physical-action preference: from step `0`
 - Navigation-loop threshold: `12`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -380,7 +379,7 @@ Configuration matched the previous bounded comparisons:
 - Physical-action preference: from step `0`
 - Navigation-loop threshold: `12`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -413,7 +412,7 @@ Configuration matched the previous bounded comparisons:
 - Physical-action preference: from step `0`
 - Navigation-loop threshold: `12`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -446,7 +445,7 @@ Configuration matched the previous bounded comparisons:
 - Physical-action preference: from step `0`
 - Navigation-loop threshold: `12`
 
-Observed common-report aggregate:
+Retired historical aggregate copied into this note:
 
 - Runs: `6`
 - Runtime failed runs: `0`
@@ -464,92 +463,6 @@ Observed common-report aggregate:
 
 Search-discovery ranking removed bounded-run execution failures by preferring exploration/navigation when goal objects or targets were not visible, but it did not improve task success or normalized progress. It also over-shifted behavior toward navigation, so this remains policy hardening and diagnostics signal rather than a benchmark-performance claim. Future work should convert successful search/navigation into concrete object interactions instead of continuing to navigate.
 
-## 2026-07-15 Post-Dual-DAG Diagnostic
-
-The retained matrix used exactly tasks `0,1,2`, seeds `0,1`, full-episode mode,
-25 steps, physical preference from step `0`, and navigation-loop threshold `12`.
-The sanitized command was:
-
-```bash
-nix develop --command python -m benchmarks.cwah.matrix \
-  --env coela --tasks 0,1,2 --seeds 0,1 --full-episode \
-  --max-steps 25 --prefer-physical-after-steps 0 \
-  --model gemma4:e4b --base-port 6714 --port-stride 10 \
-  --output-dir /tmp/opencode/cwah-issue292-real-matrix-20260715
-```
-
-Runtime identity:
-
-- VillagerAgent commit: `36cfc8cb62eb68013c5d935c0513f5ac81f3a372`
-- Ollama model: `gemma4:e4b`, digest `c6eb396dbd5992bbe3f5cdb947e8bbc0ee413d7c17e2beaae69f5d569cf982eb`
-- CoELA commit: `3e12dea925d735eefce33da71806ae9da6fcaf3f`
-- VirtualHome `wah` commit: `6773be207680d47985091b90568e2a12fd3d321f`
-- Dataset SHA-256: `7780e1aebff70c840a1ca66ea27904c2dfe203b09b30f04aa6c001e594f432a0`
-- Unity executable SHA-256: `19d9b4735933c6ff013a05831a69acd3a10269b2934b38e51ff641b0202e01b1`
-- Unity data directory: `external/CoELA/executable/linux_exec.v2.3.0_Data`
-- Unity data directory bytes (`du -sb`): `4858408881`
-- Unity data tree SHA-256: `f63c17e80e0624c2f48398f12d33c8f1af1f9bee746431cd58b4b3444678b40b` over a GNU tar stream sorted by path with fixed epoch mtime and numeric zero owner/group
-
-The first one-policy-step smoke failed while the Ollama scheduler could not
-schedule the model. No raw server output was retained. The recovery condition
-was the same endpoint reporting the pinned model available and accepting an
-inference request; a repeated one-policy-step smoke then completed before the
-matrix was started. The recovery changed only the simulator port (`6614` to
-`6624`), not the task, seed, model, policy, or step settings.
-
-Observed aggregate:
-
-- Runs: `6`; runtime failed runs: `0`; task successes: `0`
-- Mean normalized progress: `0.5920745920745921`; mean steps: `25.0`
-- Action mix: `walktowards=144`, `grab=6`
-- Policy overrides: `150`, all `prefer_physical_after_steps`
-- Failed-action records and result failures: `0`; failure-reason counts: none
-- Navigation-loop suppressions: `8`
-
-Every run repeatedly navigated, grabbed once, and resumed navigation until the
-budget without attempting placement. This is the dominant bounded failure
-sequence and motivates a separate post-grab placement-transition experiment;
-it does not implement Issue #248.
-
-All six source snapshots contained both observation nodes and action-candidate
-nodes. Public retention uses six structural `dual_dag_artifact.json` summaries,
-not the source snapshots: simulator grounding, agent-goal payloads,
-prompts/reasoning, raw process output, hidden evaluator state, credentials,
-debug fields, and personal absolute paths are excluded from the public bundle.
-
-Agent-facing goal hints are intentional policy input rather than evaluator
-leakage. CoELA's `UnityEnvironment.reset()` loads `task_goal` and derives
-`goal_spec` separately for each agent; its LLM arena passes that per-agent goal
-specification to the corresponding policy. The adapter reads `goal_spec`, with
-per-agent `task_goal` only as a fallback, and converts it to compact relation,
-object, target, and count hints. The regression test
-`test_cwah_adapter_exposes_per_agent_goals_without_evaluator_or_full_graph_state`
-confirms that one agent receives its own hint while sentinel `total_goal`,
-evaluator-progress, and `full_graph` data are absent from its decision context.
-The compact checked-in evidence is
-`docs/benchmarks/evidence/cwah_issue_292/diagnostic_summary.json`; the exact
-diagnostic contract is
-`configs/cwah/diagnostics/issue_292_real_matrix.json`.
-
-Immutable release `benchmark-cwah-issue292-dual-dag-diagnostic-v1` is retained
-but superseded: it identifies the wrong Unity data directory and its publication
-contract names `diagnostic_summary.json` while the archive contains
-`matrix_summary.json`. It is not the declared or registered Issue #292 record.
-
-The corrected, sole declared and registered Issue #292 diagnostic is immutable
-release `benchmark-cwah-issue292-dual-dag-diagnostic-v2`:
-
-- Archive: [cwah-issue292-dual-dag-diagnostic-v2.zip](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-cwah-issue292-dual-dag-diagnostic-v2/cwah-issue292-dual-dag-diagnostic-v2.zip)
-- Archive SHA-256: `7bdc6a69140630b988cb1b518cbff2c1b754b57c234c847a5435a1d83db4db79`
-- Metadata SHA-256: `e84d693dd0c4ac298eeaccf1e97a1533f4a958db8b7184d5dc6660d87d49604e`
-- Manifest SHA-256: `fd51b8eac520fc953fa228904682e2275a91b0257cec61e43c653856ca8af1f1`
-
-The 2026-07-10 search-discovery record above is settings-matched for tasks
-`0,1,2`, seeds `0,1`, and 25 steps. It recorded zero successes, mean normalized
-progress `0.5920745920745921`, 150 physical actions, no failed-action records,
-eight navigation-loop suppressions, and action mix `walktowards=144`, `grab=6`.
-Its source bundle and runtime asset identities are unavailable and legacy, so
-runtime asset equivalence is unverifiable. This prevents the strict
-runtime-equivalent comparison requested by Issue #292, but the matched settings
-still provide its required bounded diagnostic context. No performance or
-no-change claim follows from this context.
+The archived post-Dual-DAG evaluation is documented separately in
+`docs/benchmarks/cwah_issue_292_real_diagnostic.md` so this retired historical
+note cannot act as an archive declaration for future results.
