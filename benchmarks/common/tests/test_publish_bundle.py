@@ -436,6 +436,11 @@ def test_new_unarchived_benchmark_declaration_cannot_use_legacy_exception(tmp_pa
             "legacy_pre_policy": True,
             "publication_satisfied": False,
             "claim_eligible": False,
+            "retired": True,
+            "paper_facing": False,
+            "recovery_status": "exhausted",
+            "retired_at": "2026-07-15",
+            "recovery_record": "docs/legacy_evaluation_retirement.md",
             "reason": "missing",
             "run_accounting": {"expected": 1, "completed": 0, "failed": 0, "missing": 1},
         }],
@@ -443,3 +448,161 @@ def test_new_unarchived_benchmark_declaration_cannot_use_legacy_exception(tmp_pa
 
     with pytest.raises(PublicBundleValidationError, match="not an approved pre-policy"):
         check_paper_result_archives(docs, registry)
+
+
+def test_retired_historical_declaration_is_inventory_not_benchmark_evidence(tmp_path):
+    docs = tmp_path / "docs"
+    report = tmp_path / "benchmarks" / "craft" / "README.md"
+    report.parent.mkdir(parents=True)
+    docs.mkdir()
+    (docs / "legacy_evaluation_retirement.md").write_text("Retired.\n", encoding="utf-8")
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n## Historical Aggregate\n",
+        encoding="utf-8",
+    )
+    registry = docs / "benchmark_archives.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1,
+        "results": [{
+            "id": "craft-qwen-final-diagnostic",
+            "benchmark": "craft",
+            "classification": "legacy-diagnostic-unarchived",
+            "legacy_pre_policy": True,
+            "publication_satisfied": False,
+            "claim_eligible": False,
+            "retired": True,
+            "paper_facing": False,
+            "recovery_status": "exhausted",
+            "retired_at": "2026-07-15",
+            "recovery_record": "docs/legacy_evaluation_retirement.md",
+            "reason": "Source artifacts are permanently unavailable.",
+            "run_accounting": {"expected": 4, "completed": 0, "failed": 0, "missing": 4},
+        }],
+    }), encoding="utf-8")
+
+    roots = [docs, tmp_path / "benchmarks"]
+    assert check_paper_result_archives(
+        docs,
+        registry,
+        report_roots=roots,
+    ) == ["craft-qwen-final-diagnostic"]
+
+    report.write_text("## Historical Aggregate\n", encoding="utf-8")
+    with pytest.raises(PublicBundleValidationError, match="exactly once"):
+        check_paper_result_archives(docs, registry, report_roots=roots)
+
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n## Aggregate Results\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PublicBundleValidationError, match="lack archive declarations"):
+        check_paper_result_archives(docs, registry, report_roots=roots)
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n## Historical Aggregate\n",
+        encoding="utf-8",
+    )
+
+    wrong_path = tmp_path / "benchmarks" / "notbenchmarks" / "craft" / "README.md"
+    wrong_path.parent.mkdir(parents=True)
+    wrong_path.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(PublicBundleValidationError, match="may only be declared"):
+        check_paper_result_archives(docs, registry, report_roots=roots)
+    wrong_path.unlink()
+
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n" * 2,
+        encoding="utf-8",
+    )
+    with pytest.raises(PublicBundleValidationError, match="exactly once"):
+        check_paper_result_archives(docs, registry, report_roots=roots)
+
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n",
+        encoding="utf-8",
+    )
+    registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+    registry_payload["results"][0]["retired_at"] = "not-a-date"
+    registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    with pytest.raises(PublicBundleValidationError, match="invalid retired_at"):
+        check_paper_result_archives(docs, registry, report_roots=roots)
+
+    registry_payload["results"][0]["retired_at"] = "2026-07-15"
+    registry_payload["results"][0]["recovery_record"] = "docs/missing.md"
+    registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    with pytest.raises(PublicBundleValidationError, match="invalid recovery_record"):
+        check_paper_result_archives(docs, registry, report_roots=roots)
+
+
+def test_benchmark_declaration_cannot_reference_retired_historical_inventory(tmp_path):
+    docs = tmp_path / "docs"
+    report = tmp_path / "benchmarks" / "craft" / "README.md"
+    report.parent.mkdir(parents=True)
+    docs.mkdir()
+    (docs / "legacy_evaluation_retirement.md").write_text("Retired.\n", encoding="utf-8")
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n"
+        "<!-- benchmark-result: craft-qwen-final-diagnostic -->\n"
+        "## Aggregate Results\n",
+        encoding="utf-8",
+    )
+    registry = docs / "benchmark_archives.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1,
+        "results": [{
+            "id": "craft-qwen-final-diagnostic",
+            "benchmark": "craft",
+            "classification": "legacy-diagnostic-unarchived",
+            "legacy_pre_policy": True,
+            "publication_satisfied": False,
+            "claim_eligible": False,
+            "retired": True,
+            "paper_facing": False,
+            "recovery_status": "exhausted",
+            "retired_at": "2026-07-15",
+            "recovery_record": "docs/legacy_evaluation_retirement.md",
+            "reason": "Source artifacts are permanently unavailable.",
+            "run_accounting": {"expected": 4, "completed": 0, "failed": 0, "missing": 4},
+        }],
+    }), encoding="utf-8")
+
+    with pytest.raises(PublicBundleValidationError, match="Benchmark-facing results must resolve"):
+        check_paper_result_archives(
+            docs,
+            registry,
+            report_roots=[docs, tmp_path / "benchmarks"],
+        )
+
+
+def test_retired_historical_registry_entry_requires_recovery_metadata(tmp_path):
+    docs = tmp_path / "docs"
+    report = tmp_path / "benchmarks" / "craft" / "README.md"
+    report.parent.mkdir(parents=True)
+    docs.mkdir()
+    report.write_text(
+        "<!-- historical-result: craft-qwen-final-diagnostic -->\n## Aggregate Results\n",
+        encoding="utf-8",
+    )
+    registry = docs / "benchmark_archives.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1,
+        "results": [{
+            "id": "craft-qwen-final-diagnostic",
+            "benchmark": "craft",
+            "classification": "legacy-diagnostic-unarchived",
+            "legacy_pre_policy": True,
+            "publication_satisfied": False,
+            "claim_eligible": False,
+            "reason": "Source artifacts are permanently unavailable.",
+            "run_accounting": {"expected": 4, "completed": 0, "failed": 0, "missing": 4},
+        }],
+    }), encoding="utf-8")
+
+    with pytest.raises(PublicBundleValidationError, match="retirement metadata"):
+        check_paper_result_archives(
+            docs,
+            registry,
+            report_roots=[docs, tmp_path / "benchmarks"],
+        )

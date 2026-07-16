@@ -1,8 +1,8 @@
 # CRAFT Dual-DAG Ablation Findings
 
-<!-- benchmark-result: craft-dual-dag-ablation-diagnostic -->
+<!-- historical-result: craft-dual-dag-ablation-diagnostic -->
 
-This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+This is a permanently retired historical diagnostic. Recovery was exhausted on 2026-07-15 with no source bundle or backup available. Its aggregate values are context only and must not support paper, benchmark, or performance claims. Any comparative interpretation or recommendation below is preserved as contemporaneous commentary, not current evidence.
 
 This records the Gemma4 12B C0-C6 ablation smoke results for #136.
 
@@ -18,7 +18,7 @@ python -m benchmarks.craft.experiment --config configs/craft/experiments/gemma4_
 
 The primary command timed out after producing C0-C5 and C6 seed 1 artifacts. C6 seeds 3 and 5 were completed with a temporary local manifest containing only the existing C6 config and the same `_ablation_smoke_c6_full_dual_dag` suffix.
 
-## Aggregate Results
+## Retired Historical Aggregate
 
 | Condition | n | mean_final_progress | delta vs C0 | progress_auc | physical_action_count | clarify_count | gated_clarification_count | retrieved_node_count | fallback_count |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

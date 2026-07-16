@@ -1,8 +1,8 @@
 # CRAFT V5 Action-Selection Diagnostics
 
-<!-- benchmark-result: craft-v5-action-selection-diagnostic -->
+<!-- historical-result: craft-v5-action-selection-diagnostic -->
 
-This is an explicitly legacy pre-publication-policy diagnostic record. Its source bundles are unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+This is a permanently retired historical diagnostic. Recovery was exhausted on 2026-07-15 with no source bundle or backup available. Its aggregate values are context only and must not support paper, benchmark, or performance claims. Any comparative interpretation or recommendation below is preserved as contemporaneous commentary, not current evidence.
 
 This note records the first post-instrumentation diagnostic run for the V5 repeated-zero action-selection policy. The goal was to determine why V5 previously showed no observed suppression events, not to establish a new performance result.
 
@@ -23,7 +23,7 @@ This note records the first post-instrumentation diagnostic run for the V5 repea
 
 All three V5 diagnostic runs completed and passed leakage checks.
 
-## Aggregate Results
+## Retired Historical Aggregate
 
 | Metric | Seed 1 | Seed 3 | Seed 5 | Mean |
 | --- | ---: | ---: | ---: | ---: |

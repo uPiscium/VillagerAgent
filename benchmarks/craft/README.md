@@ -1,8 +1,8 @@
 # CRAFT Integration
 
-<!-- benchmark-result: craft-qwen-final-diagnostic -->
+<!-- historical-result: craft-qwen-final-diagnostic -->
 
-The recorded result below is an explicitly legacy pre-publication-policy diagnostic. Its source bundle is unavailable, so it does not satisfy Issue #297 publication requirements and cannot support paper or performance claims.
+The recorded result below is a permanently retired historical diagnostic. Recovery was exhausted on 2026-07-15 with no source bundle or backup available. Its aggregate values are context only and must not support paper, benchmark, or performance claims. Any comparative interpretation or recommendation attached to those values is preserved as contemporaneous commentary, not current evidence.
 
 CRAFT is a partial-information multi-agent benchmark where three Directors each see an incomplete private 2D view of a hidden 3D target structure. The Directors coordinate through public natural language messages, and a Builder constructs the final structure.
 
@@ -220,7 +220,7 @@ The compact summary table is the easiest artifact to inspect first. Read it as f
 - `supported_action_count`, `conflicted_action_count`, and `required_evidence_action_count` summarize action-level graph evidence.
 - `leakage_passed` must remain true for partial-information-safe runs.
 
-For the latest verified `_final` run, the generated compact summary was:
+The retired note recorded the following unverified `_final` compact summary:
 
 ```text
 run_name,mean_final_progress,builder_fallback_rate,gated_clarification_rate,claim_support_count,claim_conflict_count,claim_required_evidence_count,dual_dag_node_count,dual_dag_edge_count,leakage_passed
@@ -230,7 +230,7 @@ craft_single_director_qwen_ollama_dual_dag_final,0.2384219001610306,0.1333333333
 craft_official_baseline_final,0.0,0.0,0.0,0,0,0,0,0,True
 ```
 
-Interpretation notes:
+Contemporaneous interpretation notes, retained as historical context only:
 
 - The 3-Director Dual-DAG run matched the non-gated 3-Director progress while increasing support evidence and reducing required-evidence count.
 - The single-Director ablation reached the same progress on this small final slice, but with much less support evidence.

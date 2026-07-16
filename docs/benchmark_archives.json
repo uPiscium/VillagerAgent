@@ -8,7 +8,12 @@
       "legacy_pre_policy": true,
       "publication_satisfied": false,
       "claim_eligible": false,
-      "reason": "Historical diagnostic source bundles were stored only under /tmp before archive publication was available.",
+      "retired": true,
+      "paper_facing": false,
+      "recovery_status": "exhausted",
+      "retired_at": "2026-07-15",
+      "recovery_record": "docs/legacy_evaluation_retirement.md",
+      "reason": "Historical diagnostic source bundles were stored only under /tmp before archive publication was available, and no backup could be recovered.",
       "run_accounting": {"expected": 66, "completed": 0, "failed": 0, "missing": 66}
     },
     {
@@ -18,7 +23,12 @@
       "legacy_pre_policy": true,
       "publication_satisfied": false,
       "claim_eligible": false,
-      "reason": "Historical diagnostic source bundles were stored only under /tmp before archive publication was available.",
+      "retired": true,
+      "paper_facing": false,
+      "recovery_status": "exhausted",
+      "retired_at": "2026-07-15",
+      "recovery_record": "docs/legacy_evaluation_retirement.md",
+      "reason": "Historical diagnostic source bundles were stored only under /tmp before archive publication was available, and no backup could be recovered.",
       "run_accounting": {"expected": 6, "completed": 0, "failed": 0, "missing": 6}
     },
     {
@@ -50,7 +60,12 @@
       "legacy_pre_policy": true,
       "publication_satisfied": false,
       "claim_eligible": false,
-      "reason": "The documented local result predates public bundle publication and is explicitly not paper-facing.",
+      "retired": true,
+      "paper_facing": false,
+      "recovery_status": "exhausted",
+      "retired_at": "2026-07-15",
+      "recovery_record": "docs/legacy_evaluation_retirement.md",
+      "reason": "The documented local result predates public bundle publication, and no source bundle or backup could be recovered.",
       "run_accounting": {"expected": 4, "completed": 0, "failed": 0, "missing": 4}
     },
     {
@@ -60,7 +75,12 @@
       "legacy_pre_policy": true,
       "publication_satisfied": false,
       "claim_eligible": false,
-      "reason": "The smoke artifacts predate public bundle publication and are retained only as diagnostic notes.",
+      "retired": true,
+      "paper_facing": false,
+      "recovery_status": "exhausted",
+      "retired_at": "2026-07-15",
+      "recovery_record": "docs/legacy_evaluation_retirement.md",
+      "reason": "The smoke artifacts predate public bundle publication, and no source bundle or backup could be recovered.",
       "run_accounting": {"expected": 21, "completed": 0, "failed": 0, "missing": 21}
     },
     {
@@ -70,7 +90,12 @@
       "legacy_pre_policy": true,
       "publication_satisfied": false,
       "claim_eligible": false,
-      "reason": "The temporary diagnostic artifacts predate public bundle publication.",
+      "retired": true,
+      "paper_facing": false,
+      "recovery_status": "exhausted",
+      "retired_at": "2026-07-15",
+      "recovery_record": "docs/legacy_evaluation_retirement.md",
+      "reason": "The temporary diagnostic artifacts predate public bundle publication, and no source bundle or backup could be recovered.",
       "run_accounting": {"expected": 3, "completed": 0, "failed": 0, "missing": 3}
     },
     {
@@ -80,7 +105,12 @@
       "legacy_pre_policy": true,
       "publication_satisfied": false,
       "claim_eligible": false,
-      "reason": "The smoke, official, and sensitivity artifacts predate public bundle publication and cannot be reconstructed from committed files.",
+      "retired": true,
+      "paper_facing": false,
+      "recovery_status": "exhausted",
+      "retired_at": "2026-07-15",
+      "recovery_record": "docs/legacy_evaluation_retirement.md",
+      "reason": "The smoke, official, and sensitivity artifacts predate public bundle publication, cannot be reconstructed from committed files, and have no recoverable backup.",
       "run_accounting": {"expected": 78, "completed": 0, "failed": 0, "missing": 78}
     },
     {
