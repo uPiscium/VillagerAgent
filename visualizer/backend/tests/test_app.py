@@ -7,6 +7,7 @@ from villageragent_visualizer import (
     ArtifactRepository,
     RunRepository,
     RuntimeGraphService,
+    TimelineService,
     create_app,
 )
 
@@ -29,3 +30,4 @@ def test_health_endpoint_returns_fixed_dto(tmp_path: Path) -> None:
     assert app.state.runs.root == tmp_path.resolve()
     assert isinstance(app.state.runtime_graphs, RuntimeGraphService)
     assert isinstance(app.state.analysis_graphs, AnalysisGraphService)
+    assert isinstance(app.state.timelines, TimelineService)

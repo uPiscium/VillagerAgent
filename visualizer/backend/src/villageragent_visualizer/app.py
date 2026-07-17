@@ -12,9 +12,12 @@ from villageragent_visualizer.dto import (
     RunManifest,
     RuntimeGraph,
     RuntimeGraphErrorCode,
+    Timeline,
+    TimelineErrorCode,
 )
 from villageragent_visualizer.runtime_graph import RuntimeGraphService
 from villageragent_visualizer.runs import RunRepository
+from villageragent_visualizer.timeline import TimelineService
 
 
 def create_app(*, result_root: str | Path = "result") -> FastAPI:
@@ -24,6 +27,11 @@ def create_app(*, result_root: str | Path = "result") -> FastAPI:
     app.state.runs = RunRepository(app.state.result_root, artifacts=app.state.artifacts)
     app.state.runtime_graphs = RuntimeGraphService(artifacts=app.state.artifacts, runs=app.state.runs)
     app.state.analysis_graphs = AnalysisGraphService(artifacts=app.state.artifacts, runs=app.state.runs)
+    app.state.timelines = TimelineService(
+        artifacts=app.state.artifacts,
+        runs=app.state.runs,
+        analysis_graphs=app.state.analysis_graphs,
+    )
 
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
@@ -81,6 +89,23 @@ def create_app(*, result_root: str | Path = "result") -> FastAPI:
         if result.graph is None:
             raise HTTPException(status_code=500, detail="Analysis graph result is empty")
         return result.graph
+
+    @app.get("/api/v1/runs/{run_id:path}/timeline")
+    def get_timeline(run_id: str) -> Timeline:
+        result = app.state.timelines.load(run_id)
+        if result.error is not None:
+            status_code = 404 if result.error.code in {
+                TimelineErrorCode.RUN_NOT_FOUND,
+                TimelineErrorCode.ACTION_LOG_MISSING,
+            } else 422
+            raise HTTPException(status_code=status_code, detail={
+                "code": result.error.code.value,
+                "message": result.error.message,
+                "warnings": [asdict(warning) for warning in result.error.warnings],
+            })
+        if result.timeline is None:
+            raise HTTPException(status_code=500, detail="Timeline result is empty")
+        return result.timeline
 
     @app.get("/api/v1/runs/{run_id:path}")
     def get_run(run_id: str) -> RunManifest:
