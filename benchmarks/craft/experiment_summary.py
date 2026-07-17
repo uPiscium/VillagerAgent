@@ -482,11 +482,13 @@ def _structure_sort_key(value: str):
 
 
 def _run_group(run_name: str) -> str:
-    marker = "_seed"
-    prefix, marker_found, suffix = run_name.rpartition(marker)
-    if marker_found and suffix.isdigit():
-        return prefix
-    return run_name
+    group = _strip_numeric_suffix(run_name, "_seed")
+    return _strip_numeric_suffix(group, "_structure")
+
+
+def _strip_numeric_suffix(value: str, marker: str) -> str:
+    prefix, marker_found, suffix = value.rpartition(marker)
+    return prefix if marker_found and suffix.isdigit() else value
 
 
 def _resolve_path(root: Path, path: str) -> Path:

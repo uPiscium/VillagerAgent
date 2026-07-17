@@ -340,6 +340,31 @@ python -m benchmarks.craft.experiment \
   --config configs/craft/experiments/gemma4_12b_clarify_policy_official.yaml
 ```
 
+If a matrix is interrupted, do not restart it with `--overwrite`, because that
+replaces every completed run. Use `--resume` only after the implementation and
+bounded checks are final; it validates and reuses completed run bundles, while
+replacing only failed or incomplete runs. A completed dry-run placeholder has
+no normalized result and is therefore never reused as evaluation evidence.
+The final matrix checkpoints remaining work by structure, so an interruption
+does not discard a multi-hour seed. To recover one known checkpoint without
+launching the matrix, use the direct runner with the exact matrix overrides and
+managed run suffix. For example, V0 structure 0 at seed 3 is:
+
+```bash
+python -m benchmarks.craft.run \
+  --config configs/craft/eval_gemma4_12b_ollama.yaml \
+  --structure 0 \
+  --turns 20 --seed 3 --oracle-n 5 \
+  --run-name-suffix _issue291_final_v0_oracle5_structure0_seed3 \
+  --overwrite
+```
+
+Validate and inspect that single bundle before starting another missing run.
+The direct runner records all overrides in provenance.
+The final claim analysis must read the per-structure `metrics.csv` rows rather
+than averaging run-level compact summaries: the retained V0 seed-1 bundle has
+20 structures, while recovery checkpoints contain one structure each.
+
 ## Analysis And Archive
 
 Create one paired-analysis observation per `(structure_id, seed)` from each

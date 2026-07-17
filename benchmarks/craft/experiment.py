@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from benchmarks.common.run_artifacts import (
+    RunArtifactValidationError,
     RunDirectoryExistsError,
     finalize_run_directory,
     prepare_run_directory,
@@ -67,7 +68,10 @@ def run_experiment(
     dry_run: bool = False,
     overrides: dict | None = None,
     overwrite: bool = False,
+    resume: bool = False,
 ) -> list[dict]:
+    if overwrite and resume:
+        raise ValueError("overwrite and resume are mutually exclusive")
     root = repo_root()
     manifest = load_experiment(manifest_path)
     experiment = manifest["experiment"]
@@ -75,6 +79,8 @@ def run_experiment(
     command = _command_text(manifest_path, dry_run=dry_run, overrides=overrides)
     if overwrite:
         command += " --overwrite"
+    if resume:
+        command += " --resume"
 
     run_names = []
     run_records = []
@@ -92,15 +98,25 @@ def run_experiment(
             "overrides": spec_overrides,
             "run_name": output_dir.name,
             "provenance": str(output_dir / "provenance.json"),
+            "disposition": "planned",
         }
         run_records.append(run_record)
+        if resume:
+            if _is_reusable_completed_run(output_dir, expected_config=config):
+                run_record["disposition"] = "reused"
+                continue
+            if _has_validated_completed_result(output_dir):
+                raise RunDirectoryExistsError(
+                    f"Completed CRAFT run does not match the requested config: {output_dir}"
+                )
         try:
+            run_record["disposition"] = "executed"
             completed_run_dir = run_config(
                 config_path,
                 dry_run=dry_run,
                 overrides=spec_overrides,
                 command_text=command,
-                overwrite=overwrite,
+                overwrite=overwrite or resume,
             )
             validate_run_attempt(
                 completed_run_dir,
@@ -203,7 +219,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--structure", default=None)
     parser.add_argument("--turns", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--overwrite", action="store_true")
+    replacement_mode = parser.add_mutually_exclusive_group()
+    replacement_mode.add_argument("--overwrite", action="store_true")
+    replacement_mode.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse validated completed runs and replace only failed or incomplete runs.",
+    )
     parser.add_argument(
         "--run-name-suffix",
         default=None,
@@ -235,6 +257,12 @@ def _validate_run_spec(run) -> None:
         raise ExperimentConfigError("experiment.runs[].seeds must be a list[int].")
     if "structures" in run and not _is_int_list(run["structures"]):
         raise ExperimentConfigError("experiment.runs[].structures must be a list[int].")
+    if "split_structures" in run and not isinstance(run["split_structures"], bool):
+        raise ExperimentConfigError("experiment.runs[].split_structures must be boolean.")
+    if run.get("split_structures") and not run.get("structures"):
+        raise ExperimentConfigError(
+            "experiment.runs[].split_structures requires a non-empty structures list."
+        )
     if "suffix" in run and not isinstance(run["suffix"], str):
         raise ExperimentConfigError("experiment.runs[].suffix must be a string.")
     if "overrides" in run and not isinstance(run["overrides"], dict):
@@ -250,20 +278,28 @@ def _expand_run_specs(runs: list, base_overrides: dict) -> list[dict]:
         seeds = run.get("seeds") or [base_overrides.get("seed")]
         suffix = run.get("suffix", "")
         for seed in seeds:
-            overrides = dict(base_overrides)
-            overrides = _merge_overrides(overrides, run.get("overrides", {}) or {})
-            if seed is not None:
-                overrides["seed"] = seed
-            if run.get("structures") is not None:
-                overrides["structures"] = run["structures"]
-            override_suffix = base_overrides.get("run_name_suffix", "")
-            if suffix:
-                override_suffix = f"{override_suffix}{suffix}"
-            if len(seeds) > 1 or seed is not None:
-                override_suffix = f"{override_suffix}_seed{seed}"
-            if override_suffix:
-                overrides["run_name_suffix"] = override_suffix
-            expanded.append({"config": run["config"], "overrides": overrides})
+            structure_groups = (
+                [[structure] for structure in run["structures"]]
+                if run.get("split_structures")
+                else [run.get("structures")]
+            )
+            for structures in structure_groups:
+                overrides = dict(base_overrides)
+                overrides = _merge_overrides(overrides, run.get("overrides", {}) or {})
+                if seed is not None:
+                    overrides["seed"] = seed
+                if structures is not None:
+                    overrides["structures"] = structures
+                override_suffix = base_overrides.get("run_name_suffix", "")
+                if suffix:
+                    override_suffix = f"{override_suffix}{suffix}"
+                if run.get("split_structures"):
+                    override_suffix = f"{override_suffix}_structure{structures[0]}"
+                if len(seeds) > 1 or seed is not None:
+                    override_suffix = f"{override_suffix}_seed{seed}"
+                if override_suffix:
+                    overrides["run_name_suffix"] = override_suffix
+                expanded.append({"config": run["config"], "overrides": overrides})
     return expanded
 
 
@@ -304,6 +340,44 @@ def _report_path(path: str, overrides: dict) -> Path:
     if suffix:
         report_path = report_path.with_name(f"{report_path.stem}{suffix}{report_path.suffix}")
     return report_path
+
+
+def _is_reusable_completed_run(output_dir: Path, *, expected_config: dict) -> bool:
+    if not _has_validated_completed_result(output_dir):
+        return False
+    try:
+        resolved_config = json.loads((output_dir / "config.resolved.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, RunArtifactValidationError):
+        return False
+    if not isinstance(resolved_config, dict):
+        return False
+    return _config_for_resume(resolved_config) == _config_for_resume(expected_config)
+
+
+def _has_validated_completed_result(output_dir: Path) -> bool:
+    if not output_dir.is_dir():
+        return False
+    try:
+        validate_run_attempt(output_dir, attempt_id=read_attempt_id(output_dir))
+        summary = json.loads((output_dir / "normalized" / "summary.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, RunArtifactValidationError):
+        return False
+    return (
+        isinstance(summary, dict)
+        and (summary.get("status") or summary.get("runtime", {}).get("status") or "completed") == "completed"
+        and (output_dir / "normalized" / "metrics.csv").is_file()
+    )
+
+
+def _config_for_resume(config: dict) -> dict:
+    normalized = sanitize_artifact_value(config)
+    normalized.pop("attempt_id", None)
+    meta = normalized.get("_meta")
+    if isinstance(meta, dict):
+        meta.pop("attempt_id", None)
+        if not meta:
+            normalized.pop("_meta")
+    return normalized
 
 
 def _write_failure_artifacts(
@@ -395,6 +469,7 @@ def main() -> None:
             "run_name_suffix": args.run_name_suffix,
         },
         overwrite=args.overwrite,
+        resume=args.resume,
     )
 
 

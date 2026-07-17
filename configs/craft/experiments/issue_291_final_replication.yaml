@@ -10,13 +10,22 @@ experiment:
       suffix: _issue291_final_upstream_oracle5
       seeds: [1, 3, 5]
       structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
       overrides:
         craft:
           oracle_n: 5
     - config: configs/craft/eval_gemma4_12b_ollama.yaml
       suffix: _issue291_final_v0_oracle5
-      seeds: [1, 3, 5]
+      seeds: [1]
       structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama.yaml
+      suffix: _issue291_final_v0_oracle5
+      seeds: [3, 5]
+      structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
       overrides:
         craft:
           oracle_n: 5
@@ -24,6 +33,7 @@ experiment:
       suffix: _issue291_final_v1_oracle5
       seeds: [1, 3, 5]
       structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
       overrides:
         craft:
           oracle_n: 5
@@ -31,14 +41,10 @@ experiment:
       suffix: _issue291_final_v4_oracle5
       seeds: [1, 3, 5]
       structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
       overrides:
         craft:
           oracle_n: 5
   report:
     output: result/craft/comparison_issue_291_final_replication.csv
     json_output: result/craft/comparison_issue_291_final_replication.json
-    compact_summary_output: result/craft/summary_issue_291_final_replication.csv
-    compact_summary_json_output: result/craft/summary_issue_291_final_replication.json
-    variance_summary_output: result/craft/variance_issue_291_final_replication.csv
-    variance_summary_json_output: result/craft/variance_issue_291_final_replication.json
-    variance_group_by: run_group

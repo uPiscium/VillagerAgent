@@ -14,7 +14,7 @@ from benchmarks.craft.craft_env_adapter import (
     _require_official_runner_semantic_output,
 )
 from benchmarks.craft.leakage_guard import PartialInformationLeakageError
-from benchmarks.craft.run import _provenance_assets, run_config
+from benchmarks.craft.run import _default_command_text, _provenance_assets, run_config
 from benchmarks.craft.result_converter import normalize_results
 from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
 
@@ -483,3 +483,17 @@ def test_direct_craft_failure_writes_summarizable_failed_bundle(tmp_path, monkey
     assert row["status"] == "failed"
     assert row["failed_runs"] == 1
     assert row["success_rate"] is None
+
+
+def test_direct_run_command_records_run_name_suffix():
+    command = _default_command_text(
+        "config.yaml",
+        dry_run=False,
+        overrides={
+            "craft": {"oracle_n": 5},
+            "run_name_suffix": "_issue291_seed3",
+        },
+    )
+
+    assert "--oracle-n 5" in command
+    assert command.endswith("--run-name-suffix _issue291_seed3")

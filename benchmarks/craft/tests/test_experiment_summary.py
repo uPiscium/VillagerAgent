@@ -38,6 +38,15 @@ def test_experiment_summary_combines_runtime_and_analysis_metrics(tmp_path):
     assert rows[0]["resolved_fact_count"] == 2
     assert rows[0]["hypothesis_resolved_count"] == 1
     assert rows[0]["action_candidate_executed_count"] == 1
+
+
+def test_experiment_summary_groups_structure_checkpoints(tmp_path):
+    run_name = "craft_dual_dag_structure2_seed3"
+    _write_run(tmp_path, run_name, leakage_values=["True"], seed=3, structures=[2])
+
+    rows = build_experiment_summary([run_name], result_root=tmp_path)
+
+    assert rows[0]["run_group"] == "craft_dual_dag"
     assert rows[0]["candidate_created_count"] == 3
     assert rows[0]["action_selection_suppression_attempt_count"] == 2
     assert rows[0]["action_selection_repeated_zero_signature_count"] == 3
