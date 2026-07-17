@@ -92,6 +92,28 @@ button, input { font: inherit; }
   .overview-grid { grid-template-columns: 1fr; }
 }
 
+.analysis-graph-view { display: grid; gap: 14px; }
+.authority-banner--analysis { border-color: #745b82; background: #211927; }
+.authority-banner--analysis strong { color: #dfbfee; }
+.analysis-filters { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 8px; }
+.analysis-filters label { display: grid; gap: 5px; color: #899b95; font-size: .65rem; }
+.analysis-filters select, .analysis-filters input { min-width: 0; border: 1px solid #3b504b; background: #131e1c; padding: 7px; color: #dbe5df; }
+.analysis-node { width: 240px; min-height: 130px; border: 1px solid #66556f; border-left: 4px solid #9877a8; background: #1c1720ee; padding: 12px; color: #e5ddec; box-shadow: 5px 6px 0 #09050c66; }
+.analysis-node--selected { outline: 2px solid #dfbfee; outline-offset: 3px; }
+.analysis-node > div { display: flex; align-items: center; gap: 7px; }
+.analysis-node strong { overflow: hidden; font-size: .63rem; text-overflow: ellipsis; white-space: nowrap; }
+.analysis-node p { max-height: 3.8em; overflow: hidden; margin: 12px 0; font-family: Georgia, serif; line-height: 1.25; overflow-wrap: anywhere; }
+.analysis-node small { display: block; margin-top: 5px; color: #988da0; font-size: .61rem; }
+.entity-icon { display: inline-block; width: 9px; height: 9px; transform: rotate(45deg); border: 1px solid currentColor; color: #9c83aa; }
+.entity-icon--task { color: #a8c77b; background: currentColor; }
+.entity-icon--action { color: #6eb7c4; background: currentColor; }
+.entity-icon--observation { color: #d29a66; background: currentColor; }
+.entity-icon--claim { color: #c987a6; background: currentColor; }
+.analysis-legend { display: flex; flex-wrap: wrap; gap: 14px; color: #899b95; font-size: .68rem; }
+.analysis-legend span { display: flex; align-items: center; gap: 7px; text-transform: capitalize; }
+@media (max-width: 1000px) { .analysis-filters { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 600px) { .analysis-filters { grid-template-columns: 1fr 1fr; } }
+
 .runtime-graph-view { display: grid; gap: 14px; }
 .authority-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid #607a4d; background: #17241d; padding: 14px 18px; }
 .authority-banner strong, .authority-banner span { display: block; }
