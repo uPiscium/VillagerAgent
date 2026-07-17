@@ -457,7 +457,13 @@ def _aggregate_progress_action_metrics(games: list[dict]) -> dict:
 
 def _progress_action_metrics(game: dict) -> dict:
     turns = game.get("turns", []) or []
-    progress_values = [_progress_value(turn.get("progress")) for turn in turns]
+    progress_values = []
+    previous_progress = 0.0
+    for turn in turns:
+        progress = turn.get("progress")
+        if _has_progress_value(progress):
+            previous_progress = _progress_value(progress)
+        progress_values.append(previous_progress)
     if not progress_values and "final_progress" in game:
         progress_values = [_metadata_float(game, "final_progress")]
     deltas = []
@@ -1100,6 +1106,15 @@ def _progress_value(progress) -> float:
         if isinstance(metrics, dict):
             return _metadata_float(metrics, "overall_progress")
     return 0.0
+
+
+def _has_progress_value(progress) -> bool:
+    if not isinstance(progress, dict):
+        return False
+    if "current" in progress or "overall_progress" in progress:
+        return True
+    metrics = progress.get("metrics")
+    return isinstance(metrics, dict) and "overall_progress" in metrics
 
 
 def _dual_dag_metrics(games: list[dict]) -> dict:

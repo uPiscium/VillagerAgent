@@ -26,6 +26,34 @@ def test_result_converter_writes_normalized_files(tmp_path):
     assert summary["runtime"]["reported_claim_count"] == 0
 
 
+def test_result_converter_carries_progress_across_measurement_errors(tmp_path):
+    config = {
+        "run": {"name": "test", "seed": 3, "structures": [0], "turns": 3},
+        "models": {"director": {"model": "d"}, "builder": {"model": "b"}},
+        "villageragent": {"enabled": True},
+    }
+    normalize_results(
+        config=config,
+        condition="villageragent_directors",
+        raw_result={
+            "structure_id": 0,
+            "turns": [
+                {"builder_action": {"action": "place"}, "progress": {"overall_progress": 0.25}},
+                {"builder_action": {"action": "place"}, "progress": {"error": "unavailable"}},
+                {"builder_action": {"action": "place"}, "progress": {"error": "unavailable"}},
+            ],
+            "final_progress": 0.25,
+            "completed": False,
+        },
+        output_dir=tmp_path,
+    )
+
+    runtime = json.loads((tmp_path / "normalized" / "summary.json").read_text())["runtime"]
+    assert runtime["progress_at_turn_20"] == 0.25
+    assert runtime["negative_progress_turn_count"] == 0
+    assert runtime["mean_progress_delta_per_turn"] == 0.25 / 3
+
+
 def test_result_converter_records_runtime_metrics(tmp_path):
     config = {
         "run": {"name": "test", "seed": 3, "structures": [0], "turns": 1},
