@@ -34,6 +34,12 @@ class RunState(str, Enum):
     INVALID = "invalid"
 
 
+class RuntimeGraphErrorCode(str, Enum):
+    RUN_NOT_FOUND = "run_not_found"
+    SNAPSHOT_MISSING = "runtime_snapshot_missing"
+    SNAPSHOT_INVALID = "runtime_snapshot_invalid"
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactWarning:
     code: ArtifactWarningCode
@@ -103,3 +109,54 @@ class RunManifest:
     error: str | None
     artifacts: dict[str, bool]
     warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphNode:
+    node_id: str
+    node_type: str
+    content: dict[str, object]
+    lifecycle: dict[str, object]
+    derived: dict[str, object]
+    provenance: dict[str, object]
+    extra: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphEdge:
+    edge_id: str
+    source_id: str
+    target_id: str
+    edge_type: str
+    metadata: dict[str, object]
+    extra: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraph:
+    authority: str
+    schema_version: str | None
+    snapshot_source: str
+    source_of_truth: str
+    summary: dict[str, object]
+    nodes: tuple[RuntimeGraphNode, ...]
+    edges: tuple[RuntimeGraphEdge, ...]
+    mutation_history: tuple[dict[str, object], ...]
+    warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphLoadError:
+    code: RuntimeGraphErrorCode
+    message: str
+    warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGraphLoadResult:
+    graph: RuntimeGraph | None = None
+    error: RuntimeGraphLoadError | None = None
+
+    def __post_init__(self) -> None:
+        if (self.graph is None) == (self.error is None):
+            raise ValueError("RuntimeGraphLoadResult must contain exactly one of graph or error")
