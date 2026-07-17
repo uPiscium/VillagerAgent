@@ -5,7 +5,8 @@ from enum import Enum
 from typing import TypeAlias
 
 
-JSONValue: TypeAlias = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
+JSONScalar: TypeAlias = None | bool | int | float | str
+JSONValue: TypeAlias = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 
 
 class ArtifactErrorCode(str, Enum):
@@ -22,6 +23,15 @@ class ArtifactErrorCode(str, Enum):
 class ArtifactWarningCode(str, Enum):
     PRODUCER_VERSIONED = "producer_versioned"
     FUTURE_SCHEMA_VERSION = "future_schema_version"
+
+
+class RunState(str, Enum):
+    LIVE = "live"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    PARTIAL = "partial"
+    INVALID = "invalid"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,3 +65,41 @@ class ArtifactLoadResult:
     @property
     def ok(self) -> bool:
         return self.artifact is not None
+
+
+@dataclass(frozen=True, slots=True)
+class RunTaskMetadata:
+    name: str = ""
+    task_type: str = ""
+    index: JSONScalar = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunSourceMetadata:
+    producer: str = ""
+    task_state: str = ""
+    snapshot: str = ""
+    source_of_truth: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RunWarning:
+    code: str
+    message: str
+    artifact: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunManifest:
+    run_id: str
+    name: str
+    state: RunState
+    started_at: str | None
+    mode: str
+    task: RunTaskMetadata
+    policy: str
+    source: RunSourceMetadata
+    progress: JSONScalar
+    error: str | None
+    artifacts: dict[str, bool]
+    warnings: tuple[RunWarning, ...] = ()
