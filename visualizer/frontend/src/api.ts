@@ -30,6 +30,37 @@ export type HealthResponse = {
   api_version: string;
 };
 
+export type RuntimeGraph = {
+  authority: "canonical_runtime_state";
+  schema_version: string | null;
+  snapshot_source: string;
+  source_of_truth: string;
+  summary: Record<string, unknown>;
+  nodes: RuntimeGraphNode[];
+  edges: RuntimeGraphEdge[];
+  mutation_history: Array<Record<string, unknown>>;
+  warnings: Array<{ code: string; message: string; artifact: string | null }>;
+};
+
+export type RuntimeGraphNode = {
+  node_id: string;
+  node_type: string;
+  content: Record<string, unknown>;
+  lifecycle: Record<string, unknown>;
+  derived: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  extra: Record<string, unknown>;
+};
+
+export type RuntimeGraphEdge = {
+  edge_id: string;
+  source_id: string;
+  target_id: string;
+  edge_type: string;
+  metadata: Record<string, unknown>;
+  extra: Record<string, unknown>;
+};
+
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
@@ -50,6 +81,10 @@ export async function fetchRuns(): Promise<RunManifest[]> {
 
 export async function fetchRun(runId: string): Promise<RunManifest> {
   return fetchJson<RunManifest>(`/api/v1/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchRuntimeGraph(runId: string): Promise<RuntimeGraph> {
+  return fetchJson<RuntimeGraph>(`/api/v1/runs/${encodeURIComponent(runId)}/runtime-graph`);
 }
 
 export function runPath(runId: string, section: RunSection): string {

@@ -91,3 +91,45 @@ button, input { font: inherit; }
   .run-header { align-items: start; flex-direction: column; }
   .overview-grid { grid-template-columns: 1fr; }
 }
+
+.runtime-graph-view { display: grid; gap: 14px; }
+.authority-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid #607a4d; background: #17241d; padding: 14px 18px; }
+.authority-banner strong, .authority-banner span { display: block; }
+.authority-banner strong { color: #d9eeae; font-family: Georgia, serif; font-weight: 400; }
+.authority-banner span { margin-top: 3px; color: #81958d; font-size: .7rem; }
+.authority-banner dl { display: flex; gap: 22px; margin: 0; }
+.authority-banner dl div { text-align: right; }
+.authority-banner dt { color: #789087; font-size: .62rem; text-transform: uppercase; }
+.authority-banner dd { margin: 3px 0 0; color: #d6e0da; font-family: ui-monospace, monospace; font-size: .7rem; }
+.graph-toolbar { display: flex; gap: 7px; flex-wrap: wrap; }
+.graph-toolbar button { border: 1px solid #3b504b; background: #14201e; padding: 7px 10px; color: #9eb0aa; cursor: pointer; font-size: .72rem; }
+.graph-toolbar button:hover, .graph-toolbar button:focus-visible, .graph-toolbar button[aria-pressed="true"] { border-color: #9abb71; color: #e5efdf; outline: none; }
+.graph-canvas { height: min(68vh, 720px); min-height: 460px; border: 1px solid #2d423e; background: #0c1513; }
+.runtime-node { width: 270px; min-height: 170px; overflow: hidden; border: 1px solid #50635d; border-left: 4px solid #879892; background: #14201ee8; padding: 13px; color: #dce5df; box-shadow: 6px 7px 0 #06100e66; }
+.runtime-node--selected { outline: 2px solid #c4e18b; outline-offset: 3px; }
+.runtime-node-heading { display: flex; align-items: center; gap: 7px; }
+.runtime-node-heading strong { font-size: .72rem; text-transform: uppercase; }
+.runtime-node-heading small { margin-left: auto; color: #7f918b; font-size: .61rem; }
+.runtime-node > p { max-height: 3.9em; overflow: hidden; margin: 11px 0; font-family: Georgia, serif; font-size: 1rem; line-height: 1.3; overflow-wrap: anywhere; }
+.runtime-node dl { display: grid; gap: 3px; margin: 0; }
+.runtime-node dl div { display: flex; justify-content: space-between; gap: 10px; font-size: .65rem; }
+.runtime-node dt { color: #71847e; }
+.runtime-node dd { margin: 0; text-align: right; }
+.blocked-by, .milestones { display: block; margin-top: 8px; overflow: hidden; color: #d49b72; font-size: .61rem; text-overflow: ellipsis; white-space: nowrap; }
+.milestones { color: #8da89e; }
+.status-icon { display: inline-block; width: 8px; height: 8px; border: 1px solid currentColor; border-radius: 50%; color: #8b9a95; }
+.status-icon--running { color: #69c4ca; background: currentColor; }
+.status-icon--success { color: #a5cf74; background: currentColor; }
+.status-icon--failure { color: #dd745f; background: currentColor; }
+.status-icon--blocked { color: #d8a064; background: currentColor; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 13px; color: #82958e; font-size: .67rem; text-transform: capitalize; }
+.graph-legend span { display: flex; align-items: center; gap: 5px; }
+.selection-note { margin: 0; color: #93a69f; font-size: .72rem; }
+.selection-note code { color: #cae49a; }
+
+@media (max-width: 760px) {
+  .authority-banner { align-items: flex-start; flex-direction: column; }
+  .authority-banner dl { width: 100%; justify-content: space-between; }
+  .authority-banner dl div { text-align: left; }
+  .graph-canvas { min-height: 520px; }
+}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import {
   BrowserRouter,
   NavLink,
@@ -19,6 +19,8 @@ import {
   type RunManifest,
   type RunSection,
 } from "./api";
+
+const RuntimeGraphView = lazy(() => import("./RuntimeGraphView").then((module) => ({ default: module.RuntimeGraphView })));
 
 const sections: Array<{ id: RunSection; label: string; artifact?: string }> = [
   { id: "overview", label: "Overview" },
@@ -151,6 +153,10 @@ function RunPage({ section }: { section: RunSection }) {
         <StateMessage title={`${sections.find((item) => item.id === section)?.label} unavailable`} detail="This run does not contain the required artifact." />
       ) : section === "overview" ? (
         <Overview run={run.data} />
+      ) : section === "runtime" ? (
+        <Suspense fallback={<StateMessage title="Loading Runtime DAG" detail="Loading graph rendering tools." />}>
+          <RuntimeGraphView runId={run.data.run_id} />
+        </Suspense>
       ) : (
         <section className="view-placeholder">
           <p className="eyebrow">{sections.find((item) => item.id === section)?.label}</p>
