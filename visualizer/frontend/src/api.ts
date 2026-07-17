@@ -61,6 +61,38 @@ export type RuntimeGraphEdge = {
   extra: Record<string, unknown>;
 };
 
+export type AnalysisGraph = {
+  authority: "posthoc_analysis_projection";
+  schema_version: string | null;
+  task_state_source: string;
+  summary: Record<string, unknown>;
+  schema: Record<string, unknown>;
+  mapping: Record<string, unknown>;
+  nodes: AnalysisGraphNode[];
+  edges: AnalysisGraphEdge[];
+  applied_filters: Record<string, string[]>;
+  warnings: Array<{ code: string; message: string; artifact: string | null }>;
+};
+
+export type AnalysisGraphNode = {
+  node_id: string;
+  node_type: string;
+  content: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  confidence: number | null;
+  runtime_task_id: string | null;
+  extra: Record<string, unknown>;
+};
+
+export type AnalysisGraphEdge = {
+  edge_id: string;
+  source_id: string;
+  target_id: string;
+  edge_type: string;
+  metadata: Record<string, unknown>;
+  extra: Record<string, unknown>;
+};
+
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
@@ -85,6 +117,10 @@ export async function fetchRun(runId: string): Promise<RunManifest> {
 
 export async function fetchRuntimeGraph(runId: string): Promise<RuntimeGraph> {
   return fetchJson<RuntimeGraph>(`/api/v1/runs/${encodeURIComponent(runId)}/runtime-graph`);
+}
+
+export async function fetchAnalysisGraph(runId: string): Promise<AnalysisGraph> {
+  return fetchJson<AnalysisGraph>(`/api/v1/runs/${encodeURIComponent(runId)}/analysis-graph`);
 }
 
 export function runPath(runId: string, section: RunSection): string {
