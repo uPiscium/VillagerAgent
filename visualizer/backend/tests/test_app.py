@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from villageragent_visualizer import ArtifactRepository, RunRepository, create_app
+from villageragent_visualizer import ArtifactRepository, RunRepository, RuntimeGraphService, create_app
 
 
 def test_health_endpoint_returns_fixed_dto(tmp_path: Path) -> None:
@@ -21,3 +21,4 @@ def test_health_endpoint_returns_fixed_dto(tmp_path: Path) -> None:
     assert app.state.artifacts.root == tmp_path.resolve()
     assert isinstance(app.state.runs, RunRepository)
     assert app.state.runs.root == tmp_path.resolve()
+    assert isinstance(app.state.runtime_graphs, RuntimeGraphService)
