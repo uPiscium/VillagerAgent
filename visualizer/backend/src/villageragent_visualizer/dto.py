@@ -46,6 +46,24 @@ class AnalysisGraphErrorCode(str, Enum):
     ARTIFACT_INVALID = "analysis_artifact_invalid"
 
 
+class TimelineErrorCode(str, Enum):
+    RUN_NOT_FOUND = "run_not_found"
+    ACTION_LOG_MISSING = "action_log_missing"
+    ACTION_LOG_INVALID = "action_log_invalid"
+
+
+class TimelineTiming(str, Enum):
+    EXACT = "exact"
+    DURATION_ONLY = "duration_only"
+    UNTIMED = "untimed"
+
+
+class TimelineActionStatus(str, Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactWarning:
     code: ArtifactWarningCode
@@ -226,3 +244,57 @@ class AnalysisGraphLoadResult:
     def __post_init__(self) -> None:
         if (self.graph is None) == (self.error is None):
             raise ValueError("AnalysisGraphLoadResult must contain exactly one of graph or error")
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineItem:
+    action_id: str
+    agent: str
+    record_index: int
+    tool: str
+    status: TimelineActionStatus
+    timing: TimelineTiming
+    start_time: str | None
+    end_time: str | None
+    duration_seconds: float | None
+    arguments: dict[str, object]
+    related_task_ids: tuple[str, ...]
+    observation_ids: tuple[str, ...]
+    claim_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineLane:
+    agent: str
+    items: tuple[TimelineItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineBounds:
+    start_time: str
+    end_time: str
+    timezone_kind: str
+
+
+@dataclass(frozen=True, slots=True)
+class Timeline:
+    lanes: tuple[TimelineLane, ...]
+    bounds: TimelineBounds | None
+    warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineLoadError:
+    code: TimelineErrorCode
+    message: str
+    warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineLoadResult:
+    timeline: Timeline | None = None
+    error: TimelineLoadError | None = None
+
+    def __post_init__(self) -> None:
+        if (self.timeline is None) == (self.error is None):
+            raise ValueError("TimelineLoadResult must contain exactly one of timeline or error")
