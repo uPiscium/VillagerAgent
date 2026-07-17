@@ -1,0 +1,4 @@
+backend/.venv/
+backend/.pytest_cache/
+frontend/dist/
+frontend/node_modules/

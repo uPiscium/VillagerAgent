@@ -48,8 +48,10 @@ port_*.txt
 .cache/meta_setting.json
 
 package-lock.json
+!visualizer/frontend/package-lock.json
 /.vscode/*
 *config*.json
+!visualizer/frontend/tsconfig.json
 
 /__pycache__/*
 tmp/*
