@@ -1,10 +1,18 @@
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
+from villageragent_visualizer.analysis_graph import AnalysisGraphService
 from villageragent_visualizer.artifacts import ArtifactRepository
-from villageragent_visualizer.dto import RunManifest, RuntimeGraph, RuntimeGraphErrorCode
+from villageragent_visualizer.dto import (
+    AnalysisGraph,
+    AnalysisGraphErrorCode,
+    AnalysisGraphFilters,
+    RunManifest,
+    RuntimeGraph,
+    RuntimeGraphErrorCode,
+)
 from villageragent_visualizer.runtime_graph import RuntimeGraphService
 from villageragent_visualizer.runs import RunRepository
 
@@ -15,6 +23,7 @@ def create_app(*, result_root: str | Path = "result") -> FastAPI:
     app.state.artifacts = ArtifactRepository(app.state.result_root)
     app.state.runs = RunRepository(app.state.result_root, artifacts=app.state.artifacts)
     app.state.runtime_graphs = RuntimeGraphService(artifacts=app.state.artifacts, runs=app.state.runs)
+    app.state.analysis_graphs = AnalysisGraphService(artifacts=app.state.artifacts, runs=app.state.runs)
 
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
@@ -43,6 +52,34 @@ def create_app(*, result_root: str | Path = "result") -> FastAPI:
             })
         if result.graph is None:
             raise HTTPException(status_code=500, detail="Runtime graph result is empty")
+        return result.graph
+
+    @app.get("/api/v1/runs/{run_id:path}/analysis-graph")
+    def get_analysis_graph(
+        run_id: str,
+        node_type: list[str] | None = Query(default=None),
+        edge_type: list[str] | None = Query(default=None),
+        agent: list[str] | None = Query(default=None),
+        task: list[str] | None = Query(default=None),
+    ) -> AnalysisGraph:
+        result = app.state.analysis_graphs.load(run_id, filters=AnalysisGraphFilters(
+            node_types=frozenset(node_type or ()),
+            edge_types=frozenset(edge_type or ()),
+            agents=frozenset(agent or ()),
+            task_ids=frozenset(task or ()),
+        ))
+        if result.error is not None:
+            status_code = 404 if result.error.code in {
+                AnalysisGraphErrorCode.RUN_NOT_FOUND,
+                AnalysisGraphErrorCode.ARTIFACT_MISSING,
+            } else 422
+            raise HTTPException(status_code=status_code, detail={
+                "code": result.error.code.value,
+                "message": result.error.message,
+                "warnings": [asdict(warning) for warning in result.error.warnings],
+            })
+        if result.graph is None:
+            raise HTTPException(status_code=500, detail="Analysis graph result is empty")
         return result.graph
 
     @app.get("/api/v1/runs/{run_id:path}")

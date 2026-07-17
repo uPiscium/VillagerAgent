@@ -40,6 +40,12 @@ class RuntimeGraphErrorCode(str, Enum):
     SNAPSHOT_INVALID = "runtime_snapshot_invalid"
 
 
+class AnalysisGraphErrorCode(str, Enum):
+    RUN_NOT_FOUND = "run_not_found"
+    ARTIFACT_MISSING = "analysis_artifact_missing"
+    ARTIFACT_INVALID = "analysis_artifact_invalid"
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactWarning:
     code: ArtifactWarningCode
@@ -160,3 +166,63 @@ class RuntimeGraphLoadResult:
     def __post_init__(self) -> None:
         if (self.graph is None) == (self.error is None):
             raise ValueError("RuntimeGraphLoadResult must contain exactly one of graph or error")
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisGraphFilters:
+    node_types: frozenset[str] = frozenset()
+    edge_types: frozenset[str] = frozenset()
+    agents: frozenset[str] = frozenset()
+    task_ids: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisGraphNode:
+    node_id: str
+    node_type: str
+    content: dict[str, object]
+    provenance: dict[str, object]
+    confidence: float | None
+    runtime_task_id: str | None
+    extra: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisGraphEdge:
+    edge_id: str
+    source_id: str
+    target_id: str
+    edge_type: str
+    metadata: dict[str, object]
+    extra: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisGraph:
+    authority: str
+    schema_version: str | None
+    task_state_source: str
+    summary: dict[str, object]
+    schema: dict[str, object]
+    mapping: dict[str, object]
+    nodes: tuple[AnalysisGraphNode, ...]
+    edges: tuple[AnalysisGraphEdge, ...]
+    applied_filters: dict[str, tuple[str, ...]]
+    warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisGraphLoadError:
+    code: AnalysisGraphErrorCode
+    message: str
+    warnings: tuple[RunWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisGraphLoadResult:
+    graph: AnalysisGraph | None = None
+    error: AnalysisGraphLoadError | None = None
+
+    def __post_init__(self) -> None:
+        if (self.graph is None) == (self.error is None):
+            raise ValueError("AnalysisGraphLoadResult must contain exactly one of graph or error")
