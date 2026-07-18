@@ -121,6 +121,14 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - The child checkpoints after TaskManager initialization, decomposition, running transitions, terminal transitions, normal completion, and exceptions. Lifecycle checkpoints prioritize the runtime task snapshot and current action log without repeatedly evaluating score.
 - The checkpoint and temporary file are removed after normalized artifact generation by default. `--retain-runtime-result` keeps the completed checkpoint for debugging and records `runtime_result_retained: true`.
 
+## Optional Runtime Event Journal
+
+- `RuntimeEventSink` is an optional UI-independent protocol. The default `NoOpRuntimeEventSink` performs no work and preserves existing runtime behavior.
+- `JsonlRuntimeEventRecorder` writes an append-only JSONL journal with schema version, run ID, monotonic sequence, stable event ID, event type, emitted/occurred timestamps, entity ID, source, and sanitized payload.
+- Writes are thread-safe, flushed, and optionally fsynced. Recorder and sink failures are isolated through `safe_emit_runtime_event` and must not stop runtime execution.
+- Registered lifecycle types cover run, task graph, candidate ranking, actual selection, assignment, and task status transitions. Instrumentation is added separately at the authoritative runtime locations.
+- Readers ignore an incomplete final line and preserve prior complete events. The internal journal is not the normalized public `events.jsonl` artifact.
+
 ## Versioning
 
 Artifacts that already expose a schema version keep it in the payload. Artifacts without `schema_version` should be treated as versioned by producer and repository commit until a future migration adds explicit versions.
