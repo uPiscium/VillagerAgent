@@ -26,6 +26,7 @@ _ARTIFACT_PATHS = {
     "analysis_graph": "dual_dag_artifact.json",
     "decision_support": "decision_support.json",
     "runtime_checkpoint": ".runtime/runtime_result.json",
+    "events": "events.jsonl",
 }
 _CANDIDATE_FILES = {
     "attempt.json",
@@ -37,6 +38,7 @@ _CANDIDATE_FILES = {
     "runtime_dual_dag_snapshot.json",
     "dual_dag_artifact.json",
     "decision_support.json",
+    "events.jsonl",
 }
 
 

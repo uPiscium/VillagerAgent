@@ -19,6 +19,7 @@ from villageragent_visualizer.dto import (
 )
 from villageragent_visualizer.runtime_graph import RuntimeGraphService
 from villageragent_visualizer.runs import RunRepository
+from villageragent_visualizer.replay import ReplayService
 from villageragent_visualizer.stream import SnapshotStreamManager
 from villageragent_visualizer.timeline import TimelineService
 
@@ -48,6 +49,7 @@ def create_app(
         poll_interval=stream_poll_interval,
         heartbeat_interval=stream_heartbeat_interval,
     )
+    app.state.replay = ReplayService(artifacts=app.state.artifacts, runs=app.state.runs)
 
     @app.websocket("/api/v1/runs/{run_id:path}/stream")
     async def stream_run(websocket: WebSocket, run_id: str) -> None:
@@ -76,6 +78,20 @@ def create_app(
     @app.get("/api/v1/runs")
     def list_runs() -> dict[str, tuple[RunManifest, ...]]:
         return {"runs": app.state.runs.list_runs()}
+
+    @app.get("/api/v1/runs/{run_id:path}/events")
+    def get_events(run_id: str, start_seq: int = Query(default=1, ge=1), limit: int = Query(default=200, ge=1, le=1000)) -> dict:
+        result = app.state.replay.events(run_id, start_seq=start_seq, limit=limit)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Event journal unavailable")
+        return result
+
+    @app.get("/api/v1/runs/{run_id:path}/replay-state")
+    def get_replay_state(run_id: str, seq: int | None = Query(default=None, ge=0)) -> dict:
+        result = app.state.replay.state(run_id, seq=seq)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Event replay unavailable")
+        return result
 
     @app.get("/api/v1/runs/{run_id:path}/runtime-graph")
     def get_runtime_graph(run_id: str) -> RuntimeGraph:
