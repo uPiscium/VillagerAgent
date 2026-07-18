@@ -20,6 +20,7 @@ from benchmarks.experiment_provenance import (
     write_provenance,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
+from benchmarks.minecraft.events import build_normalized_events
 from env.minecraft_dual_dag import (
     build_minecraft_dual_dag_artifact,
     build_minecraft_runtime_decision_support,
@@ -297,6 +298,25 @@ def _run_minecraft_experiment_attempt(
     selected_task = _find_task(artifact_tasks, runtime_selected_task_ids[0]) if runtime_selected_task_ids else None
     if not execute and ranked_tasks:
         selected_task = ranked_tasks[0]
+    safe_emit_runtime_event(
+        event_sink,
+        "run_timed_out" if timed_out else "run_failed" if error else "run_completed",
+        source="benchmarks.minecraft.experiment",
+        payload={"error": error, "error_type": error_type},
+    )
+    normalized_events = None
+    event_artifact_error = None
+    try:
+        normalized_events = build_normalized_events(
+            run_id=selected_run_name,
+            runtime_journal=runtime_event_path,
+            action_log=action_log,
+            analysis_artifact=artifact,
+        )
+        _write_jsonl(output_dir / "events.jsonl", normalized_events.events)
+    except Exception as exc:
+        normalized_events = None
+        event_artifact_error = type(exc).__name__
     summary = {
         "attempt_id": attempt_id,
         "run_name": selected_run_name,
@@ -348,6 +368,10 @@ def _run_minecraft_experiment_attempt(
         "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
         "runtime_process_killed": bool(runtime_process.get("killed", False)),
         "action_log_available": action_log_available,
+        "events_available": normalized_events is not None,
+        "event_count": len(normalized_events.events) if normalized_events is not None else None,
+        "event_warnings": list(normalized_events.warnings) if normalized_events is not None else [],
+        "event_artifact_error": event_artifact_error,
     }
     metrics = build_minecraft_metrics(
         summary=summary,
@@ -385,12 +409,6 @@ def _run_minecraft_experiment_attempt(
     elif execute:
         _sanitize_runtime_checkpoint(runtime_result_path, secret_values=secret_values)
     provenance_status = "timeout" if timed_out else "failure" if error else "success"
-    safe_emit_runtime_event(
-        event_sink,
-        "run_timed_out" if timed_out else "run_failed" if error else "run_completed",
-        source="benchmarks.minecraft.experiment",
-        payload={"error": error, "error_type": error_type},
-    )
     finalize_provenance(output_dir, status=provenance_status)
     finalize_run_directory(
         output_dir,
@@ -1111,6 +1129,12 @@ def _write_json(path: Path, payload) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")
+
+
+def _write_jsonl(path: Path, rows) -> None:
+    with path.open("w", encoding="utf-8") as stream:
+        for row in rows:
+            stream.write(json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n")
 
 
 if __name__ == "__main__":
