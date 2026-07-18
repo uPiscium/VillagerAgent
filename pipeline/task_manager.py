@@ -6,6 +6,7 @@ from pipeline.dual_dag_task_store import RuntimeTaskDAGStore
 from pipeline.task_prompt import *
 from pipeline.data_manager import DataManager
 from pipeline.retriever import Retriever
+from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_event
 from model.openai_models import OpenAILanguageModel
 from pipeline.utils import *
 from typing import Union
@@ -32,7 +33,7 @@ class TaskManager:
     update_task: str = "update"
     merge_task: str = "merge"
 
-    def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False):
+    def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False, event_sink=None):
         if method not in ("update", "merge"):
             raise ValueError(
                 f"Unsupported task manager method {method!r}; expected one of: update, merge"
@@ -53,6 +54,7 @@ class TaskManager:
         self.cache_enabled = cache_enabled
         self.task_description = None
         self.runtime_checkpoint = None
+        self.event_sink = event_sink or NoOpRuntimeEventSink()
 
         self.task_trace = []
         self.task_trace_description = []
@@ -160,6 +162,7 @@ class TaskManager:
         self.runtime_task_store.load_tasks_from_decomposition(task_list)
         self.sync_graph_from_dual_dag()
         self.checkpoint_runtime_state()
+        self.emit_task_graph_snapshot("TaskManager.decomposition")
 
     def sync_dual_dag_from_graph(self) -> None:
         self.runtime_task_store.load_tasks_from_graph(self.graph)
@@ -172,11 +175,19 @@ class TaskManager:
         self.runtime_task_store.mark_task_running(task.id, assigned_agents=assigned_agents)
         self.sync_graph_from_dual_dag()
         self.checkpoint_runtime_state()
+        self.emit_runtime_event("task_status_changed", entity_id=task.id, source="TaskManager.mark_task_running", payload={"status": Task.running, "assigned_agents": assigned_agents})
 
     def mark_task_status(self, task_id: str, status: str, feedback=None) -> None:
         self.runtime_task_store.mark_task_status(task_id, status, feedback=feedback)
         self.sync_graph_from_dual_dag()
         self.checkpoint_runtime_state()
+        self.emit_runtime_event("task_status_changed", entity_id=task_id, source="TaskManager.mark_task_status", payload={"status": status, "feedback": feedback})
+
+    def emit_runtime_event(self, event_type: str, *, entity_id=None, source: str, payload=None) -> None:
+        safe_emit_runtime_event(getattr(self, "event_sink", NoOpRuntimeEventSink()), event_type, entity_id=entity_id, source=source, payload=payload)
+
+    def emit_task_graph_snapshot(self, source: str) -> None:
+        self.emit_runtime_event("task_graph_snapshot", source=source, payload={"graph": self.runtime_task_store.snapshot()})
 
     def checkpoint_runtime_state(self) -> None:
         if not callable(self.runtime_checkpoint):
@@ -502,6 +513,7 @@ class TaskManager:
 
         self.sync_graph_from_dual_dag()
         self.checkpoint_runtime_state()
+        self.emit_task_graph_snapshot(f"TaskManager.merge_task.{strategy}")
         
         time_str = time.strftime("%Y_%m_%d_%H_%M_%S_graph", time.localtime())
         

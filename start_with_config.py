@@ -65,7 +65,7 @@ start_time = time.time()
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None):
     start_time = time.time()
 
     if task_type == "meta" and not task_scenario:
@@ -180,7 +180,10 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             start_time = time.time()
 
             # 启动TM
+            from pipeline.runtime_events import JsonlRuntimeEventRecorder, NoOpRuntimeEventSink
+            event_sink = JsonlRuntimeEventRecorder(runtime_event_path, run_id=task_name) if runtime_event_path else NoOpRuntimeEventSink()
             tm = TaskManager(silent=False, cache_enabled=False)
+            tm.event_sink = event_sink
             runtime_tm = tm
             tm.runtime_checkpoint = lambda: _write_runtime_result(
                 runtime_result_path,
@@ -240,7 +243,8 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
                                 dm_llm_config=dm_llm_config,
                                 base_agent_config=base_llm_config,
                                 all_tools=agent_tool,
-                                minecraft_dual_dag_config=minecraft_dual_dag_config)
+                                minecraft_dual_dag_config=minecraft_dual_dag_config,
+                                event_sink=event_sink)
 
             # response = ctrl.agent_list[0].llm.few_shot_generate_thoughts(system_prompt="", example_prompt="hi")
             # print(response)

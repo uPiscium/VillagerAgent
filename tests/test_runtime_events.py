@@ -48,6 +48,16 @@ def test_recorder_resumes_sequence_and_reader_ignores_incomplete_final_line(tmp_
     assert result.warnings == ("incomplete final event line ignored",)
 
 
+def test_existing_recorders_refresh_sequence_after_another_process_writes(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    parent = JsonlRuntimeEventRecorder(path, run_id="run", durable=False)
+    assert parent.emit("run_started", source="parent")["seq"] == 1
+    child = JsonlRuntimeEventRecorder(path, run_id="run", durable=False)
+    assert child.emit("task_selected", source="child")["seq"] == 2
+
+    assert parent.emit("run_completed", source="parent")["seq"] == 3
+
+
 def test_noop_and_failing_sink_never_change_caller_control_flow() -> None:
     assert safe_emit_runtime_event(NoOpRuntimeEventSink(), "run_started", source="test") is None
 

@@ -14,6 +14,7 @@ from pipeline.data_manager import DataManager
 from pipeline.agent import BaseAgent
 from pipeline.utils import *
 from pipeline.controller_prompt import *
+from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_event
 from env.env import VillagerBench
 from env.minecraft_dual_dag import rank_minecraft_runtime_tasks
 import logging
@@ -44,7 +45,8 @@ class GlobalController:
     '''
     def __init__(self, llm_config: dict, task_manager: TaskManager, data_manager: DataManager, env: VillagerBench,
                  silent: bool = False, max_workers=4, tm_llm_config: dict = None, dm_llm_config: dict = None,
-                 base_agent_config: dict = None, all_tools=[], minecraft_dual_dag_config: dict | None = None):
+                 base_agent_config: dict = None, all_tools=[], minecraft_dual_dag_config: dict | None = None,
+                 event_sink=None):
 
         self.task_manager = task_manager
         tm_llm_config = llm_config.copy() if tm_llm_config is None else tm_llm_config
@@ -88,6 +90,11 @@ class GlobalController:
 
         self.shutdown = False
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
+        self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
+        self.task_manager.event_sink = self.event_sink
+
+    def emit_runtime_event(self, event_type, *, entity_id=None, source, payload=None):
+        safe_emit_runtime_event(getattr(self, "event_sink", NoOpRuntimeEventSink()), event_type, entity_id=entity_id, source=source, payload=payload)
 
     def validate_assignments(self, result: [dict]):
         validated_assignments = []
@@ -165,6 +172,7 @@ class GlobalController:
                     task=task_instance,
                     agents=list(agent_instances),
                 ))
+            self.emit_runtime_event("task_assigned", entity_id=task_instance.id, source="GlobalController.execute_assignments", payload={"agents": agent_names, "required_agent_count": task_instance.number})
         
             name_list = ", ".join(agent_names)
             self.logger.info(f"Agent(s) {name_list} assigned to do task {task_instance.description}")
@@ -354,6 +362,7 @@ class GlobalController:
             self.logger.info(
                 f"Task {task.description} is assigned to {[agent.name for agent in selected_agents]}"
             )
+            self.emit_runtime_event("task_selected", entity_id=task.id, source="GlobalController.assign_runnable_tasks", payload={"agents": [agent.name for agent in selected_agents], "selection_policy": getattr(self, "minecraft_dual_dag_config", {}).get("task_selection_policy", "original")})
             self.execute_assignments(validated_assignments)
             assigned_count += 1
 
@@ -431,6 +440,7 @@ class GlobalController:
                 "Dual-DAG recommended task %s for runtime selection",
                 support.get("recommended_task_id"),
             )
+        self.emit_runtime_event("task_candidates_ranked", source="GlobalController._rank_task_list_with_minecraft_dual_dag", payload={"candidate_task_ids": [task.id for task in task_list], "ranked_task_ids": [task.id for task in ranked.get("tasks", task_list)], "enabled": bool(ranked.get("enabled"))})
         return ranked.get("tasks", task_list)
 
     def run(self):
