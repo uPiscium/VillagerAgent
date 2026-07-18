@@ -114,6 +114,44 @@ button, input { font: inherit; }
 @media (max-width: 1000px) { .analysis-filters { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 600px) { .analysis-filters { grid-template-columns: 1fr 1fr; } }
 
+.timeline-view { display: grid; gap: 16px; }
+.timeline-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.timeline-heading h2 { margin: 0; color: #eef3e8; font-family: Georgia, serif; font-size: 2rem; font-weight: 400; }
+.timeline-heading label { display: grid; gap: 5px; color: #8fa19b; font-size: .7rem; }
+.time-ruler-summary { display: flex; justify-content: space-between; gap: 20px; border-bottom: 1px solid #354943; padding: 8px 2px; color: #9baca6; font-family: ui-monospace, monospace; font-size: .68rem; }
+.time-ruler-summary strong { color: #c0d88e; font-weight: 400; }
+.timing-notice { border: 1px solid #66543e; background: #211c16; padding: 10px 13px; color: #c5a980; font-size: .75rem; }
+.timeline-scroll { overflow-x: auto; border: 1px solid #2c403c; background: #0e1715; }
+.timeline-chart { min-width: 900px; transition: width .2s ease; }
+.timeline-lane { display: grid; grid-template-columns: 150px minmax(0, 1fr); min-height: 96px; border-bottom: 1px solid #253734; }
+.lane-label { display: grid; grid-template-columns: 14px 1fr; align-content: center; border: 0; border-right: 1px solid #30423f; background: #141f1d; padding: 12px; color: #dbe4de; text-align: left; cursor: pointer; }
+.lane-label small { grid-column: 2; margin-top: 4px; color: #778b84; font-size: .62rem; }
+.lane-content { display: grid; gap: 8px; padding: 10px 14px; }
+.exact-track { position: relative; min-height: 45px; background: repeating-linear-gradient(90deg, transparent 0, transparent calc(10% - 1px), #293b371f 10%); }
+.duration-row, .untimed-section > div { display: flex; gap: 7px; align-items: stretch; }
+.action-bar { min-width: 70px; overflow: hidden; border: 1px solid #4c6861; background: #1c302c; padding: 6px 8px; color: #dfe8e2; text-align: left; cursor: pointer; }
+.exact-track .action-bar { position: absolute; top: 3px; height: 39px; padding: 4px 6px; }
+.action-bar strong, .action-bar span, .action-bar small, .action-bar em { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-bar strong { font-size: .68rem; }
+.action-bar span, .action-bar small { color: #8fa49d; font-size: .57rem; text-transform: uppercase; }
+.action-bar em { margin-top: 4px; color: #83968f; font-size: .54rem; font-style: normal; }
+.exact-track .action-bar em { display: none; }
+.action-bar--failure { border-color: #9a5548; background: #3a201c; }
+.action-bar--unknown { border-style: dashed; }
+.action-bar--duration_only { border-color: #7b6a46; background: #2b271a; }
+.action-bar--untimed { border-color: #555d68; background: #20242a; }
+.action-bar--selected, .action-bar:focus-visible { outline: 2px solid #c7e28f; outline-offset: 2px; }
+.untimed-section { border: 1px solid #303f49; background: #12191e; padding: 14px; }
+.untimed-section h3 { margin: 0 0 12px; color: #dce5df; font-size: .82rem; font-weight: 500; }
+.untimed-section h3 span { margin-left: 6px; color: #81928d; }
+.untimed-section p { margin: 0; color: #82938d; font-size: .72rem; }
+.timeline-legend { display: flex; gap: 14px; color: #84968f; font-size: .68rem; }
+.timeline-legend span { display: flex; align-items: center; gap: 6px; }
+.timing-swatch { width: 16px; height: 7px; border: 1px solid #4c6861; background: #1c302c; }
+.timing-swatch--duration_only { border-color: #7b6a46; background: #2b271a; }
+.timing-swatch--untimed { border-color: #555d68; background: #20242a; }
+@media (max-width: 600px) { .timeline-heading { align-items: start; flex-direction: column; } .timeline-lane { grid-template-columns: 115px minmax(0, 1fr); } }
+
 .runtime-graph-view { display: grid; gap: 14px; }
 .authority-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid #607a4d; background: #17241d; padding: 14px 18px; }
 .authority-banner strong, .authority-banner span { display: block; }
