@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeGraph, RuntimeGraphNode } from "./api";
-import { layoutRuntimeGraph, runtimeNodeData } from "./RuntimeGraphView";
+import {
+  layoutRuntimeGraph,
+  runtimeInspectorEntity,
+  runtimeNodeData,
+} from "./RuntimeGraphView";
 
 const taskNode: RuntimeGraphNode = {
   node_id: "runtime:task:1",
   node_type: "runtime_task",
   content: {
-    description: "Collect enough oak logs to build a shelter with a deliberately long task description",
+    description:
+      "Collect enough oak logs to build a shelter with a deliberately long task description",
     milestones: ["find forest", "collect logs"],
   },
   lifecycle: {
@@ -37,7 +42,11 @@ describe("RuntimeGraphView", () => {
   });
 
   it("creates stable directed edges and changes layered orientation", async () => {
-    const second = { ...taskNode, node_id: "runtime:task:2", content: { description: "Build shelter" } };
+    const second = {
+      ...taskNode,
+      node_id: "runtime:task:2",
+      content: { description: "Build shelter" },
+    };
     const graph: RuntimeGraph = {
       authority: "canonical_runtime_state",
       schema_version: "1.0.0",
@@ -45,14 +54,16 @@ describe("RuntimeGraphView", () => {
       source_of_truth: "runtime_task_dag",
       summary: {},
       nodes: [taskNode, second],
-      edges: [{
-        edge_id: "runtime:edge:1",
-        source_id: taskNode.node_id,
-        target_id: second.node_id,
-        edge_type: "precedes_task",
-        metadata: {},
-        extra: {},
-      }],
+      edges: [
+        {
+          edge_id: "runtime:edge:1",
+          source_id: taskNode.node_id,
+          target_id: second.node_id,
+          edge_type: "precedes_task",
+          metadata: {},
+          extra: {},
+        },
+      ],
       mutation_history: [],
       warnings: [],
     };
@@ -60,9 +71,49 @@ describe("RuntimeGraphView", () => {
     const horizontal = await layoutRuntimeGraph(graph, "RIGHT");
     const vertical = await layoutRuntimeGraph(graph, "DOWN");
 
-    expect(horizontal.edges[0]).toMatchObject({ id: "runtime:edge:1", source: "runtime:task:1", target: "runtime:task:2" });
-    expect(horizontal.nodes[1].position.x).toBeGreaterThan(horizontal.nodes[0].position.x);
-    expect(vertical.nodes[1].position.y).toBeGreaterThan(vertical.nodes[0].position.y);
+    expect(horizontal.edges[0]).toMatchObject({
+      id: "runtime:edge:1",
+      source: "runtime:task:1",
+      target: "runtime:task:2",
+    });
+    expect(horizontal.nodes[1].position.x).toBeGreaterThan(
+      horizontal.nodes[0].position.x,
+    );
+    expect(vertical.nodes[1].position.y).toBeGreaterThan(
+      vertical.nodes[0].position.y,
+    );
     expect(horizontal.nodes[0].ariaLabel).toContain("dependency-ready no");
+  });
+
+  it("adapts sanitized runtime nodes and edges to the shared Inspector", () => {
+    const graph: RuntimeGraph = {
+      authority: "canonical_runtime_state",
+      schema_version: "1",
+      snapshot_source: "runtime",
+      source_of_truth: "runtime_task_dag",
+      summary: {},
+      nodes: [taskNode],
+      edges: [
+        {
+          edge_id: "edge-1",
+          source_id: "runtime:task:0",
+          target_id: taskNode.node_id,
+          edge_type: "precedes_task",
+          metadata: {},
+          extra: {},
+        },
+      ],
+      mutation_history: [],
+      warnings: [],
+    };
+    expect(runtimeInspectorEntity(graph, taskNode.node_id)).toMatchObject({
+      id: taskNode.node_id,
+      type: "runtime_task",
+      status: "future_status",
+    });
+    expect(
+      runtimeInspectorEntity(graph, "edge-1")?.related.map((item) => item.id),
+    ).toEqual(["runtime:task:0", taskNode.node_id]);
+    expect(runtimeInspectorEntity(graph, "missing")).toBeNull();
   });
 });

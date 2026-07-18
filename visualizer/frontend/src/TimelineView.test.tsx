@@ -5,6 +5,7 @@ import {
   orderedTimelineItems,
   parseTimestamp,
   timelineGeometry,
+  timelineInspectorEntity,
 } from "./TimelineView";
 import type { Timeline, TimelineItem } from "./api";
 
@@ -107,5 +108,30 @@ describe("TimelineView", () => {
     expect(durationWidth(zero, [zero])).toBe("8%");
     expect(parseTimestamp("not-a-time")).toBeNull();
     expect(Number.isFinite(parseTimestamp("2026-07-17 10:00:00"))).toBe(true);
+  });
+
+  it("adapts timeline actions and cross-view relations to the shared Inspector", () => {
+    const item = {
+      ...exact(
+        "action-1",
+        "Alice",
+        "2026-07-17 10:00:00",
+        "2026-07-17 10:00:02",
+      ),
+      related_task_ids: ["task-1"],
+      observation_ids: ["observation-1"],
+      claim_ids: ["claim-1"],
+    };
+    const inspected = timelineInspectorEntity(
+      { ...base, lanes: [{ agent: "Alice", items: [item] }] },
+      "action-1",
+    );
+    expect(inspected).toMatchObject({ id: "action-1", status: "success" });
+    expect(inspected?.related.map((related) => related.view)).toEqual([
+      "runtime",
+      "analysis",
+      "analysis",
+    ]);
+    expect(timelineInspectorEntity(base, "missing")).toBeNull();
   });
 });

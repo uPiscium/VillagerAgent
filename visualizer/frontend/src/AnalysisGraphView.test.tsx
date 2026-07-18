@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  analysisInspectorEntity,
   filterAnalysisGraph,
   layoutAnalysisGraph,
   MAX_ANALYSIS_EDGES,
@@ -187,5 +188,21 @@ describe("AnalysisGraphView", () => {
     );
     expect(MAX_ANALYSIS_NODES).toBe(200);
     expect(MAX_ANALYSIS_EDGES).toBe(500);
+  });
+
+  it("links analysis entities to runtime and adjacent analysis entities", () => {
+    const inspected = analysisInspectorEntity(graph, "task-1");
+    expect(inspected).toMatchObject({
+      id: "task-1",
+      type: "minecraft_task",
+      confidence: 1,
+    });
+    expect(inspected?.related).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "runtime:task:1", view: "runtime" }),
+        expect.objectContaining({ id: "action-1", view: "analysis" }),
+      ]),
+    );
+    expect(analysisInspectorEntity(graph, "missing")).toBeNull();
   });
 });
