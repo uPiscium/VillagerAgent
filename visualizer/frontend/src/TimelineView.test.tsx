@@ -131,6 +131,7 @@ describe("TimelineView", () => {
       "runtime",
       "analysis",
       "analysis",
+      "world",
     ]);
     expect(timelineInspectorEntity(base, "missing")).toBeNull();
   });

@@ -42,6 +42,9 @@ const TimelineView = lazy(() =>
 const ReplayView = lazy(() =>
   import("./ReplayView").then((module) => ({ default: module.ReplayView })),
 );
+const WorldView = lazy(() =>
+  import("./WorldView").then((module) => ({ default: module.WorldView })),
+);
 
 const sections: Array<{ id: RunSection; label: string; artifact?: string }> = [
   { id: "overview", label: "Overview" },
@@ -49,6 +52,7 @@ const sections: Array<{ id: RunSection; label: string; artifact?: string }> = [
   { id: "analysis", label: "Analysis DAG", artifact: "analysis_graph" },
   { id: "timeline", label: "Timeline", artifact: "action_log" },
   { id: "replay", label: "Replay", artifact: "events" },
+  { id: "world", label: "World", artifact: "optional external viewer" },
 ];
 
 export default function App() {
@@ -86,6 +90,10 @@ export default function App() {
             <Route
               path="runs/:runId/replay"
               element={<RunPage section="replay" />}
+            />
+            <Route
+              path="runs/:runId/world"
+              element={<RunPage section="world" />}
             />
             <Route path="*" element={<Navigate to="/runs" replace />} />
           </Route>
@@ -305,6 +313,17 @@ function RunPage({ section }: { section: RunSection }) {
         >
           <ReplayView runId={run.data.run_id} />
         </Suspense>
+      ) : section === "world" ? (
+        <Suspense
+          fallback={
+            <StateMessage
+              title="Loading World View"
+              detail="Checking the optional external viewer."
+            />
+          }
+        >
+          <WorldView runId={run.data.run_id} />
+        </Suspense>
       ) : (
         <section className="view-placeholder">
           <p className="eyebrow">
@@ -392,6 +411,7 @@ function sectionAvailable(run: RunManifest, section: RunSection): boolean {
     );
   if (section === "analysis") return Boolean(run.artifacts.analysis_graph);
   if (section === "timeline") return Boolean(run.artifacts.action_log);
+  if (section === "world") return true;
   return Boolean(run.artifacts.events);
 }
 

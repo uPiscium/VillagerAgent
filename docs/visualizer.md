@@ -75,4 +75,5 @@ The service defaults to loopback and has no authentication. Do not expose a resu
 - Backend unavailable in development: confirm port 8765 is free and both child processes from `visualizer-dev` are running.
 - Large graph warning: narrow Analysis DAG node, edge, agent, confidence, or text filters before layout.
 
-The current scope excludes live updates, normalized event recording, replay, multi-run comparison, and world state rendering.
+Optional extensions provide resilient live snapshots, normalized event replay, and descriptive multi-run comparison without changing runtime authority. They remain disabled or unavailable when their source artifacts are absent.
+An external read-only world camera can be explicitly configured; see [World View feasibility](visualizer_world_view.md). It remains a separate process and optional dependency. Bot control, runtime mutation, evaluator state, and unauthenticated automatic world-server exposure remain out of scope.

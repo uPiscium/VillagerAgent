@@ -189,6 +189,12 @@ export type Comparison = {
   warnings: Array<{ code: string; message: string }>;
   semantics: { missing_values: "null"; inference: "descriptive_only" };
 };
+export type WorldViewConfig = {
+  enabled: boolean;
+  url: string | null;
+  remote: boolean;
+  reason: string | null;
+};
 
 export class ApiError extends Error {
   constructor(
@@ -256,6 +262,10 @@ export async function fetchComparison(runIds: string[]): Promise<Comparison> {
   return fetchJson<Comparison>(`/api/v1/compare?${query}`);
 }
 
+export async function fetchWorldViewConfig(): Promise<WorldViewConfig> {
+  return fetchJson<WorldViewConfig>("/api/v1/world-view/config");
+}
+
 export function runPath(runId: string, section: RunSection): string {
   return `/runs/${encodeURIComponent(runId)}/${section}`;
 }
@@ -265,7 +275,8 @@ export type RunSection =
   | "runtime"
   | "analysis"
   | "timeline"
-  | "replay";
+  | "replay"
+  | "world";
 
 async function fetchJson<T>(url: string): Promise<T> {
   let response: Response;
