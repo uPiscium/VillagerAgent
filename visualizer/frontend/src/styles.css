@@ -171,6 +171,14 @@ button, input { font: inherit; }
 .inspector-raw > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .inspector-raw pre { max-height: 340px; overflow: auto; border: 1px solid #293b36; background: #0b1210; padding: 10px; }
 
+.live-status { display: flex; align-items: center; gap: 9px; border: 1px solid #3f5750; background: #121e1b; padding: 8px 11px; color: #cfddd7; font-size: .7rem; }
+.live-status > span { width: 8px; height: 8px; border-radius: 50%; background: #86c57c; box-shadow: 0 0 10px #86c57c88; }
+.live-status small { color: #82958e; }
+.live-status button { margin-left: auto; border: 1px solid #566c65; background: #1a2925; padding: 5px 8px; color: #d4dfda; cursor: pointer; }
+.live-status--reconnecting > span, .live-status--stale > span { background: #d0a65f; box-shadow: none; }
+.live-status--disconnected > span, .live-status--failed > span, .live-status--timed_out > span { background: #bf6658; box-shadow: none; }
+.live-status--completed > span { background: #8ebd78; box-shadow: none; }
+
 .runtime-graph-view { display: grid; gap: 14px; }
 .authority-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid #607a4d; background: #17241d; padding: 14px 18px; }
 .authority-banner strong, .authority-banner span { display: block; }
