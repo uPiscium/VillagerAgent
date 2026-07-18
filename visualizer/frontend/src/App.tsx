@@ -22,6 +22,7 @@ import {
 
 const RuntimeGraphView = lazy(() => import("./RuntimeGraphView").then((module) => ({ default: module.RuntimeGraphView })));
 const AnalysisGraphView = lazy(() => import("./AnalysisGraphView").then((module) => ({ default: module.AnalysisGraphView })));
+const TimelineView = lazy(() => import("./TimelineView").then((module) => ({ default: module.TimelineView })));
 
 const sections: Array<{ id: RunSection; label: string; artifact?: string }> = [
   { id: "overview", label: "Overview" },
@@ -161,6 +162,10 @@ function RunPage({ section }: { section: RunSection }) {
       ) : section === "analysis" ? (
         <Suspense fallback={<StateMessage title="Loading Analysis DAG" detail="Loading graph rendering tools." />}>
           <AnalysisGraphView runId={run.data.run_id} />
+        </Suspense>
+      ) : section === "timeline" ? (
+        <Suspense fallback={<StateMessage title="Loading Timeline" detail="Loading action timeline tools." />}>
+          <TimelineView runId={run.data.run_id} />
         </Suspense>
       ) : (
         <section className="view-placeholder">

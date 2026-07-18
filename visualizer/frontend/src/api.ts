@@ -93,6 +93,30 @@ export type AnalysisGraphEdge = {
   extra: Record<string, unknown>;
 };
 
+export type Timeline = {
+  lanes: TimelineLane[];
+  bounds: { start_time: string; end_time: string; timezone_kind: string } | null;
+  warnings: Array<{ code: string; message: string; artifact: string | null }>;
+};
+
+export type TimelineLane = { agent: string; items: TimelineItem[] };
+
+export type TimelineItem = {
+  action_id: string;
+  agent: string;
+  record_index: number;
+  tool: string;
+  status: "success" | "failure" | "unknown";
+  timing: "exact" | "duration_only" | "untimed";
+  start_time: string | null;
+  end_time: string | null;
+  duration_seconds: number | null;
+  arguments: Record<string, unknown>;
+  related_task_ids: string[];
+  observation_ids: string[];
+  claim_ids: string[];
+};
+
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
@@ -121,6 +145,10 @@ export async function fetchRuntimeGraph(runId: string): Promise<RuntimeGraph> {
 
 export async function fetchAnalysisGraph(runId: string): Promise<AnalysisGraph> {
   return fetchJson<AnalysisGraph>(`/api/v1/runs/${encodeURIComponent(runId)}/analysis-graph`);
+}
+
+export async function fetchTimeline(runId: string): Promise<Timeline> {
+  return fetchJson<Timeline>(`/api/v1/runs/${encodeURIComponent(runId)}/timeline`);
 }
 
 export function runPath(runId: string, section: RunSection): string {
