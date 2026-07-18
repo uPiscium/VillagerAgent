@@ -100,6 +100,7 @@ class JsonlRuntimeEventRecorder:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         with self._lock:
+            self._sequence = max(self._sequence, _last_sequence(self.path))
             self._sequence += 1
             event = build_runtime_event(
                 run_id=self.run_id,

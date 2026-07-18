@@ -27,6 +27,7 @@ from env.minecraft_dual_dag import (
     sanitize_public_value,
 )
 from pipeline.dual_dag_task_store import RuntimeTaskDAGStore
+from pipeline.runtime_events import JsonlRuntimeEventRecorder, NoOpRuntimeEventSink, RuntimeEventSink, safe_emit_runtime_event
 from type_define.graph import Graph, Task
 
 
@@ -64,6 +65,7 @@ def run_minecraft_experiment(
     retain_runtime_result: bool = False,
     command_text: str | None = None,
     overwrite: bool = False,
+    event_sink: RuntimeEventSink | None = None,
 ) -> dict:
     attempt_state: dict = {}
     try:
@@ -79,12 +81,19 @@ def run_minecraft_experiment(
             retain_runtime_result=retain_runtime_result,
             command_text=command_text,
             overwrite=overwrite,
+            event_sink=event_sink or NoOpRuntimeEventSink(),
             attempt_state=attempt_state,
         )
     except BaseException as exc:
         if attempt_state:
             attempt_state["error"] = str(exc)
             attempt_state["error_type"] = exc.__class__.__name__
+            safe_emit_runtime_event(
+                attempt_state.get("event_sink", NoOpRuntimeEventSink()),
+                "run_timed_out" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "run_failed",
+                source="benchmarks.minecraft.experiment",
+                payload={"error": str(exc), "error_type": exc.__class__.__name__},
+            )
             finalize_provenance(
                 attempt_state["output_dir"],
                 status="timeout" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "failure",
@@ -116,6 +125,7 @@ def _run_minecraft_experiment_attempt(
     retain_runtime_result: bool,
     command_text: str | None,
     overwrite: bool,
+    event_sink: RuntimeEventSink,
     attempt_state: dict,
 ) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
@@ -139,7 +149,9 @@ def _run_minecraft_experiment_attempt(
         "secret_values": secret_values,
         "execute": execute,
         "run_name": selected_run_name,
+        "event_sink": event_sink,
     })
+    safe_emit_runtime_event(event_sink, "run_started", source="benchmarks.minecraft.experiment", payload={"mode": "execute" if execute else "dry_run"})
     runtime_llm_config = {}
     requested_policy = task_selection_policy or launch_config.get("task_selection_policy")
     effective_settings = _minecraft_effective_settings(
@@ -212,6 +224,7 @@ def _run_minecraft_experiment_attempt(
     timed_out = False
     runtime_process = {}
     runtime_result_path = output_dir / ".runtime" / "runtime_result.json"
+    runtime_event_path = event_sink.path if isinstance(event_sink, JsonlRuntimeEventRecorder) else None
 
     if execute:
         _remove_runtime_result(runtime_result_path)
@@ -221,6 +234,7 @@ def _run_minecraft_experiment_attempt(
                 dual_dag_config=dual_dag_config,
                 timeout_seconds=execute_timeout_seconds,
                 runtime_result_path=runtime_result_path,
+                runtime_event_path=runtime_event_path,
             ) or {}
         except MinecraftExecuteTimeoutError as exc:
             error = str(exc)
@@ -371,6 +385,12 @@ def _run_minecraft_experiment_attempt(
     elif execute:
         _sanitize_runtime_checkpoint(runtime_result_path, secret_values=secret_values)
     provenance_status = "timeout" if timed_out else "failure" if error else "success"
+    safe_emit_runtime_event(
+        event_sink,
+        "run_timed_out" if timed_out else "run_failed" if error else "run_completed",
+        source="benchmarks.minecraft.experiment",
+        payload={"error": error, "error_type": error_type},
+    )
     finalize_provenance(output_dir, status=provenance_status)
     finalize_run_directory(
         output_dir,
@@ -597,6 +617,7 @@ def _execute_real_runtime(
     *,
     dual_dag_config: dict,
     runtime_result_path: Path,
+    runtime_event_path: Path | None = None,
 ) -> dict:
     from start_with_config import run
     from model.ollama_config import make_ollama_llm_config
@@ -623,6 +644,7 @@ def _execute_real_runtime(
         minecraft_dual_dag_config=dual_dag_config,
         runtime_result_path=str(runtime_result_path),
         task_scenario=config.get("task_scenario"),
+        runtime_event_path=str(runtime_event_path) if runtime_event_path is not None else None,
     )
 
 
@@ -632,12 +654,13 @@ def _execute_real_runtime_bounded(
     dual_dag_config: dict,
     timeout_seconds: float | None,
     runtime_result_path: Path,
+    runtime_event_path: Path | None = None,
 ) -> dict:
     context = multiprocessing.get_context()
     status_queue = context.Queue()
     process = context.Process(
         target=_runtime_process_entry,
-        args=(launch_config, dual_dag_config, str(runtime_result_path), status_queue),
+        args=(launch_config, dual_dag_config, str(runtime_result_path), str(runtime_event_path) if runtime_event_path is not None else None, status_queue),
     )
     process_started = False
     process_group_id = None
@@ -696,6 +719,7 @@ def _runtime_process_entry(
     launch_config: dict,
     dual_dag_config: dict,
     runtime_result_path: str,
+    runtime_event_path: str | None,
     status_queue,
 ) -> None:
     if hasattr(os, "setsid"):
@@ -705,6 +729,7 @@ def _runtime_process_entry(
             launch_config,
             dual_dag_config=dual_dag_config,
             runtime_result_path=Path(runtime_result_path),
+            runtime_event_path=Path(runtime_event_path) if runtime_event_path is not None else None,
         ) or {}
         result_path = Path(runtime_result_path)
         if result or not result_path.exists():
