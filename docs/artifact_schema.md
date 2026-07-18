@@ -85,6 +85,14 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Other fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
 - Execute process fields are `runtime_process_isolated`, `runtime_process_exit_code`, `runtime_process_terminated`, and `runtime_process_killed`. Timeout summaries are written only after the child is no longer alive.
 
+## `events.jsonl`
+
+- Producer: optional Minecraft normalized event producer combining the internal runtime journal, `action_log.json`, and observation/claim entities from `dual_dag_artifact.json`.
+- Runtime events retain their original event ID and sequence under `provenance`; the public file receives stable contiguous normalized sequences after ordering.
+- Events with valid `occurred_at` timestamps are ordered chronologically. Equal or unknown times retain stable producer order, and unknown timing remains `null`.
+- Action log rows produce `action_recorded`, never fabricated `action_started` or `action_completed` hooks. Observation and claim projection entities produce at most one event per stable entity ID.
+- Payloads are sanitized. An incomplete runtime journal tail becomes a warning, and producer failure leaves all existing normalized artifacts and run results intact.
+
 ## Provenance Files
 
 - Producers: the CRAFT, C-WAH, and Minecraft single-run and matrix harnesses through `benchmarks.experiment_provenance`.
