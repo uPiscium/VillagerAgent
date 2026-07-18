@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from villageragent_visualizer.analysis_graph import AnalysisGraphService
+from villageragent_visualizer.comparison import ComparisonService
 from villageragent_visualizer.artifacts import ArtifactRepository
 from villageragent_visualizer.dto import (
     AnalysisGraph,
@@ -50,6 +51,7 @@ def create_app(
         heartbeat_interval=stream_heartbeat_interval,
     )
     app.state.replay = ReplayService(artifacts=app.state.artifacts, runs=app.state.runs)
+    app.state.comparison = ComparisonService(artifacts=app.state.artifacts, runs=app.state.runs)
 
     @app.websocket("/api/v1/runs/{run_id:path}/stream")
     async def stream_run(websocket: WebSocket, run_id: str) -> None:
@@ -78,6 +80,10 @@ def create_app(
     @app.get("/api/v1/runs")
     def list_runs() -> dict[str, tuple[RunManifest, ...]]:
         return {"runs": app.state.runs.list_runs()}
+
+    @app.get("/api/v1/compare")
+    def compare_runs(run: list[str] = Query(default=[])) -> dict:
+        return app.state.comparison.compare(run)
 
     @app.get("/api/v1/runs/{run_id:path}/events")
     def get_events(run_id: str, start_seq: int = Query(default=1, ge=1), limit: int = Query(default=200, ge=1, le=1000)) -> dict:
