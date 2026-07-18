@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Background,
   Controls,
@@ -20,6 +21,7 @@ import {
   type AnalysisGraph,
   type AnalysisGraphNode,
 } from "./api";
+import { EntityInspector, type InspectorEntity } from "./EntityInspector";
 
 export const MAX_ANALYSIS_NODES = 200;
 export const MAX_ANALYSIS_EDGES = 500;
@@ -53,6 +55,7 @@ const elk = import("elkjs/lib/elk.bundled.js").then(
 );
 
 export function AnalysisGraphView({ runId }: { runId: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const graph = useQuery({
     queryKey: ["analysis-graph", runId],
     queryFn: () => fetchAnalysisGraph(runId),
@@ -64,12 +67,31 @@ export function AnalysisGraphView({ runId }: { runId: string }) {
     minimumConfidence: 0,
     text: "",
     focus: "all",
-    selectedNodeId: null,
+    selectedNodeId: searchParams.get("entity"),
   });
   const [nodes, setNodes, onNodesChange] = useNodesState<
     Node<AnalysisNodeData>
   >([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+  useEffect(() => {
+    const querySelection = searchParams.get("entity");
+    setFilters((current) =>
+      current.selectedNodeId === querySelection
+        ? current
+        : { ...current, selectedNodeId: querySelection },
+    );
+  }, [searchParams]);
+
+  function selectEntity(id: string | null) {
+    setFilters((current) => ({ ...current, selectedNodeId: id }));
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (id) next.set("entity", id);
+      else next.delete("entity");
+      return next;
+    });
+  }
 
   const filtered = graph.data ? filterAnalysisGraph(graph.data, filters) : null;
   const tooLarge = Boolean(
@@ -261,9 +283,8 @@ export function AnalysisGraphView({ runId }: { runId: string }) {
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) =>
-              setFilters({ ...filters, selectedNodeId: node.id })
-            }
+            onNodeClick={(_, node) => selectEntity(node.id)}
+            onEdgeClick={(_, edge) => selectEntity(edge.id)}
             fitView
             nodesConnectable={false}
             aria-label="Post-hoc analysis dependency graph"
@@ -296,8 +317,74 @@ export function AnalysisGraphView({ runId }: { runId: string }) {
           Selected entity: <code>{filters.selectedNodeId}</code>
         </p>
       )}
+      <EntityInspector
+        runId={runId}
+        selectionId={filters.selectedNodeId}
+        entity={analysisInspectorEntity(graph.data, filters.selectedNodeId)}
+        onClose={() => selectEntity(null)}
+      />
     </section>
   );
+}
+
+export function analysisInspectorEntity(
+  graph: AnalysisGraph,
+  id: string | null,
+): InspectorEntity | null {
+  if (!id) return null;
+  const node = graph.nodes.find((item) => item.node_id === id);
+  if (node) {
+    const related = new Map<
+      string,
+      { id: string; label: string; view: "analysis" | "runtime" }
+    >();
+    if (node.runtime_task_id)
+      related.set(`runtime-${node.runtime_task_id}`, {
+        id: node.runtime_task_id,
+        label: "Runtime task",
+        view: "runtime",
+      });
+    graph.edges.forEach((edge) => {
+      const other =
+        edge.source_id === id
+          ? edge.target_id
+          : edge.target_id === id
+            ? edge.source_id
+            : null;
+      if (other)
+        related.set(`analysis-${other}`, {
+          id: other,
+          label: edge.edge_type,
+          view: "analysis",
+        });
+    });
+    const status =
+      typeof node.content.status === "string" ? node.content.status : undefined;
+    return {
+      id,
+      type: node.node_type,
+      status,
+      content: node.content,
+      provenance: node.provenance,
+      confidence: node.confidence,
+      warnings: graph.warnings,
+      raw: node,
+      related: [...related.values()],
+    };
+  }
+  const edge = graph.edges.find((item) => item.edge_id === id);
+  return edge
+    ? {
+        id,
+        type: edge.edge_type,
+        content: edge.metadata,
+        raw: edge,
+        related: [
+          { id: edge.source_id, label: "Source entity", view: "analysis" },
+          { id: edge.target_id, label: "Target entity", view: "analysis" },
+        ],
+      }
+    : null;
 }
 
 export function filterAnalysisGraph(

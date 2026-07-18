@@ -1,16 +1,28 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState, type KeyboardEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { fetchTimeline, type Timeline, type TimelineItem } from "./api";
+import { EntityInspector, type InspectorEntity } from "./EntityInspector";
 
 export function TimelineView({ runId }: { runId: string }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const timeline = useQuery({
     queryKey: ["timeline", runId],
     queryFn: () => fetchTimeline(runId),
   });
   const [zoom, setZoom] = useState(1);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
+  const selectedActionId = searchParams.get("entity");
+
+  function selectEntity(id: string | null) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (id) next.set("entity", id);
+      else next.delete("entity");
+      return next;
+    });
+  }
 
   if (timeline.isPending)
     return (
@@ -123,7 +135,7 @@ export function TimelineView({ runId }: { runId: string }) {
                                 left: `${geometry.left}%`,
                                 width: `${Math.max(geometry.width, 1.5)}%`,
                               }}
-                              onSelect={setSelectedActionId}
+                              onSelect={selectEntity}
                             />
                           )
                         );
@@ -140,7 +152,7 @@ export function TimelineView({ runId }: { runId: string }) {
                             item={item}
                             selected={selectedActionId === item.action_id}
                             style={{ width: durationWidth(item, durationOnly) }}
-                            onSelect={setSelectedActionId}
+                            onSelect={selectEntity}
                           />
                         ))}
                       </div>
@@ -166,7 +178,7 @@ export function TimelineView({ runId }: { runId: string }) {
                 key={item.action_id}
                 item={item}
                 selected={selectedActionId === item.action_id}
-                onSelect={setSelectedActionId}
+                onSelect={selectEntity}
               />
             ))}
           </div>
@@ -191,8 +203,58 @@ export function TimelineView({ runId }: { runId: string }) {
           Selected action: <code>{selectedActionId}</code>
         </p>
       )}
+      <EntityInspector
+        runId={runId}
+        selectionId={selectedActionId}
+        entity={timelineInspectorEntity(timeline.data, selectedActionId)}
+        onClose={() => selectEntity(null)}
+      />
     </section>
   );
+}
+
+export function timelineInspectorEntity(
+  timeline: Timeline,
+  id: string | null,
+): InspectorEntity | null {
+  const item = id
+    ? orderedTimelineItems(timeline).find(
+        (candidate) => candidate.action_id === id,
+      )
+    : null;
+  if (!item) return null;
+  return {
+    id: item.action_id,
+    type: "timeline_action",
+    status: item.status,
+    content: {
+      tool: item.tool,
+      arguments: item.arguments,
+      timing: item.timing,
+      start_time: item.start_time,
+      end_time: item.end_time,
+      duration_seconds: item.duration_seconds,
+    },
+    provenance: { agent: item.agent, record_index: item.record_index },
+    raw: item,
+    related: [
+      ...item.related_task_ids.map((relatedId) => ({
+        id: relatedId,
+        label: "Related task",
+        view: "runtime" as const,
+      })),
+      ...item.observation_ids.map((relatedId) => ({
+        id: relatedId,
+        label: "Observation",
+        view: "analysis" as const,
+      })),
+      ...item.claim_ids.map((relatedId) => ({
+        id: relatedId,
+        label: "Claim",
+        view: "analysis" as const,
+      })),
+    ],
+  };
 }
 
 function ActionButton({
