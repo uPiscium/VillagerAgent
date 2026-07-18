@@ -1,7 +1,7 @@
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -19,10 +19,17 @@ from villageragent_visualizer.dto import (
 )
 from villageragent_visualizer.runtime_graph import RuntimeGraphService
 from villageragent_visualizer.runs import RunRepository
+from villageragent_visualizer.stream import SnapshotStreamManager
 from villageragent_visualizer.timeline import TimelineService
 
 
-def create_app(*, result_root: str | Path = "result", frontend_dist: str | Path | None = None) -> FastAPI:
+def create_app(
+    *,
+    result_root: str | Path = "result",
+    frontend_dist: str | Path | None = None,
+    stream_poll_interval: float = 0.5,
+    stream_heartbeat_interval: float = 15.0,
+) -> FastAPI:
     app = FastAPI(title="VillagerAgent Visualizer", version="0.1.0")
     app.state.result_root = Path(result_root).expanduser().resolve()
     app.state.artifacts = ArtifactRepository(app.state.result_root)
@@ -34,6 +41,29 @@ def create_app(*, result_root: str | Path = "result", frontend_dist: str | Path 
         runs=app.state.runs,
         analysis_graphs=app.state.analysis_graphs,
     )
+    app.state.streams = SnapshotStreamManager(
+        result_root=app.state.result_root,
+        runs=app.state.runs,
+        runtime_graphs=app.state.runtime_graphs,
+        poll_interval=stream_poll_interval,
+        heartbeat_interval=stream_heartbeat_interval,
+    )
+
+    @app.websocket("/api/v1/runs/{run_id:path}/stream")
+    async def stream_run(websocket: WebSocket, run_id: str) -> None:
+        await websocket.accept()
+        subscription = app.state.streams.subscribe(run_id)
+        try:
+            await websocket.send_json(subscription.initial)
+            if subscription.initial["type"] == "run_unavailable":
+                await websocket.close(code=1000)
+                return
+            while True:
+                await websocket.send_json(await subscription.queue.get())
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            await subscription.close()
 
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:

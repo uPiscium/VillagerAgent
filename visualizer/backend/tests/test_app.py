@@ -10,6 +10,7 @@ from villageragent_visualizer import (
     TimelineService,
     create_app,
 )
+from villageragent_visualizer.stream import SnapshotStreamManager
 
 
 def test_health_endpoint_returns_fixed_dto(tmp_path: Path) -> None:
@@ -31,6 +32,7 @@ def test_health_endpoint_returns_fixed_dto(tmp_path: Path) -> None:
     assert isinstance(app.state.runtime_graphs, RuntimeGraphService)
     assert isinstance(app.state.analysis_graphs, AnalysisGraphService)
     assert isinstance(app.state.timelines, TimelineService)
+    assert isinstance(app.state.streams, SnapshotStreamManager)
 
 
 def test_optional_frontend_serves_spa_without_catching_api_routes(tmp_path: Path) -> None:
