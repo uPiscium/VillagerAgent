@@ -7,6 +7,7 @@ def test_cli_defaults_are_local_and_optional() -> None:
     assert args.result_root == "result"
     assert args.host == "127.0.0.1"
     assert args.port == 8765
+    assert args.frontend_dist is None
 
 
 def test_cli_accepts_server_options() -> None:
@@ -22,3 +23,9 @@ def test_cli_accepts_server_options() -> None:
     assert args.result_root == "artifacts"
     assert args.host == "0.0.0.0"
     assert args.port == 9000
+
+
+def test_cli_accepts_production_frontend_directory() -> None:
+    args = build_parser().parse_args(["--frontend-dist", "visualizer/frontend/dist"])
+
+    assert args.frontend_dist == "visualizer/frontend/dist"

@@ -33,6 +33,7 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 - `benchmarks/minecraft/experiment.py`: single-run dry-run/execute benchmark harness.
 - `benchmarks/minecraft/matrix.py`: CI-safe dry-run matrix wrapper.
 - `benchmarks/common/report.py`: shared benchmark report generator.
+- `visualizer/`: optional read-only offline experiment browser, API, frontend, and fixture runs.
 
 ## Detailed Guides
 
@@ -44,6 +45,7 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 - [Execution flow](docs/execution_flow.md): end-to-end runtime flow from config load to artifacts.
 - [Artifact schema](docs/artifact_schema.md): Minecraft benchmark artifact producers, fields, and public/private boundary.
 - [Termination semantics](docs/termination_semantics.md): success, failure, blocked, timeout, runtime error, partial, and cancelled states.
+- [Offline visualizer](docs/visualizer.md): optional setup, authority boundaries, artifacts, static serving, security, and limitations.
 
 ## Architecture In One Pass
 

@@ -52,4 +52,10 @@ visualizer-dev result_root="result":
     trap 'kill "$backend_pid" "$frontend_pid" 2>/dev/null || true' EXIT INT TERM
     wait -n "$backend_pid" "$frontend_pid"
 
+visualizer-fixture:
+    just visualizer-dev visualizer/fixtures/runs
+
+visualizer-serve result_root="result": visualizer-frontend-build
+    env -u VIRTUAL_ENV uv run --project visualizer/backend python -m villageragent_visualizer --result-root "{{result_root}}" --frontend-dist visualizer/frontend/dist
+
 visualizer-check: visualizer-backend-test visualizer-frontend-test visualizer-frontend-build
