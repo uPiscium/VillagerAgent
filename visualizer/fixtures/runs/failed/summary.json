@@ -1,0 +1,1 @@
+{"attempt_id":"fixture-failed","run_name":"Failed offline fixture","started_at":"2026-07-18T09:00:00Z","mode":"execute","task_name":"Reach the village","task_type":"navigation","progress":0.4,"error":"Agent could not reach the target","timed_out":false}

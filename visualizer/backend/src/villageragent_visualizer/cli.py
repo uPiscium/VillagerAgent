@@ -11,9 +11,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--result-root", default="result", help="Directory containing experiment runs.")
     parser.add_argument("--host", default="127.0.0.1", help="Address to bind the API server to.")
     parser.add_argument("--port", default=8765, type=int, help="Port to bind the API server to.")
+    parser.add_argument("--frontend-dist", help="Optional built frontend directory to serve with SPA fallback.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    uvicorn.run(create_app(result_root=args.result_root), host=args.host, port=args.port)
+    uvicorn.run(create_app(result_root=args.result_root, frontend_dist=args.frontend_dist), host=args.host, port=args.port)

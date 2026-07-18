@@ -2,6 +2,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from villageragent_visualizer.analysis_graph import AnalysisGraphService
 from villageragent_visualizer.artifacts import ArtifactRepository
@@ -20,7 +22,7 @@ from villageragent_visualizer.runs import RunRepository
 from villageragent_visualizer.timeline import TimelineService
 
 
-def create_app(*, result_root: str | Path = "result") -> FastAPI:
+def create_app(*, result_root: str | Path = "result", frontend_dist: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="VillagerAgent Visualizer", version="0.1.0")
     app.state.result_root = Path(result_root).expanduser().resolve()
     app.state.artifacts = ArtifactRepository(app.state.result_root)
@@ -113,5 +115,19 @@ def create_app(*, result_root: str | Path = "result") -> FastAPI:
         if manifest is None:
             raise HTTPException(status_code=404, detail="Run not found")
         return manifest
+
+    if frontend_dist is not None:
+        dist = Path(frontend_dist).expanduser().resolve()
+        index = dist / "index.html"
+        assets = dist / "assets"
+        if index.is_file():
+            if assets.is_dir():
+                app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
+
+            @app.get("/{path:path}", include_in_schema=False)
+            def frontend(path: str) -> FileResponse:
+                if path == "api" or path.startswith("api/"):
+                    raise HTTPException(status_code=404, detail="API route not found")
+                return FileResponse(index)
 
     return app

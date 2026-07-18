@@ -1,0 +1,1 @@
+{"attempt_id":"fixture-timeout","run_name":"Timed-out offline fixture","started_at":"2026-07-18T08:00:00Z","mode":"execute","task_name":"Mine diamonds","task_type":"mining","progress":0.2,"error":"Execution exceeded 600 seconds","timed_out":true}
