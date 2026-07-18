@@ -23,6 +23,7 @@ from villageragent_visualizer.runs import RunRepository
 from villageragent_visualizer.replay import ReplayService
 from villageragent_visualizer.stream import SnapshotStreamManager
 from villageragent_visualizer.timeline import TimelineService
+from villageragent_visualizer.world_view import world_view_config
 
 
 def create_app(
@@ -31,6 +32,8 @@ def create_app(
     frontend_dist: str | Path | None = None,
     stream_poll_interval: float = 0.5,
     stream_heartbeat_interval: float = 15.0,
+    world_view_url: str | None = None,
+    allow_remote_world_view: bool = False,
 ) -> FastAPI:
     app = FastAPI(title="VillagerAgent Visualizer", version="0.1.0")
     app.state.result_root = Path(result_root).expanduser().resolve()
@@ -52,6 +55,7 @@ def create_app(
     )
     app.state.replay = ReplayService(artifacts=app.state.artifacts, runs=app.state.runs)
     app.state.comparison = ComparisonService(artifacts=app.state.artifacts, runs=app.state.runs)
+    app.state.world_view = world_view_config(world_view_url, allow_remote=allow_remote_world_view)
 
     @app.websocket("/api/v1/runs/{run_id:path}/stream")
     async def stream_run(websocket: WebSocket, run_id: str) -> None:
@@ -76,6 +80,10 @@ def create_app(
             "service": "villageragent-visualizer",
             "api_version": "v1",
         }
+
+    @app.get("/api/v1/world-view/config")
+    def get_world_view_config() -> dict:
+        return app.state.world_view
 
     @app.get("/api/v1/runs")
     def list_runs() -> dict[str, tuple[RunManifest, ...]]:

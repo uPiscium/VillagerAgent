@@ -8,6 +8,8 @@ def test_cli_defaults_are_local_and_optional() -> None:
     assert args.host == "127.0.0.1"
     assert args.port == 8765
     assert args.frontend_dist is None
+    assert args.world_view_url is None
+    assert args.allow_remote_world_view is False
 
 
 def test_cli_accepts_server_options() -> None:
@@ -29,3 +31,9 @@ def test_cli_accepts_production_frontend_directory() -> None:
     args = build_parser().parse_args(["--frontend-dist", "visualizer/frontend/dist"])
 
     assert args.frontend_dist == "visualizer/frontend/dist"
+
+
+def test_cli_requires_explicit_remote_world_view_opt_in() -> None:
+    args = build_parser().parse_args(["--world-view-url", "http://127.0.0.1:3007", "--allow-remote-world-view"])
+    assert args.world_view_url == "http://127.0.0.1:3007"
+    assert args.allow_remote_world_view is True

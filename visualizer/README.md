@@ -86,3 +86,5 @@ Do not use this tool as an access-control boundary for an untrusted multi-user s
 Version 0.1 is an offline snapshot explorer. It does not implement live WebSocket updates, event replay, run comparison, a Minecraft world renderer, artifact repair, or runtime control. Large Analysis DAGs require filtering below the frontend layout threshold. ELK is loaded lazily but its layout chunk is intentionally large.
 
 See [the full integration guide](../docs/visualizer.md) for architecture and troubleshooting.
+
+The optional external Minecraft camera integration and its security/load tradeoffs are documented in [World View feasibility](../docs/visualizer_world_view.md).

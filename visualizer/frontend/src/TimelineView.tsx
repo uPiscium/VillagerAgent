@@ -253,6 +253,7 @@ export function timelineInspectorEntity(
         label: "Claim",
         view: "analysis" as const,
       })),
+      { id: item.action_id, label: "World context", view: "world" as const },
     ],
   };
 }
