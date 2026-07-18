@@ -58,6 +58,8 @@ The fixture matrix demonstrates:
 - `malformed`: invalid summary JSON isolated from other runs.
 - `schema-version`: unsupported Runtime DAG schema major isolated to that view.
 
+Runs with `events.jsonl` also expose a separate recorded Replay view. Replay is reconstructed from public events, never writes state back to runtime, and labels action records as log records rather than observed start/completion hooks.
+
 ## Security Boundary
 
 The artifact repository rejects traversal and external symlinks. Sanitization occurs in the backend before DTO construction, recursively removing credential keys and suspicious secret-bearing names. The Inspector's “raw JSON” is raw only relative to the public DTO; it never reads artifact files in the browser.

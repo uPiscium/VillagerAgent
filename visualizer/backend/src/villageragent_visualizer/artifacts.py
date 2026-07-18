@@ -89,6 +89,9 @@ class ArtifactRepository:
             warnings=validation.warnings,
         ))
 
+    def resolve_path(self, relative_path: str | Path) -> Path | ArtifactLoadError:
+        return self._resolve_path(relative_path)
+
     def _resolve_path(self, relative_path: str | Path) -> Path | ArtifactLoadError:
         candidate = Path(relative_path)
         if candidate.is_absolute() or ".." in candidate.parts:

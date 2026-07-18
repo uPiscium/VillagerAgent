@@ -32,6 +32,7 @@ def test_complete_fixture_opens_every_offline_mvp_view() -> None:
     runtime = client.get("/api/v1/runs/successful/runtime-graph")
     analysis = client.get("/api/v1/runs/successful/analysis-graph")
     timeline = client.get("/api/v1/runs/successful/timeline")
+    replay = client.get("/api/v1/runs/successful/replay-state", params={"seq": 4})
 
     assert runtime.status_code == 200
     assert runtime.json()["authority"] == "canonical_runtime_state"
@@ -39,6 +40,9 @@ def test_complete_fixture_opens_every_offline_mvp_view() -> None:
     assert analysis.json()["authority"] == "posthoc_analysis_projection"
     assert timeline.status_code == 200
     assert {lane["agent"] for lane in timeline.json()["lanes"]} == {"Alice", "Bob"}
+    assert replay.status_code == 200
+    assert replay.json()["graph"]["nodes"][0]["lifecycle"]["status"] == "success"
+    assert replay.json()["timeline"][0]["event_type"] == "action_recorded"
 
 
 def test_malformed_and_future_schema_fixtures_do_not_break_healthy_runs() -> None:

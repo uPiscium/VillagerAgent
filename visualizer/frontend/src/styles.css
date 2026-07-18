@@ -179,6 +179,29 @@ button, input { font: inherit; }
 .live-status--disconnected > span, .live-status--failed > span, .live-status--timed_out > span { background: #bf6658; box-shadow: none; }
 .live-status--completed > span { background: #8ebd78; box-shadow: none; }
 
+.replay-view { display: grid; gap: 14px; }
+.replay-heading { display: flex; align-items: end; justify-content: space-between; border-bottom: 1px solid #3c4550; padding-bottom: 10px; }
+.replay-heading h2 { margin: 0; color: #eef0e8; font-family: Georgia, serif; font-size: 2rem; font-weight: 400; }
+.replay-heading > strong { color: #c8b985; font: .75rem ui-monospace, monospace; }
+.replay-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.replay-controls button, .replay-controls input, .replay-controls select { border: 1px solid #52605b; background: #18201f; padding: 7px 9px; color: #dae1dc; }
+.replay-controls label { display: grid; gap: 3px; color: #87958f; font-size: .62rem; }
+.replay-scrubber { width: 100%; accent-color: #b9a96f; }
+.replay-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.replay-panel { min-width: 0; border: 1px solid #303d3a; background: #121a18; padding: 12px; }
+.replay-panel h3, .replay-event-list h3 { margin: 0 0 10px; color: #b9c9c1; font-size: .72rem; text-transform: uppercase; }
+.replay-panel article { display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid #283531; padding: 7px 0; color: #9baaa4; font-size: .67rem; }
+.replay-panel p, .replay-panel li { color: #889790; font-size: .67rem; }
+.replay-caveat { color: #c3a66e !important; }
+.replay-payload pre { max-height: 260px; overflow: auto; color: #aab9b2; font: .64rem/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+.replay-warnings { grid-column: 1 / -1; }
+.replay-event-list { display: flex; flex-wrap: wrap; gap: 5px; border-top: 1px solid #34413e; padding-top: 12px; }
+.replay-event-list h3 { flex-basis: 100%; }
+.replay-event-list button { display: grid; gap: 2px; min-width: 105px; border: 1px solid #3b4a46; background: #151e1c; padding: 7px; color: #a9b8b2; text-align: left; }
+.replay-event-list button[aria-pressed="true"] { border-color: #c2af6d; background: #29251a; }
+.replay-event-list small { color: #75847e; }
+@media (max-width: 700px) { .replay-grid { grid-template-columns: 1fr; } }
+
 .runtime-graph-view { display: grid; gap: 14px; }
 .authority-banner { display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid #607a4d; background: #17241d; padding: 14px 18px; }
 .authority-banner strong, .authority-banner span { display: block; }

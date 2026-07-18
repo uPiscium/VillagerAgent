@@ -38,12 +38,16 @@ const AnalysisGraphView = lazy(() =>
 const TimelineView = lazy(() =>
   import("./TimelineView").then((module) => ({ default: module.TimelineView })),
 );
+const ReplayView = lazy(() =>
+  import("./ReplayView").then((module) => ({ default: module.ReplayView })),
+);
 
 const sections: Array<{ id: RunSection; label: string; artifact?: string }> = [
   { id: "overview", label: "Overview" },
   { id: "runtime", label: "Runtime DAG", artifact: "runtime_graph" },
   { id: "analysis", label: "Analysis DAG", artifact: "analysis_graph" },
   { id: "timeline", label: "Timeline", artifact: "action_log" },
+  { id: "replay", label: "Replay", artifact: "events" },
 ];
 
 export default function App() {
@@ -76,6 +80,10 @@ export default function App() {
             <Route
               path="runs/:runId/timeline"
               element={<RunPage section="timeline" />}
+            />
+            <Route
+              path="runs/:runId/replay"
+              element={<RunPage section="replay" />}
             />
             <Route path="*" element={<Navigate to="/runs" replace />} />
           </Route>
@@ -281,6 +289,17 @@ function RunPage({ section }: { section: RunSection }) {
         >
           <TimelineView runId={run.data.run_id} />
         </Suspense>
+      ) : section === "replay" ? (
+        <Suspense
+          fallback={
+            <StateMessage
+              title="Loading Replay"
+              detail="Loading recorded event tools."
+            />
+          }
+        >
+          <ReplayView runId={run.data.run_id} />
+        </Suspense>
       ) : (
         <section className="view-placeholder">
           <p className="eyebrow">
@@ -367,7 +386,8 @@ function sectionAvailable(run: RunManifest, section: RunSection): boolean {
       run.artifacts.runtime_graph || run.artifacts.runtime_checkpoint,
     );
   if (section === "analysis") return Boolean(run.artifacts.analysis_graph);
-  return Boolean(run.artifacts.action_log);
+  if (section === "timeline") return Boolean(run.artifacts.action_log);
+  return Boolean(run.artifacts.events);
 }
 
 function stateLabel(state: RunManifest["state"]): string {

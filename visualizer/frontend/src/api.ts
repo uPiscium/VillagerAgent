@@ -1,4 +1,10 @@
-export type RunState = "live" | "completed" | "failed" | "timed_out" | "partial" | "invalid";
+export type RunState =
+  | "live"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "partial"
+  | "invalid";
 
 export type RunManifest = {
   run_id: string;
@@ -95,7 +101,11 @@ export type AnalysisGraphEdge = {
 
 export type Timeline = {
   lanes: TimelineLane[];
-  bounds: { start_time: string; end_time: string; timezone_kind: string } | null;
+  bounds: {
+    start_time: string;
+    end_time: string;
+    timezone_kind: string;
+  } | null;
   warnings: Array<{ code: string; message: string; artifact: string | null }>;
 };
 
@@ -117,8 +127,43 @@ export type TimelineItem = {
   claim_ids: string[];
 };
 
+export type ReplayEvent = {
+  seq: number;
+  event_id: string;
+  event_type: string;
+  occurred_at: string | null;
+  entity_id: string | null;
+  source: string;
+  payload: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
+};
+
+export type ReplayEvents = {
+  events: ReplayEvent[];
+  total: number;
+  max_seq: number;
+  next_seq: number | null;
+  warnings: Array<{ code: string; message: string }>;
+};
+export type ReplayState = {
+  seq: number;
+  max_seq: number;
+  authority: "recorded_event_replay";
+  graph: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+  };
+  assignments: Record<string, string[]>;
+  timeline: ReplayEvent[];
+  current_event: ReplayEvent | null;
+  warnings: Array<{ code: string; message: string }>;
+};
+
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -140,22 +185,50 @@ export async function fetchRun(runId: string): Promise<RunManifest> {
 }
 
 export async function fetchRuntimeGraph(runId: string): Promise<RuntimeGraph> {
-  return fetchJson<RuntimeGraph>(`/api/v1/runs/${encodeURIComponent(runId)}/runtime-graph`);
+  return fetchJson<RuntimeGraph>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/runtime-graph`,
+  );
 }
 
-export async function fetchAnalysisGraph(runId: string): Promise<AnalysisGraph> {
-  return fetchJson<AnalysisGraph>(`/api/v1/runs/${encodeURIComponent(runId)}/analysis-graph`);
+export async function fetchAnalysisGraph(
+  runId: string,
+): Promise<AnalysisGraph> {
+  return fetchJson<AnalysisGraph>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/analysis-graph`,
+  );
 }
 
 export async function fetchTimeline(runId: string): Promise<Timeline> {
-  return fetchJson<Timeline>(`/api/v1/runs/${encodeURIComponent(runId)}/timeline`);
+  return fetchJson<Timeline>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/timeline`,
+  );
+}
+
+export async function fetchReplayEvents(runId: string): Promise<ReplayEvents> {
+  return fetchJson<ReplayEvents>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/events?limit=1000`,
+  );
+}
+
+export async function fetchReplayState(
+  runId: string,
+  seq: number,
+): Promise<ReplayState> {
+  return fetchJson<ReplayState>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/replay-state?seq=${seq}`,
+  );
 }
 
 export function runPath(runId: string, section: RunSection): string {
   return `/runs/${encodeURIComponent(runId)}/${section}`;
 }
 
-export type RunSection = "overview" | "runtime" | "analysis" | "timeline";
+export type RunSection =
+  | "overview"
+  | "runtime"
+  | "analysis"
+  | "timeline"
+  | "replay";
 
 async function fetchJson<T>(url: string): Promise<T> {
   let response: Response;
@@ -165,11 +238,17 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new ApiError(0, "The visualizer backend is unavailable.");
   }
   if (!response.ok) {
-    throw new ApiError(response.status, `The visualizer API returned ${response.status}.`);
+    throw new ApiError(
+      response.status,
+      `The visualizer API returned ${response.status}.`,
+    );
   }
   try {
-    return await response.json() as T;
+    return (await response.json()) as T;
   } catch {
-    throw new ApiError(response.status, "The visualizer API returned invalid JSON.");
+    throw new ApiError(
+      response.status,
+      "The visualizer API returned invalid JSON.",
+    );
   }
 }
