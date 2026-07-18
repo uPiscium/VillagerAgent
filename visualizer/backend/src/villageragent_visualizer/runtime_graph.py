@@ -63,6 +63,27 @@ class RuntimeGraphService:
             )
         return RuntimeGraphLoadResult(graph=graph)
 
+    def load_checkpoint(self, run_id: str) -> RuntimeGraphLoadResult:
+        if self.runs.get_run(run_id) is None:
+            return _error(RuntimeGraphErrorCode.RUN_NOT_FOUND, "Run not found.")
+        warnings: list[RunWarning] = []
+        snapshot = self._load_checkpoint_snapshot(run_id, warnings)
+        if snapshot is None:
+            invalid = any(warning.code != ArtifactErrorCode.MISSING.value for warning in warnings)
+            return _error(
+                RuntimeGraphErrorCode.SNAPSHOT_INVALID if invalid else RuntimeGraphErrorCode.SNAPSHOT_MISSING,
+                "Canonical runtime task DAG checkpoint is unavailable.",
+                warnings,
+            )
+        graph = _adapt_snapshot(snapshot, snapshot_source="runtime_checkpoint", warnings=warnings)
+        if graph is None:
+            return _error(
+                RuntimeGraphErrorCode.SNAPSHOT_INVALID,
+                "Canonical runtime task DAG checkpoint has an invalid shape.",
+                warnings,
+            )
+        return RuntimeGraphLoadResult(graph=graph)
+
     def _load_normalized_snapshot(
         self,
         run_id: str,
