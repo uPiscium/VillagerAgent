@@ -24,6 +24,7 @@ import {
   type RunSection,
 } from "./api";
 import { LiveRunUpdates } from "./LiveRunUpdates";
+import { CompareView } from "./CompareView";
 
 const RuntimeGraphView = lazy(() =>
   import("./RuntimeGraphView").then((module) => ({
@@ -65,6 +66,7 @@ export default function App() {
           <Route element={<Workspace />}>
             <Route index element={<Navigate to="/runs" replace />} />
             <Route path="runs" element={<RunLanding />} />
+            <Route path="compare" element={<CompareView />} />
             <Route
               path="runs/:runId/overview"
               element={<RunPage section="overview" />}
@@ -108,6 +110,9 @@ function Workspace() {
         >
           <span className="brand-mark">VA</span>
           <span>Experiment Visualizer</span>
+        </NavLink>
+        <NavLink className="topbar-link" to="/compare">
+          Compare
         </NavLink>
         <div
           className={`connection connection--${health.isSuccess ? "online" : health.isError ? "offline" : "pending"}`}

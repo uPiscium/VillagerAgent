@@ -159,6 +159,37 @@ export type ReplayState = {
   warnings: Array<{ code: string; message: string }>;
 };
 
+export type ComparisonRun = {
+  run_id: string;
+  name: string;
+  task_name: string | null;
+  task_type: string | null;
+  state: RunState;
+  mode: string | null;
+  policy: string | null;
+  task_state_source: string | null;
+  snapshot_source: string | null;
+  progress: string | number | boolean | null;
+  score: unknown;
+  task_count: number | null;
+  completed_task_count: number | null;
+  failed_task_count: number | null;
+  action_count: number | null;
+  failed_action_count: number | null;
+  duration_seconds: number | null;
+  recommendation_adopted_count: number | null;
+  runtime_selected_task_ids: string[] | null;
+  posthoc_ranked_task_order: string[] | null;
+  agent_action_counts: Record<string, number> | null;
+  agent_idle_seconds: Record<string, number> | null;
+  error: string | null;
+};
+export type Comparison = {
+  runs: ComparisonRun[];
+  warnings: Array<{ code: string; message: string }>;
+  semantics: { missing_values: "null"; inference: "descriptive_only" };
+};
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -217,6 +248,12 @@ export async function fetchReplayState(
   return fetchJson<ReplayState>(
     `/api/v1/runs/${encodeURIComponent(runId)}/replay-state?seq=${seq}`,
   );
+}
+
+export async function fetchComparison(runIds: string[]): Promise<Comparison> {
+  const query = new URLSearchParams();
+  runIds.forEach((runId) => query.append("run", runId));
+  return fetchJson<Comparison>(`/api/v1/compare?${query}`);
 }
 
 export function runPath(runId: string, section: RunSection): string {
