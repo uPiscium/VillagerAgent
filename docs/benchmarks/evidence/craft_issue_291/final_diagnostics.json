@@ -1,0 +1,262 @@
+{
+  "benchmark": "craft",
+  "clarification_outcomes": [
+    {
+      "action_confidence_before": 0.35,
+      "attempt_id": "08b8eea4483b40288ea7ed9e046f29b7",
+      "candidate_actions_before": [
+        {
+          "action": "place",
+          "block": "gs",
+          "layer": 0,
+          "position": "(1,2)",
+          "span_to": null
+        },
+        {
+          "action": "place",
+          "block": "rs",
+          "layer": 0,
+          "position": "(2,2)",
+          "span_to": null
+        },
+        {
+          "action": "place",
+          "block": "ys",
+          "layer": 1,
+          "position": "(0,0)",
+          "span_to": null
+        },
+        {
+          "action": "place",
+          "block": "ys",
+          "layer": 0,
+          "position": "(0,2)",
+          "span_to": null
+        },
+        {
+          "action": "place",
+          "block": "gl",
+          "layer": 0,
+          "position": "(1,0)",
+          "span_to": "(2,0)"
+        }
+      ],
+      "candidate_ids_before": [
+        "action:3:0",
+        "action:3:1",
+        "action:3:2",
+        "action:3:3",
+        "action:3:4"
+      ],
+      "candidate_scores_before": [
+        0.7000000000000001,
+        0.35,
+        0.7000000000000001,
+        0.7000000000000001,
+        0.7000000000000001
+      ],
+      "candidate_states_before": [
+        "invalidated",
+        "invalidated",
+        "invalidated",
+        "invalidated",
+        "invalidated"
+      ],
+      "canonical_question_key": "unknown_director|(2,2)|unknown_layer|rs|unknown_span|low_action_confidence",
+      "clarification_id": "clarification:7:3",
+      "clarification_to_action_latency": 1,
+      "condition": "v4",
+      "conflict_count_before": 2,
+      "gate_reasons": [
+        "low_action_confidence",
+        "claim_conflict"
+      ],
+      "next_action_was_original_top_candidate": true,
+      "next_physical_action": {
+        "action": "place",
+        "block": "gs",
+        "confirmation": "Choosing this verified candidate.",
+        "layer": 0,
+        "position": "(1,2)",
+        "span_to": null
+      },
+      "next_physical_action_progress_delta": 0.031818181818181815,
+      "next_physical_action_turn": 4,
+      "oracle_candidate_count": 5,
+      "oracle_enabled": true,
+      "outcome": "neutral",
+      "outcome_reasons": [
+        "same_action_after_clarification"
+      ],
+      "question_text": "The candidate action is ambiguous. Please clarify the block color, coordinate, layer, or span before building.",
+      "remaining_turns": 16,
+      "required_evidence_before": 0,
+      "seed": 1,
+      "span_uncertainty_before": false,
+      "structure_id": 7,
+      "top1_score_before": 0.7000000000000001,
+      "top1_top2_margin_before": 0.0,
+      "top2_score_before": 0.7000000000000001,
+      "top_candidate_before": "action:3:0",
+      "turn_index": 3
+    },
+    {
+      "action_confidence_before": 0.35,
+      "attempt_id": "9190f902837a4325995b9f15bb722b1d",
+      "candidate_actions_before": [
+        {
+          "action": "place",
+          "block": "bl",
+          "layer": 0,
+          "position": "(0,0)",
+          "span_to": "(0,1)"
+        },
+        {
+          "action": "place",
+          "block": "gs",
+          "layer": 0,
+          "position": "(0,2)",
+          "span_to": null
+        },
+        {
+          "action": "place",
+          "block": "yl",
+          "layer": 1,
+          "position": "(1,0)",
+          "span_to": "(2,0)"
+        },
+        {
+          "action": "place",
+          "block": "yl",
+          "layer": 0,
+          "position": "(1,2)",
+          "span_to": "(2,2)"
+        }
+      ],
+      "candidate_ids_before": [
+        "action:3:0",
+        "action:3:1",
+        "action:3:2",
+        "action:3:3"
+      ],
+      "candidate_scores_before": [
+        0.7000000000000001,
+        0.35,
+        0.35,
+        0.55
+      ],
+      "candidate_states_before": [
+        "invalidated",
+        "invalidated",
+        "invalidated",
+        "invalidated"
+      ],
+      "canonical_question_key": "unknown_director|(0,2)|unknown_layer|gs|unknown_span|low_action_confidence",
+      "clarification_id": "clarification:14:3",
+      "clarification_to_action_latency": 1,
+      "condition": "v4",
+      "conflict_count_before": 2,
+      "gate_reasons": [
+        "low_action_confidence",
+        "claim_conflict"
+      ],
+      "next_action_was_original_top_candidate": false,
+      "next_physical_action": {
+        "action": "place",
+        "block": "gs",
+        "confirmation": "Placing small green block at top-left of D2's side as requested.",
+        "layer": 0,
+        "position": "(0,2)",
+        "span_to": null
+      },
+      "next_physical_action_progress_delta": 0.03341687552213868,
+      "next_physical_action_turn": 4,
+      "oracle_candidate_count": 5,
+      "oracle_enabled": true,
+      "outcome": "neutral",
+      "outcome_reasons": [
+        "no_decisive_outcome"
+      ],
+      "question_text": "The candidate action is ambiguous. Please clarify the block color, coordinate, layer, or span before building.",
+      "remaining_turns": 16,
+      "required_evidence_before": 0,
+      "seed": 3,
+      "span_uncertainty_before": false,
+      "structure_id": 14,
+      "top1_score_before": 0.7000000000000001,
+      "top1_top2_margin_before": 0.15000000000000002,
+      "top2_score_before": 0.55,
+      "top_candidate_before": "action:3:0",
+      "turn_index": 3
+    }
+  ],
+  "interpretation": {
+    "natural_retrieval_activated": false,
+    "performance_claim_source": "final paired comparison reports",
+    "retrieval_changed_top_action": false
+  },
+  "schema_version": 1,
+  "scope": {
+    "conditions": [
+      "v0",
+      "v1",
+      "v4"
+    ],
+    "seeds": [
+      1,
+      3,
+      5
+    ],
+    "structures": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ]
+  },
+  "totals": {
+    "v0": {
+      "builder_fallback_count": 57,
+      "clarify_count": 0,
+      "gate_invocation_count": 0,
+      "invalid_action_count": 0,
+      "physical_action_count": 1200,
+      "retrieval_changed_top_action_count": 0,
+      "retrieved_node_count": 0
+    },
+    "v1": {
+      "builder_fallback_count": 56,
+      "clarify_count": 0,
+      "gate_invocation_count": 0,
+      "invalid_action_count": 0,
+      "physical_action_count": 1200,
+      "retrieval_changed_top_action_count": 0,
+      "retrieved_node_count": 0
+    },
+    "v4": {
+      "builder_fallback_count": 56,
+      "clarify_count": 2,
+      "gate_invocation_count": 2,
+      "invalid_action_count": 0,
+      "physical_action_count": 1198,
+      "retrieval_changed_top_action_count": 0,
+      "retrieved_node_count": 0
+    }
+  }
+}

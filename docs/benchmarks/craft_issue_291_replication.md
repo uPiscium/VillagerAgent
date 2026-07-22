@@ -15,25 +15,138 @@
 <!-- benchmark-result: craft-issue291-expanded-v1-s3-seed5-diagnostic-v1 -->
 <!-- benchmark-result: craft-issue291-expanded-v4-s3-seed5-diagnostic-v1 -->
 <!-- benchmark-result: craft-issue291-expanded-analysis-diagnostic-v1 -->
+<!-- benchmark-result: craft-issue291-final-replication-v5 -->
 
-The replication matrix is declared in
-`configs/craft/experiments/gemma4_12b_clarify_policy_official.yaml`. It includes
+The final replication matrix is declared in
+`configs/craft/experiments/issue_291_final_replication.yaml`. It includes
 the full upstream CRAFT runner, the VillagerAgent baseline, Clarify-disabled
 Dual-DAG, and the existing Clarify policy variants under matched structures,
 seeds, `oracle_n=5`, no builder tools, and 20 turns. Smoke runs are diagnostic
 only and must not be reported as performance evidence.
 
-Issue #291 is not accepted or complete. The full matched matrix has not run,
-natural retrieval activation was not observed in the bounded model run, and
-there is not yet evidence for the required Clarify recommendation. The bounded
-results below are diagnostic only. A controlled public-history probe establishes
-that retrieval can activate and influence ranking, but it is not a performance
-evaluation and does not establish activation in normal CRAFT episodes.
+The V0/V1/V4 matched matrix is complete. The final analysis below grants
+integration validation but not a performance claim because both adjusted
+confidence intervals cross zero. Natural retrieval did not activate in any of
+the 60 V1 or 60 V4 episodes. The bounded results later in this document remain
+diagnostic only. A controlled public-history probe establishes that retrieval
+can activate and influence ranking, but it is not a performance evaluation and
+does not establish activation in normal CRAFT episodes.
 
 The two-turn upstream integration smoke is retained as immutable release
 `benchmark-craft-issue291-smoke-v1`. Its sanitized archive and checksums are
 registered in `docs/benchmark_archives.json`; it is integration evidence only,
 not a performance result.
+
+## Final Matched Replication
+
+The prespecified primary comparison covers all 20 structures crossed with seeds
+1, 3, and 5 for V0, V1, and V4 at 20 turns and `oracle_n=5`. All 180 comparable
+episodes completed, yielding 60 matched pairs per comparison with no failed,
+missing, unmatched, or invalid-action observations. Runs used repository commit
+`057c5c7c9c7d7f0e157dbdfaa810d32adb5a1cb8`, CRAFT commit
+`0630f1b3350ce2ae9fef676c8271c35963a09b45`, and Ollama `gemma4:12b` digest
+`4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c`.
+Director and Builder calls used the `ollama_native` provider with `think=false`,
+temperatures 0.2 and 0.0, and a 4096-token limit. V0 used the VillagerAgent
+baseline; V1 enabled Dual-DAG retrieval with Clarify disabled; V4 additionally
+enabled the checked-in `value_of_information` Clarify policy. Artifact validation
+and normalized leakage guards passed for all 161 completed source bundles.
+
+The #298 analysis uses a two-way structure/seed cluster percentile bootstrap,
+10,000 samples, and a two-comparison Bonferroni family. The intervals below are
+97.5% multiplicity-adjusted intervals.
+
+| Comparison | Mean paired difference | Adjusted interval | Granted claim |
+| --- | ---: | ---: | --- |
+| V1 minus V0 | +0.0131485978 | [-0.0019571492, 0.0367974569] | integration validation |
+| V4 minus V0 | +0.0147540287 | [-0.0008485514, 0.0433501909] | integration validation |
+
+Both point estimates are positive, but neither interval is wholly positive.
+Both performance gates therefore reject the claim solely for
+`uncertainty_interval_not_favorable`; these results must not be presented as
+evidence that V1 or V4 improves final progress over V0. The complete contracts
+and reports are `docs/benchmarks/evidence/craft_issue_291/final_v0_v1_*` and
+`docs/benchmarks/evidence/craft_issue_291/final_v0_v4_*`.
+
+Across the full matrix, V0/V1/V4 recorded 57/56/56 builder fallbacks,
+1200/1200/1198 physical actions, and zero invalid actions. Natural retrieval and
+retrieval-induced top-action changes were both zero. This is an activation
+blocker for evaluating retrieval benefit in normal CRAFT episodes; the
+controlled probe remains mechanism evidence only.
+
+V4 invoked Clarify twice, at structure 7 seed 1 and structure 14 seed 3. Both
+invocations were triggered by low action confidence and claim conflict, had a
+one-turn clarification-to-action latency, and were classified neutral. One
+resumed the original top action; one selected a different action. The following
+physical actions increased progress by 0.0318181818 and 0.0334168755, but neither
+outcome established a benefit attributable to clarification, and V4 used two
+fewer physical actions than V0/V1. The recommendation for this CRAFT setting is
+therefore to keep Clarify disabled by default until a prespecified evaluation
+demonstrates positive value exceeding its action opportunity cost. Full
+diagnostics are recorded in
+`docs/benchmarks/evidence/craft_issue_291/final_diagnostics.json`.
+
+The upstream baseline remains separately labeled and unavailable as a complete
+20-turn result. The Issue-specified `official_baseline_full.yaml` now uses the
+same authenticated loopback Ollama proxy and `gemma4:12b` model as the matched
+evaluation, without requiring a parent API credential. Structure 0 seed 3
+completed the one-turn and two-turn execution gates with final progress
+0.0681964573 and 0.0993558776, one and two physical actions, zero fallback or
+invalid actions, and passing semantic, artifact, and leakage checks. The exact
+20-turn run then exceeded the official runner's 1800-second limit before
+producing inspectable normalized gameplay, so it is retained as a finalized
+failed run and has no performance metric or leakage-pass claim. No upstream
+value is substituted into the V0/V1/V4 comparisons. Machine-readable accounting
+is in `docs/benchmarks/evidence/craft_issue_291/final_upstream_status.json`.
+
+The retained public evidence is the immutable release
+[`craft-issue291-final-replication-v5.zip`](https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-final-replication-v5/craft-issue291-final-replication-v5.zip).
+It contains the final contracts, reports, diagnostics, controlled retrieval
+probe, 161 completed comparable source bundles, two completed upstream gate
+bundles, and one finalized failed 20-turn upstream bundle.
+The archive SHA-256 is
+`7760665517dd987fc7478e86bc17d5405212406fbff6f5ba827073b214487e08`;
+its `artifact_manifest.json` SHA-256 is
+`eb7c1a483d4bbb3e90b722cee10af5adaed4d5fbd86a758574407a268fca4ce5`.
+
+The single-structure checkpoint command used the applicable V0, V1, or V4
+config and exact matrix overrides; for example:
+
+```bash
+python -m benchmarks.craft.run \
+  --config configs/craft/eval_gemma4_12b_ollama.yaml \
+  --structure 0 --turns 20 --seed 3 --oracle-n 5 \
+  --run-name-suffix _issue291_final_v0_oracle5_structure0_seed3 \
+  --overwrite
+python -m benchmarks.craft.artifact_validator \
+  --runs craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure0_seed3 \
+  --result-root result/craft \
+  --output /tmp/opencode/issue-291-structure0-seed3-validation.json
+```
+
+The final analysis and publication commands were:
+
+```bash
+python -m benchmarks.common.analysis \
+  docs/benchmarks/evidence/craft_issue_291/final_v0_v1_comparison_input.json \
+  --output docs/benchmarks/evidence/craft_issue_291/final_v0_v1_comparison_report.json
+python -m benchmarks.common.analysis \
+  docs/benchmarks/evidence/craft_issue_291/final_v0_v4_comparison_input.json \
+  --output docs/benchmarks/evidence/craft_issue_291/final_v0_v4_comparison_report.json
+python -m benchmarks.craft.comparison_bundle \
+  --config configs/craft/diagnostics/issue_291_final_bundle.json \
+  --output result/craft/craft_issue291_final_replication_v5
+python -m benchmarks.common.publish_bundle validate \
+  result/craft/craft_issue291_final_replication_v5
+python -m benchmarks.common.publish_bundle archive \
+  result/craft/craft_issue291_final_replication_v5 \
+  --output /tmp/opencode/craft-issue291-final-replication-v5.zip
+python -m benchmarks.common.publish_bundle publish \
+  result/craft/craft_issue291_final_replication_v5 \
+  --output /tmp/opencode/craft-issue291-final-replication-v5.zip \
+  --publisher github --repository upiscium/VillagerAgent \
+  --tag benchmark-craft-issue291-final-replication-v5
+```
 
 ## Bounded Matched Diagnostic
 
@@ -266,8 +379,9 @@ seeds Python `random` and NumPy before executing the unmodified upstream script
 with `runpy`. It preserves upstream `sys.argv`, script-relative imports, seed,
 and structure order.
 
-`configs/craft/official_baseline_gemma4_12b_ollama.yaml` runs `gemma4:12b`
-through a temporary loopback compatibility proxy because this model exposes
+`configs/craft/official_baseline_full.yaml` and the retained
+`official_baseline_gemma4_12b_ollama.yaml` run `gemma4:12b` through a temporary
+loopback compatibility proxy because this model exposes
 thinking text but empty visible content through Ollama's OpenAI endpoint. The
 proxy binds `127.0.0.1` on an ephemeral port, accepts the upstream runner's
 OpenAI chat-completion calls, forwards them to Ollama native `/api/chat` with
@@ -286,13 +400,12 @@ which the external process needs for loopback authentication, is never retained;
 unrelated credentials and the remote Ollama endpoint are not exposed to that
 process. Credential-bearing upstream proxy URLs are rejected.
 
-The non-proxy `official_baseline_full.yaml` declares only the allowlisted names
-`OPENAI_API_KEY` and `OPENAI_BASE_URL` for parent-environment forwarding. Their
-values are read at process launch, are not materialized in the resolved config,
-and API keys are included in runtime redaction. Endpoint URLs are accepted only
-with `http`/`https`, a clean host and optional port, and a known base API path;
-userinfo, query strings, fragments, and arbitrary credential-bearing paths are
-rejected before provenance or run artifacts are written.
+The adapter also retains a tested parent-environment forwarding contract for
+non-proxy deployments, restricted to the allowlisted names `OPENAI_API_KEY` and
+`OPENAI_BASE_URL`. The checked-in full baseline does not use that path. Forwarded
+values are read only at process launch and are excluded from resolved config;
+credential-bearing or malformed endpoint URLs are rejected before provenance or
+run artifacts are written.
 
 Before sanitization, each available upstream director prompt is inspected for
 the target structure, oracle candidates, and other directors' private views.
@@ -315,14 +428,15 @@ Run and validate one structure for one turn before starting the matrix:
 
 ```bash
 python -m benchmarks.craft.run \
-  --config configs/craft/official_baseline_gemma4_12b_ollama.yaml \
-  --structure 0 --turns 1 --seed 3 --overwrite
+  --config configs/craft/official_baseline_full.yaml \
+  --structure 0 --turns 1 --seed 3 --oracle-n 5 \
+  --run-name-suffix _issue291_exact_full_structure0_seed3_turn1 --overwrite
 python -m benchmarks.craft.artifact_validator \
-  --runs craft_official_baseline_gemma4_12b_ollama \
+  --runs craft_official_baseline_full_issue291_exact_full_structure0_seed3_turn1 \
   --result-root result/craft \
   --output /tmp/opencode/issue-291-final-one-turn-validation.json
 python -m benchmarks.common.publish_bundle sanitize \
-  result/craft/craft_official_baseline_gemma4_12b_ollama \
+  result/craft/craft_official_baseline_full_issue291_exact_full_structure0_seed3_turn1 \
   --output /tmp/opencode/issue-291-final-one-turn-public
 python -m benchmarks.common.publish_bundle validate \
   /tmp/opencode/issue-291-final-one-turn-public
@@ -337,7 +451,7 @@ identities, and the bundle validator accepts the sanitized artifacts:
 
 ```bash
 python -m benchmarks.craft.experiment \
-  --config configs/craft/experiments/gemma4_12b_clarify_policy_official.yaml
+  --config configs/craft/experiments/issue_291_final_replication.yaml --resume
 ```
 
 If a matrix is interrupted, do not restart it with `--overwrite`, because that

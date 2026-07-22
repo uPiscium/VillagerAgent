@@ -35,6 +35,20 @@ def load_config_with_minimal_dataset(tmp_path, path, *, overrides=None):
     return load_config(path, overrides=merged_overrides)
 
 
+def configure_parent_openai_runner(config):
+    config["craft"].pop("official_runner_ollama_proxy", None)
+    config["craft"]["official_runner_environment"] = {}
+    config["craft"]["official_runner_environment_forward"] = [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ]
+    for role in ("director", "builder"):
+        config["models"][role].update({
+            "model": "gpt-4o-mini",
+            "base_url": "https://api.openai.com/v1",
+        })
+
+
 def test_official_baseline_generates_comparable_turn_artifacts(tmp_path):
     config = load_config_with_minimal_dataset(
         tmp_path,
@@ -86,6 +100,7 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
         "configs/craft/official_baseline_full.yaml",
         overrides={"structures": [0], "turns": 2, "seed": 7},
     )
+    configure_parent_openai_runner(config)
 
     def fake_run(command, cwd, env, timeout, check, capture_output, text):
         output_dir = command[command.index("--output") + 1]
@@ -434,6 +449,7 @@ def test_official_baseline_failure_redacts_partial_runner_output(tmp_path, monke
         "configs/craft/official_baseline_full.yaml",
         overrides={"structures": [0], "turns": 2, "seed": 7},
     )
+    configure_parent_openai_runner(config)
 
     def fail_run(command, **kwargs):
         output_dir = command[command.index("--output") + 1]

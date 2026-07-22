@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0.0",
+  "bundle_id": "craft-issue291-final-replication-v5",
+  "benchmark": "craft",
+  "classification": "integration_validation",
+  "additional_run_manifests": [
+    "result/craft/craft_official_baseline_full_issue291_exact_full_structure0_seed3_turn1/artifact_manifest.json",
+    "result/craft/craft_official_baseline_full_issue291_exact_full_structure0_seed3_turn2/artifact_manifest.json",
+    "result/craft/craft_official_baseline_full_issue291_exact_full_structure0_seed3_turn20/artifact_manifest.json"
+  ],
+  "artifacts": [
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_291/final_v0_v1_comparison_input.json",
+      "destination": "final_v0_v1_comparison_input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_291/final_v0_v1_comparison_report.json",
+      "destination": "final_v0_v1_comparison_report.json"
+    },
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_291/final_v0_v4_comparison_input.json",
+      "destination": "final_v0_v4_comparison_input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_291/final_v0_v4_comparison_report.json",
+      "destination": "final_v0_v4_comparison_report.json"
+    },
+    {
+      "kind": "diagnostics",
+      "source": "docs/benchmarks/evidence/craft_issue_291/final_diagnostics.json",
+      "destination": "final_diagnostics.json"
+    },
+    {
+      "kind": "upstream_status",
+      "source": "docs/benchmarks/evidence/craft_issue_291/final_upstream_status.json",
+      "destination": "final_upstream_status.json"
+    },
+    {
+      "kind": "retrieval_probe_input",
+      "source": "benchmarks/craft/fixtures/issue_291_retrieval_probe_input.json",
+      "destination": "retrieval_probe_input.json"
+    },
+    {
+      "kind": "retrieval_probe_output",
+      "source": "docs/benchmarks/evidence/craft_issue_291/retrieval_probe_output.json",
+      "destination": "retrieval_probe_output.json"
+    }
+  ]
+}

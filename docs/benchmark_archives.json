@@ -279,6 +279,17 @@
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     },
     {
+      "id": "craft-issue291-final-replication-v5",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-final-replication-v5/craft-issue291-final-replication-v5.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue291-final-replication-v5/craft-issue291-final-replication-v5.zip.metadata.json",
+      "archive_sha256": "7760665517dd987fc7478e86bc17d5405212406fbff6f5ba827073b214487e08",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "eb7c1a483d4bbb3e90b722cee10af5adaed4d5fbd86a758574407a268fca4ce5",
+      "run_accounting": {"expected": 164, "completed": 163, "failed": 1, "missing": 0}
+    },
+    {
       "id": "minecraft-ollama-real-smoke-v1",
       "benchmark": "minecraft",
       "classification": "archived",
