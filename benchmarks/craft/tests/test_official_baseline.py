@@ -14,7 +14,7 @@ from benchmarks.craft.craft_env_adapter import (
     _require_official_runner_semantic_output,
 )
 from benchmarks.craft.leakage_guard import PartialInformationLeakageError
-from benchmarks.craft.run import _provenance_assets, run_config
+from benchmarks.craft.run import _default_command_text, _provenance_assets, run_config
 from benchmarks.craft.result_converter import normalize_results
 from benchmarks.craft.tests.fixtures import write_minimal_structures_dataset
 
@@ -33,6 +33,20 @@ def load_config_with_minimal_dataset(tmp_path, path, *, overrides=None):
         },
     }
     return load_config(path, overrides=merged_overrides)
+
+
+def configure_parent_openai_runner(config):
+    config["craft"].pop("official_runner_ollama_proxy", None)
+    config["craft"]["official_runner_environment"] = {}
+    config["craft"]["official_runner_environment_forward"] = [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ]
+    for role in ("director", "builder"):
+        config["models"][role].update({
+            "model": "gpt-4o-mini",
+            "base_url": "https://api.openai.com/v1",
+        })
 
 
 def test_official_baseline_generates_comparable_turn_artifacts(tmp_path):
@@ -86,6 +100,7 @@ def test_official_baseline_external_cli_normalizes_runner_output(tmp_path, monke
         "configs/craft/official_baseline_full.yaml",
         overrides={"structures": [0], "turns": 2, "seed": 7},
     )
+    configure_parent_openai_runner(config)
 
     def fake_run(command, cwd, env, timeout, check, capture_output, text):
         output_dir = command[command.index("--output") + 1]
@@ -434,6 +449,7 @@ def test_official_baseline_failure_redacts_partial_runner_output(tmp_path, monke
         "configs/craft/official_baseline_full.yaml",
         overrides={"structures": [0], "turns": 2, "seed": 7},
     )
+    configure_parent_openai_runner(config)
 
     def fail_run(command, **kwargs):
         output_dir = command[command.index("--output") + 1]
@@ -483,3 +499,17 @@ def test_direct_craft_failure_writes_summarizable_failed_bundle(tmp_path, monkey
     assert row["status"] == "failed"
     assert row["failed_runs"] == 1
     assert row["success_rate"] is None
+
+
+def test_direct_run_command_records_run_name_suffix():
+    command = _default_command_text(
+        "config.yaml",
+        dry_run=False,
+        overrides={
+            "craft": {"oracle_n": 5},
+            "run_name_suffix": "_issue291_seed3",
+        },
+    )
+
+    assert "--oracle-n 5" in command
+    assert command.endswith("--run-name-suffix _issue291_seed3")

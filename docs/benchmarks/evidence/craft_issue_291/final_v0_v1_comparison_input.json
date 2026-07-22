@@ -1,0 +1,1235 @@
+{
+  "schema_version": "1.0.0",
+  "comparison_id": "issue-291-v1-vs-v0-cross-seed-full",
+  "benchmark": "craft",
+  "conditions": {
+    "baseline": "v0_villageragent_baseline",
+    "candidate": "v1_dual_dag_clarify_disabled"
+  },
+  "metric": {
+    "name": "final_progress",
+    "role": "primary",
+    "higher_is_better": true
+  },
+  "pairing_keys": [
+    "structure_id",
+    "seed"
+  ],
+  "observations": [
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 0,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.6855302507476421,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 0,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7352657004830917,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure0_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 1,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7185990338164251,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 1,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7185990338164251,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure1_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 2,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.2814814814814815,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 2,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.2814814814814815,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure2_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 3,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7832988267770876,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 3,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7832988267770876,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure3_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 4,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.6908212560386473,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 4,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.6908212560386473,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure4_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 5,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.8442592592592592,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 5,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.8442592592592592,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 6,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7727272727272728,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 6,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7727272727272728,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure6_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 7,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 7,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure7_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 8,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 8,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure8_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 9,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.8404713804713805,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 9,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.8404713804713805,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure9_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 10,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 10,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.947089947089947,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure10_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 11,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.6657046657046657,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 11,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.848003848003848,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure11_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 12,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.33240740740740743,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 12,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.3274074074074074,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure12_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 13,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.5964170692431562,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 13,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.6346296296296297,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure13_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 14,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 14,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure14_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 15,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.4444444444444444,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 15,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.5084541062801933,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure15_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 16,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 16,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure16_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 17,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.5718518518518519,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 17,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.5935185185185186,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure17_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 18,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 18,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure18_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 19,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.7898148148148149,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 19,
+        "seed": 1
+      },
+      "status": "completed",
+      "metric_value": 0.777116402116402,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure19_seed1/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 0,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.722567287784679,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure0_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 0,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7352657004830917,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure0_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 1,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7185990338164251,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure1_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 1,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7185990338164251,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure1_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 2,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.2814814814814815,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure2_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 2,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.2814814814814815,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure2_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 3,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7832988267770876,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure3_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 3,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7832988267770876,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure3_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 4,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.6908212560386473,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure4_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 4,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.6908212560386473,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure4_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 5,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.8442592592592592,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure5_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 5,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.8442592592592592,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure5_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 6,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7857142857142857,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure6_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 6,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7857142857142857,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure6_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 7,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.947089947089947,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure7_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 7,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure7_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 8,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure8_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 8,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure8_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 9,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.8119865319865319,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure9_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 9,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.8404713804713805,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure9_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 10,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure10_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 10,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure10_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 11,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.576936026936027,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure11_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 11,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7118807118807119,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure11_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 12,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.3274074074074074,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure12_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 12,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.3274074074074074,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure12_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 13,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.5964170692431562,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure13_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 13,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.5964170692431562,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure13_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 14,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure14_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 14,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure14_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 15,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.5084541062801933,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure15_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 15,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.4800724637681159,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure15_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 16,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure16_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 16,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure16_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 17,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.5718518518518519,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure17_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 17,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.5985185185185186,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure17_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 18,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure18_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 18,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.94541910331384,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure18_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 19,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7898148148148149,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure19_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 19,
+        "seed": 3
+      },
+      "status": "completed",
+      "metric_value": 0.7898148148148149,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure19_seed3/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 0,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7352657004830917,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure0_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 0,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7352657004830917,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure0_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 1,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7185990338164251,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure1_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 1,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7674258109040717,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure1_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 2,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.2814814814814815,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure2_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 2,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.2814814814814815,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure2_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 3,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7832988267770876,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure3_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 3,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7832988267770876,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure3_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 4,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.6908212560386473,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure4_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 4,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.6908212560386473,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure4_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 5,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.8442592592592592,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure5_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 5,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.8442592592592592,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure5_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 6,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7857142857142857,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure6_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 6,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7857142857142857,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure6_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 7,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure7_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 7,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure7_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 8,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure8_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 8,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure8_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 9,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.8119865319865319,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure9_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 9,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.8119865319865319,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure9_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 10,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure10_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 10,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure10_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 11,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.576936026936027,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure11_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 11,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7647907647907647,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure11_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 12,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.3274074074074074,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure12_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 12,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.40740740740740744,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure12_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 13,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.6157407407407407,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure13_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 13,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.6157407407407407,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure13_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 14,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure14_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 14,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure14_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 15,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.5,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure15_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 15,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.4800724637681159,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure15_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 16,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure16_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 16,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure16_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 17,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.5796296296296296,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure17_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 17,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.5718518518518519,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure17_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 18,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.94541910331384,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure18_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 18,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 1.0,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure18_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v0_villageragent_baseline",
+      "pairing": {
+        "structure_id": 19,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.7898148148148149,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_issue291_final_v0_oracle5_structure19_seed5/artifact_manifest.json"
+    },
+    {
+      "condition": "v1_dual_dag_clarify_disabled",
+      "pairing": {
+        "structure_id": 19,
+        "seed": 5
+      },
+      "status": "completed",
+      "metric_value": 0.777116402116402,
+      "run_manifest": "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_retrieval_issue291_final_v1_oracle5_structure19_seed5/artifact_manifest.json"
+    }
+  ],
+  "analysis": {
+    "seed": 291,
+    "bootstrap_samples": 10000,
+    "confidence_level": 0.95
+  },
+  "evidence": {
+    "requested_claim": "performance_claim",
+    "execution_scope": "full",
+    "prespecified": true,
+    "multiple_comparisons": {
+      "family_id": "issue-291-v0-v1-v4-cross-seed-full",
+      "family_size": 2,
+      "method": "bonferroni"
+    }
+  }
+}

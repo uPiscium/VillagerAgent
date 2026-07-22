@@ -102,23 +102,20 @@ def test_resolved_config_preserves_credential_source_without_secret(tmp_path, mo
     assert "[REDACTED]" in json_text
 
 
-def test_external_runner_resolved_config_records_forward_names_not_parent_secret(tmp_path, monkeypatch):
+def test_full_external_runner_uses_proxy_without_parent_secret(tmp_path, monkeypatch):
     secret = "parent-openai-secret-sentinel"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.example/v1")
     config = load_config_without_runtime_assets("configs/craft/official_baseline_full.yaml")
 
     assert "api_key" not in config["models"]["director"]
-    assert config["craft"]["official_runner_environment_forward"] == [
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-    ]
+    assert "official_runner_environment_forward" not in config["craft"]
+    assert config["craft"]["official_runner_ollama_proxy"]["enabled"] is True
     save_resolved_config(config, tmp_path)
     serialized = (tmp_path / "config.resolved.json").read_text(encoding="utf-8")
 
     assert secret not in serialized
-    assert "official_runner_environment_forward" in serialized
-    assert "OPENAI_API_KEY" in serialized
+    assert "official_runner_ollama_proxy" in serialized
+    assert '"model": "gemma4:12b"' in serialized
 
 
 @pytest.mark.parametrize("run_name", ["../outside", "/tmp/outside", "nested/run", r"nested\run", ".", ""])

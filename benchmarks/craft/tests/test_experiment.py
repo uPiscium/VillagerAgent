@@ -4,12 +4,18 @@ import json
 import pytest
 import yaml
 
-from benchmarks.common.run_artifacts import RunDirectoryExistsError, prepare_run_directory
+from benchmarks.common.run_artifacts import (
+    RunDirectoryExistsError,
+    finalize_run_directory,
+    prepare_run_directory,
+)
 from benchmarks.craft.config import repo_root
 from benchmarks.craft.experiment import (
     ExperimentConfigError,
     _expand_run_specs,
     _experiment_overrides,
+    _has_validated_completed_result,
+    _is_reusable_completed_run,
     _report_path,
     _structure_override,
     load_experiment,
@@ -150,6 +156,27 @@ def test_load_gemma4_clarify_policy_manifests():
     assert any(run.get("overrides", {}).get("turns") == 30 for run in sensitivity["runs"])
 
 
+def test_issue_291_final_matrix_checkpoints_only_missing_work():
+    experiment = load_experiment(
+        "configs/craft/experiments/issue_291_final_replication.yaml"
+    )["experiment"]
+
+    expanded = _expand_run_specs(experiment["runs"], experiment["overrides"])
+
+    assert len(expanded) == 221
+    assert sum(len(spec["overrides"]["structures"]) for spec in expanded) == 240
+    assert sum(
+        spec["overrides"]["run_name_suffix"] == "_issue291_final_v0_oracle5_seed1"
+        for spec in expanded
+    ) == 1
+    assert all(
+        "_structure" in spec["overrides"]["run_name_suffix"]
+        for spec in expanded
+        if spec["overrides"]["run_name_suffix"] != "_issue291_final_v0_oracle5_seed1"
+    )
+    assert "compact_summary_output" not in experiment["report"]
+
+
 def test_load_experiment_rejects_empty_runs(tmp_path):
     manifest_path = tmp_path / "empty.yaml"
     manifest_path.write_text(yaml.safe_dump({"experiment": {"runs": []}}), encoding="utf-8")
@@ -249,6 +276,38 @@ def test_expand_run_specs_merges_nested_run_overrides():
             "run_name_suffix": "_oracle5",
         },
     }]
+
+
+def test_expand_run_specs_can_checkpoint_each_structure():
+    expanded = _expand_run_specs([{
+        "config": "config.yaml",
+        "suffix": "_final",
+        "seeds": [1, 3],
+        "structures": [0, 2],
+        "split_structures": True,
+    }], {"turns": 20})
+
+    assert [spec["overrides"] for spec in expanded] == [
+        {"turns": 20, "seed": 1, "structures": [0], "run_name_suffix": "_final_structure0_seed1"},
+        {"turns": 20, "seed": 1, "structures": [2], "run_name_suffix": "_final_structure2_seed1"},
+        {"turns": 20, "seed": 3, "structures": [0], "run_name_suffix": "_final_structure0_seed3"},
+        {"turns": 20, "seed": 3, "structures": [2], "run_name_suffix": "_final_structure2_seed3"},
+    ]
+
+
+def test_load_experiment_rejects_split_without_structures(tmp_path):
+    manifest_path = tmp_path / "bad_split.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({
+            "experiment": {
+                "runs": [{"config": "config.yaml", "split_structures": True}],
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ExperimentConfigError, match="non-empty structures"):
+        load_experiment(str(manifest_path))
 
 
 def test_run_experiment_dry_run_creates_run_output(tmp_path):
@@ -461,3 +520,164 @@ def test_run_experiment_records_failed_run_and_writes_summaries(tmp_path, monkey
     with pytest.raises(RunDirectoryExistsError, match="not empty"):
         run_experiment(str(manifest_path))
     assert (run_dir / "artifact_manifest.json").read_text(encoding="utf-8") == manifest_before
+
+
+def test_reusable_completed_run_requires_real_normalized_outputs(tmp_path):
+    run_dir = tmp_path / "run"
+    attempt_id = prepare_run_directory(run_dir, producer="benchmarks.craft.run")
+    finalize_run_directory(
+        run_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.craft.run",
+        status="completed",
+    )
+
+    assert _is_reusable_completed_run(run_dir, expected_config={}) is False
+
+
+def test_reusable_completed_run_requires_matching_resolved_config(tmp_path):
+    run_dir = tmp_path / "run"
+    attempt_id = prepare_run_directory(run_dir, producer="benchmarks.craft.run")
+    normalized = run_dir / "normalized"
+    normalized.mkdir()
+    (normalized / "summary.json").write_text('{"status": "completed"}\n', encoding="utf-8")
+    (normalized / "metrics.csv").write_text("final_progress\n0.5\n", encoding="utf-8")
+    (run_dir / "config.resolved.json").write_text(
+        json.dumps({"run": {"seed": 1}, "_meta": {"attempt_id": attempt_id}}) + "\n",
+        encoding="utf-8",
+    )
+    finalize_run_directory(
+        run_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.craft.run",
+        status="completed",
+    )
+
+    assert _is_reusable_completed_run(
+        run_dir,
+        expected_config={"run": {"seed": 1}},
+    ) is True
+    assert _is_reusable_completed_run(
+        run_dir,
+        expected_config={"run": {"seed": 3}},
+    ) is False
+    assert _has_validated_completed_result(run_dir) is True
+
+
+def test_run_experiment_resume_reuses_completed_run(tmp_path, monkeypatch):
+    run_dir = tmp_path / "results" / "completed_run"
+    manifest_path = tmp_path / "experiment.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({
+            "experiment": {
+                "name": "resume",
+                "runs": ["config.yaml"],
+                "result_root": str(tmp_path / "results"),
+                "report": {"output": str(tmp_path / "comparison.csv")},
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.load_config",
+        lambda *args, **kwargs: {"run": {"name": "completed_run"}},
+    )
+    monkeypatch.setattr("benchmarks.craft.experiment.output_dir_for_config", lambda config: run_dir)
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment._is_reusable_completed_run",
+        lambda path, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.run_config",
+        lambda *args, **kwargs: pytest.fail("completed run must not execute"),
+    )
+    monkeypatch.setattr("benchmarks.craft.experiment.build_comparison_report", lambda *args, **kwargs: [])
+
+    run_experiment(str(manifest_path), resume=True)
+
+    experiment_manifest = json.loads(
+        (tmp_path / "comparison.manifest.json").read_text(encoding="utf-8")
+    )
+    assert experiment_manifest["run_plan"][0]["disposition"] == "reused"
+
+
+def test_run_experiment_resume_replaces_incomplete_run(tmp_path, monkeypatch):
+    run_dir = tmp_path / "results" / "incomplete_run"
+    manifest_path = tmp_path / "experiment.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({
+            "experiment": {
+                "name": "resume",
+                "runs": ["config.yaml"],
+                "result_root": str(tmp_path / "results"),
+                "report": {"output": str(tmp_path / "comparison.csv")},
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.load_config",
+        lambda *args, **kwargs: {"run": {"name": "incomplete_run"}},
+    )
+    monkeypatch.setattr("benchmarks.craft.experiment.output_dir_for_config", lambda config: run_dir)
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment._is_reusable_completed_run",
+        lambda path, **kwargs: False,
+    )
+    observed = {}
+
+    def fake_run_config(*args, **kwargs):
+        observed.update(kwargs)
+        return run_dir
+
+    monkeypatch.setattr("benchmarks.craft.experiment.run_config", fake_run_config)
+    monkeypatch.setattr("benchmarks.craft.experiment.read_attempt_id", lambda path: "attempt")
+    monkeypatch.setattr("benchmarks.craft.experiment.validate_run_attempt", lambda *args, **kwargs: {})
+    monkeypatch.setattr("benchmarks.craft.experiment.build_comparison_report", lambda *args, **kwargs: [])
+
+    run_experiment(str(manifest_path), resume=True)
+
+    assert observed["overwrite"] is True
+    assert "--resume" in observed["command_text"]
+
+
+def test_run_experiment_rejects_overwrite_with_resume():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        run_experiment("unused.yaml", overwrite=True, resume=True)
+
+
+def test_run_experiment_resume_rejects_completed_config_mismatch(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "experiment.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump({
+            "experiment": {
+                "name": "resume",
+                "runs": ["config.yaml"],
+                "report": {"output": str(tmp_path / "comparison.csv")},
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.load_config",
+        lambda *args, **kwargs: {"run": {"name": "completed_run"}},
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.output_dir_for_config",
+        lambda config: tmp_path / "completed_run",
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment._is_reusable_completed_run",
+        lambda path, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment._has_validated_completed_result",
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        "benchmarks.craft.experiment.run_config",
+        lambda *args, **kwargs: pytest.fail("mismatched completed run must not execute"),
+    )
+
+    with pytest.raises(RunDirectoryExistsError, match="does not match"):
+        run_experiment(str(manifest_path), resume=True)

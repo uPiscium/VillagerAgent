@@ -36,7 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--structure", default=None)
     parser.add_argument("--turns", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--oracle-n", type=int, default=None)
     parser.add_argument("--condition", choices=sorted(CONDITIONS), default=None)
+    parser.add_argument("--run-name-suffix", default=None)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -312,8 +314,12 @@ def _default_command_text(
         command += f" --turns {overrides['turns']}"
     if overrides.get("seed") is not None:
         command += f" --seed {overrides['seed']}"
+    if isinstance(overrides.get("craft"), dict) and overrides["craft"].get("oracle_n") is not None:
+        command += f" --oracle-n {overrides['craft']['oracle_n']}"
     if overrides.get("condition") is not None:
         command += f" --condition {overrides['condition']}"
+    if overrides.get("run_name_suffix"):
+        command += f" --run-name-suffix {overrides['run_name_suffix']}"
     if overwrite:
         command += " --overwrite"
     return command
@@ -325,7 +331,9 @@ def main() -> None:
         "structures": _structure_override(args.structure),
         "turns": args.turns,
         "seed": args.seed,
+        "craft": {"oracle_n": args.oracle_n} if args.oracle_n is not None else None,
         "condition": args.condition,
+        "run_name_suffix": args.run_name_suffix,
     }
     command = "python -m benchmarks.craft.run --config " + args.config
     if args.dry_run:
@@ -336,8 +344,12 @@ def main() -> None:
         command += f" --turns {args.turns}"
     if args.seed is not None:
         command += f" --seed {args.seed}"
+    if args.oracle_n is not None:
+        command += f" --oracle-n {args.oracle_n}"
     if args.condition is not None:
         command += f" --condition {args.condition}"
+    if args.run_name_suffix:
+        command += f" --run-name-suffix {args.run_name_suffix}"
     if args.overwrite:
         command += " --overwrite"
     run_config(
