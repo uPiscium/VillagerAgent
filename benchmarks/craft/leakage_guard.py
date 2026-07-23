@@ -23,12 +23,14 @@ class LeakageGuard:
         artifact_path: Path | None = None,
         included_source_ids: tuple[str, ...] | list[str] | None = None,
         source_visibility: dict | None = None,
+        allowed_payloads: list[Any] | tuple[Any, ...] | None = None,
     ) -> dict:
         prompt_text = "\n".join(m.get("content", "") for m in prompt_messages)
+        allowed_text = "\n".join(_payload_text(payload) for payload in (allowed_payloads or ()))
         violations = []
         for label, payload in forbidden_payloads.items():
             for needle in _payload_needles(payload):
-                if needle and needle in prompt_text:
+                if needle and needle in prompt_text and needle not in allowed_text:
                     violations.append({"label": label, "match": needle[:200]})
                     break
         if included_source_ids is not None or source_visibility is not None:
@@ -106,3 +108,12 @@ def _nested_payload_needles(payload: Any) -> list[str]:
     if isinstance(payload, list):
         return [needle for value in payload for needle in _nested_payload_needles(value)]
     return []
+
+
+def _payload_text(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    try:
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(payload)

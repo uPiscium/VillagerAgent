@@ -48,6 +48,21 @@ def test_parity_validation_fails_on_turn_mismatch():
     assert "run.turns" in {diff["path"] for diff in report["disallowed_differences"]}
 
 
+def test_parity_validation_fails_on_model_or_temperature_mismatch():
+    baseline = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama.yaml")
+    treatment = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml")
+    treatment = copy.deepcopy(treatment)
+    treatment["models"]["director"]["model"] = "different-model"
+    treatment["models"]["builder"]["temperature"] = 0.7
+
+    report = compare_configs(baseline, treatment)
+
+    assert report["passed"] is False
+    assert {"models.director.model", "models.builder.temperature"}.issubset({
+        diff["path"] for diff in report["disallowed_differences"]
+    })
+
+
 def test_parity_validation_cli_writes_json_and_returns_nonzero(tmp_path):
     output = tmp_path / "parity.json"
 

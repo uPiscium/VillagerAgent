@@ -84,6 +84,10 @@ For baseline/candidate inference, `final_progress` is the prespecified primary o
 - `same_action_after_clarification_rate`: `same_action_after_clarification_count / clarification_count` when Clarify events exist.
 - `mean_clarification_to_action_latency`: Mean turn distance from Clarify to the next physical action.
 - `mean_progress_after_clarification`: Mean progress delta from Clarify to the next physical action.
+- `clarification_trace.jsonl`: Per-Clarify lifecycle records containing the target Director, expected evidence and candidate changes, measured oracle candidate counts, pre/post candidate rankings and states, response ingestion result, and actual unlock/invalidation/resolution deltas.
+- `oracle_candidate_count`: Number of oracle-derived candidates actually represented when Clarify was selected, rather than the configured `oracle_n` maximum.
+- `valid_oracle_candidate_count`: Number of represented oracle candidates not already invalidated before Clarify.
+- `blocked_oracle_candidate_count`: Number of represented oracle candidates blocked or waiting for evidence before Clarify, summed across Clarify events in run summaries.
 - `gate_invocation_count`: Number of persisted gate decision metadata records. Current artifacts persist intervention decisions; future allow decisions are counted when stored with `reason=none` or `decision=allow`.
 - `gate_allow_count`: Number of persisted allow decisions.
 - `gate_block_count`: Number of persisted gate interventions that blocked the candidate action.

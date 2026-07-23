@@ -177,6 +177,26 @@ def test_issue_291_final_matrix_checkpoints_only_missing_work():
     assert "compact_summary_output" not in experiment["report"]
 
 
+def test_issue_370_remaining_matrix_checkpoints_only_lifecycle_affected_conditions():
+    experiment = load_experiment(
+        "configs/craft/experiments/gemma4_12b_clarify_policy_official_remaining.yaml"
+    )["experiment"]
+
+    expanded = _expand_run_specs(experiment["runs"], experiment["overrides"])
+
+    assert len(experiment["runs"]) == 3
+    assert len(expanded) == 180
+    assert all(len(spec["overrides"]["structures"]) == 1 for spec in expanded)
+    assert {spec["config"] for spec in expanded} == {
+        "configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml",
+        "configs/craft/eval_gemma4_12b_ollama_dual_dag_clarify_throughput_fix.yaml",
+        "configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml",
+    }
+    assert all(spec["overrides"]["craft"]["oracle_n"] == 5 for spec in expanded)
+    assert all(spec["overrides"]["turns"] == 20 for spec in expanded)
+    assert "compact_summary_output" not in experiment["report"]
+
+
 def test_load_experiment_rejects_empty_runs(tmp_path):
     manifest_path = tmp_path / "empty.yaml"
     manifest_path.write_text(yaml.safe_dump({"experiment": {"runs": []}}), encoding="utf-8")

@@ -2,8 +2,10 @@ import pytest
 
 from benchmarks.craft.craft_env_adapter import (
     _apply_clarification_gate,
+    _ingest_pending_clarification_response,
     _prepare_runtime_action_candidates,
     _prioritize_supported_candidates,
+    _register_clarification_action,
     _suppress_repeated_zero_progress_candidates,
     _runtime_decision_support,
 )
@@ -948,6 +950,62 @@ def test_prepare_runtime_action_candidates_syncs_unlock_state_to_metadata_candid
     assert action_candidates[0].state == "executable"
     assert action_candidates[0].metadata["unlock"]["reason"] == "physically_verified"
     assert support["candidates"][0]["state"] == "executable"
+
+
+def test_clarification_action_ingests_target_response_and_records_lifecycle():
+    runtime = DualDAGRuntime(director_ids=["D1", "D2"], config={})
+    claim = runtime.add_reported_claim(
+        director_id="D1",
+        turn_index=1,
+        message="Bottom left may be yellow small, please confirm.",
+    )
+    candidate = {
+        "node_id": "action:2:0",
+        "action": {"action": "place", "block": "ys", "position": "(0,0)", "layer": 0},
+        "state": "candidate",
+        "confidence": 0.4,
+        "supported_by": [],
+        "conflicts_with": [],
+        "required_evidence": [claim["node_id"]],
+        "metadata": {},
+    }
+    runtime.add_action_candidates(turn_index=2, candidates=[candidate])
+    runtime.update_action_candidate_states(turn_index=2)
+    action = {
+        "action": "clarify",
+        "clarification": "Please confirm the bottom-left block color.",
+        "_gated_clarification": {"reasons": ["required_evidence"], "risk_score": 0.8},
+        "_action_candidate_metadata": {
+            "chosen_candidate_id": "action:2:0",
+            "candidates": [candidate],
+            "public_evidence_summary": [{
+                "candidate_id": "action:2:0",
+                "missing_public_evidence_claims": [{
+                    "claim_id": claim["node_id"],
+                    "director_id": "D1",
+                }],
+            }],
+        },
+    }
+
+    _register_clarification_action(runtime=runtime, action=action, turn_index=2)
+    claims = _ingest_pending_clarification_response(
+        runtime=runtime,
+        pending_action=action,
+        director_messages={"D1": "Bottom left is yellow small.", "D2": "No additional evidence."},
+        turn_index=3,
+    )
+
+    assert action["target_director"] == "D1"
+    assert action["_clarification_candidate_id"] == "coordination:clarify:2:0"
+    assert list(claims) == ["D1"]
+    lifecycle = action["_clarification_lifecycle"]
+    assert lifecycle["response_received"] is True
+    assert lifecycle["response_parse_success"] is True
+    assert lifecycle["newly_unlocked_candidate_ids"] == ["action:2:0"]
+    assert lifecycle["resolved_required_evidence_ids"] == [claim["node_id"]]
+    assert lifecycle["candidates_before"][0]["state"] == "waiting_for_evidence"
+    assert lifecycle["candidates_after"][0]["state"] == "executable"
 
 
 def test_runtime_decision_support_prioritizes_recommended_oracle_candidate():

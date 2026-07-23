@@ -19,6 +19,7 @@ def classify_clarification_outcome(trace_row: dict) -> dict:
     invalidated = _non_empty(trace_row.get("newly_invalidated_candidate_ids"))
     resolved_hypotheses = _non_empty(trace_row.get("resolved_hypothesis_ids"))
     resolved_evidence = _non_empty(trace_row.get("resolved_required_evidence_ids"))
+    resolved_fact = bool(trace_row.get("resolved_fact_id"))
     top_changed = bool(trace_row.get("top_action_changed", False))
     progress_delta = _float_or_none(trace_row.get("next_physical_action_progress_delta"))
 
@@ -30,6 +31,8 @@ def classify_clarification_outcome(trace_row: dict) -> dict:
         reasons.append("hypothesis_resolved")
     if resolved_evidence:
         reasons.append("required_evidence_resolved")
+    if resolved_fact:
+        reasons.append("fact_resolved")
     if top_changed and progress_delta is not None and progress_delta > 0:
         reasons.append("top_action_changed_with_positive_progress")
     if reasons:

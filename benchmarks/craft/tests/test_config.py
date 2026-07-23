@@ -295,6 +295,9 @@ def test_gemma4_ablation_configs_keep_villageragent_parity_and_flags():
     clarify_only = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag_clarify_only.yaml")
     full_dual_dag = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml")
     clarify_fix = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag_clarify_throughput_fix.yaml")
+    clarify_lifecycle_probe = load_config_without_runtime_assets(
+        "configs/craft/eval_gemma4_12b_ollama_dual_dag_clarify_lifecycle_probe.yaml"
+    )
     voi = load_config_without_runtime_assets("configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml")
     repeated_zero_fix = load_config_without_runtime_assets(
         "configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information_repeated_zero_fix.yaml"
@@ -332,6 +335,13 @@ def test_gemma4_ablation_configs_keep_villageragent_parity_and_flags():
     assert clarify_only["dual_dag"]["gated_clarification"]["coordination_actions"]["enabled"] is True
     assert full_dual_dag["dual_dag"]["gated_clarification"]["enabled"] is True
     assert clarify_fix["dual_dag"]["gated_clarification"]["suppress_executable_low_confidence"] is True
+    assert clarify_fix["dual_dag"]["gated_clarification"]["max_clarifications_per_episode"] == 2
+    assert clarify_fix["dual_dag"]["gated_clarification"]["prevent_duplicate_clarifications"] is True
+    assert clarify_lifecycle_probe["dual_dag"]["gated_clarification"]["min_action_confidence"] == 1.1
+    assert clarify_lifecycle_probe["dual_dag"]["gated_clarification"]["max_clarifications_per_episode"] == 1
+    assert clarify_lifecycle_probe["craft"] == {**baseline["craft"], "oracle_n": 5}
+    assert clarify_lifecycle_probe["villageragent"] == baseline["villageragent"]
+    assert clarify_lifecycle_probe["models"] == baseline["models"]
     assert voi["dual_dag"]["gated_clarification"]["policy"] == "value_of_information"
     assert repeated_zero_fix["dual_dag"]["gated_clarification"]["policy"] == "value_of_information"
     assert repeated_zero_fix["dual_dag"]["action_selection"]["suppress_repeated_zero_progress"]["enabled"] is True

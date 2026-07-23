@@ -164,15 +164,26 @@ class CraftEnvAdapter:
                 output.director_id: output.public_message
                 for output in outputs
             }
-            epistemic_claims = {
-                director_id: dual_dag_runtime.add_reported_claim(
+            clarification_claims = _ingest_pending_clarification_response(
+                runtime=dual_dag_runtime,
+                pending_action=builder_actions[-1] if builder_actions else None,
+                director_messages=messages,
+                turn_index=turn_index,
+            )
+            if clarification_claims and turns:
+                turns[-1]["director_responses"] = {
+                    director_id: {"public_message": messages[director_id]}
+                    for director_id in clarification_claims
+                }
+            epistemic_claims = dict(clarification_claims)
+            for director_id, message in messages.items():
+                if not message.strip() or director_id in epistemic_claims:
+                    continue
+                epistemic_claims[director_id] = dual_dag_runtime.add_reported_claim(
                     director_id=director_id,
                     turn_index=turn_index,
                     message=message,
                 )
-                for director_id, message in messages.items()
-                if message.strip()
-            }
             for output in outputs:
                 private_view = private_views.get(output.director_id)
                 if private_view is not None:
@@ -243,6 +254,11 @@ class CraftEnvAdapter:
             dual_dag_runtime.add_action_candidates(
                 turn_index=turn_index,
                 candidates=(builder_action.get("_action_candidate_metadata", {}) or {}).get("candidates", []),
+            )
+            _register_clarification_action(
+                runtime=dual_dag_runtime,
+                action=builder_action,
+                turn_index=turn_index,
             )
             builder_actions.append(builder_action)
             move_executed = False
@@ -1127,6 +1143,172 @@ def _apply_clarification_gate(
     }
 
 
+def _register_clarification_action(
+    *,
+    runtime: DualDAGRuntime,
+    action: dict,
+    turn_index: int,
+) -> None:
+    if action.get("action") != "clarify" or action.get("_clarification_candidate_id"):
+        return
+    metadata = action.get("_action_candidate_metadata") or {}
+    candidates = metadata.get("candidates", []) or []
+    related_candidate_ids = [
+        candidate.get("node_id") for candidate in candidates if candidate.get("node_id")
+    ]
+    chosen_id = metadata.get("chosen_candidate_id")
+    chosen = next(
+        (candidate for candidate in candidates if candidate.get("node_id") == chosen_id),
+        candidates[0] if candidates else {},
+    )
+    required_evidence_ids = list(chosen.get("required_evidence", []) or [])
+    blocking_claim_ids = list(chosen.get("conflicts_with", []) or [])
+    target_director = _clarification_target_director(
+        runtime=runtime,
+        action=action,
+        evidence_ids=[*required_evidence_ids, *blocking_claim_ids],
+    )
+    gate = action.get("_gated_clarification") or {}
+    reasons = gate.get("reasons", []) or []
+    reason = gate.get("reason") or (reasons[0] if reasons else "clarification")
+    coordination = runtime.add_coordination_action_candidate(
+        turn_index=turn_index,
+        action_type="clarify",
+        reason=reason,
+        related_candidate_ids=related_candidate_ids,
+        blocking_claim_ids=blocking_claim_ids,
+        required_evidence_ids=required_evidence_ids,
+        question=action.get("clarification", ""),
+        confidence=float(gate.get("risk_score", 1.0) or 0.0),
+    )
+    action["target_director"] = target_director
+    action["_clarification_candidate_id"] = coordination["node_id"]
+    action["_expected_evidence_ids"] = sorted(set(required_evidence_ids))
+    action["_expected_candidate_ids"] = sorted(set(related_candidate_ids))
+    action["_clarification_lifecycle"] = {
+        "candidates_before": _clarification_candidate_snapshot(runtime, related_candidate_ids),
+        "hypotheses_before": _clarification_hypothesis_snapshot(runtime),
+        "response_received": False,
+        "response_parse_success": None,
+    }
+
+
+def _ingest_pending_clarification_response(
+    *,
+    runtime: DualDAGRuntime,
+    pending_action: dict | None,
+    director_messages: dict[str, str],
+    turn_index: int,
+) -> dict[str, dict]:
+    if not pending_action or pending_action.get("action") != "clarify":
+        return {}
+    clarify_candidate_id = pending_action.get("_clarification_candidate_id")
+    lifecycle = pending_action.get("_clarification_lifecycle")
+    if not clarify_candidate_id or not isinstance(lifecycle, dict) or lifecycle.get("response_received"):
+        return {}
+    target_director = pending_action.get("target_director")
+    if target_director not in director_messages:
+        target_director = next(
+            (director_id for director_id, message in director_messages.items() if message.strip()),
+            None,
+        )
+    message = director_messages.get(target_director, "") if target_director else ""
+    if not message.strip():
+        lifecycle["response_received"] = False
+        lifecycle["response_parse_success"] = False
+        return {}
+
+    before_candidates = lifecycle.get("candidates_before", []) or []
+    before_hypotheses = lifecycle.get("hypotheses_before", []) or []
+    result = runtime.ingest_clarification_response(
+        clarify_candidate_id=clarify_candidate_id,
+        director_id=target_director,
+        turn_index=turn_index,
+        message=message,
+    )
+    related_ids = list(pending_action.get("_expected_candidate_ids", []) or [])
+    after_candidates = _clarification_candidate_snapshot(runtime, related_ids)
+    after_hypotheses = _clarification_hypothesis_snapshot(runtime)
+    before_states = {row.get("node_id"): row.get("state") for row in before_candidates}
+    after_states = {row.get("node_id"): row.get("state") for row in after_candidates}
+    before_hypothesis_states = {row.get("node_id"): row.get("status") for row in before_hypotheses}
+    resolved_fact = result.get("resolved_fact") or {}
+    resolved_evidence_ids = list((resolved_fact.get("content") or {}).get("evidence_ids", []) or [])
+    lifecycle.update({
+        "response_received": True,
+        "response_parse_success": bool(result.get("reported_claim")),
+        "response_turn_index": turn_index,
+        "response_director_id": target_director,
+        "response_claim_id": (result.get("reported_claim") or {}).get("node_id"),
+        "resolved_fact_id": resolved_fact.get("node_id"),
+        "candidates_after": after_candidates,
+        "hypotheses_after": after_hypotheses,
+        "newly_unlocked_candidate_ids": sorted(
+            candidate_id for candidate_id, state in after_states.items()
+            if state == "executable" and before_states.get(candidate_id) != "executable"
+        ),
+        "newly_invalidated_candidate_ids": sorted(
+            candidate_id for candidate_id, state in after_states.items()
+            if state == "invalidated" and before_states.get(candidate_id) != "invalidated"
+        ),
+        "resolved_hypothesis_ids": sorted(
+            row.get("node_id") for row in after_hypotheses
+            if row.get("node_id") and row.get("status") == "resolved"
+            and before_hypothesis_states.get(row.get("node_id")) != "resolved"
+        ),
+        "resolved_required_evidence_ids": sorted(
+            set(resolved_evidence_ids) & set(pending_action.get("_expected_evidence_ids", []) or [])
+        ),
+    })
+    return {target_director: result["reported_claim"]}
+
+
+def _clarification_candidate_snapshot(runtime: DualDAGRuntime, candidate_ids: list[str]) -> list[dict]:
+    rows = []
+    for candidate_id in candidate_ids:
+        candidate = runtime.action_nodes.get(candidate_id)
+        if not isinstance(candidate, dict):
+            continue
+        rows.append({
+            "node_id": candidate_id,
+            "state": candidate.get("state"),
+            "confidence": candidate.get("confidence"),
+            "action": {
+                key: value
+                for key, value in (candidate.get("action") or {}).items()
+                if not str(key).startswith("_")
+            },
+        })
+    return rows
+
+
+def _clarification_hypothesis_snapshot(runtime: DualDAGRuntime) -> list[dict]:
+    return [
+        {
+            "node_id": node_id,
+            "status": (hypothesis.get("content") or {}).get("status"),
+        }
+        for node_id, hypothesis in sorted(runtime.hypotheses().items())
+    ]
+
+
+def _clarification_target_director(
+    *,
+    runtime: DualDAGRuntime,
+    action: dict,
+    evidence_ids: list[str],
+) -> str:
+    missing_claims = _missing_public_evidence_claims(action.get("_action_candidate_metadata") or {})
+    for claim in missing_claims:
+        if claim.get("director_id"):
+            return str(claim["director_id"])
+    for evidence_id in evidence_ids:
+        provenance = (runtime.epistemic_nodes.get(evidence_id, {}).get("provenance") or {})
+        if provenance.get("director_id"):
+            return str(provenance["director_id"])
+    return runtime.director_ids[0] if runtime.director_ids else ""
+
+
 def _clarification_message(gate_metadata: dict, candidate_metadata: dict) -> str:
     missing_claims = _missing_public_evidence_claims(candidate_metadata)
     if "required_evidence" in gate_metadata.get("reasons", []) and missing_claims:
@@ -1574,6 +1756,7 @@ def _inspect_official_runner_leakage(game: dict, *, artifact_path: Path) -> list
     guard = LeakageGuard({})
     target_views = game.get("target_director_views", {}) or {}
     target_structure = game.get("target_structure")
+    public_messages: list[str] = []
     for turn in game.get("turns", []):
         oracle_moves = turn.get("oracle_moves")
         for key, prompt in turn.items():
@@ -1594,6 +1777,7 @@ def _inspect_official_runner_leakage(game: dict, *, artifact_path: Path) -> list
                 prompt_messages=[{"role": "user", "content": prompt}],
                 forbidden_payloads=forbidden,
                 artifact_path=artifact_path,
+                allowed_payloads=public_messages,
             )
         for director_id, response in (turn.get("director_responses", {}) or {}).items():
             public_message = response.get("public_message", "") if isinstance(response, dict) else str(response)
@@ -1610,7 +1794,9 @@ def _inspect_official_runner_leakage(game: dict, *, artifact_path: Path) -> list
                     },
                 },
                 artifact_path=artifact_path,
+                allowed_payloads=public_messages,
             )
+            public_messages.append(public_message)
         builder_output = {
             key: turn.get(key)
             for key in ("move_attempted", "builder_action", "builder_response", "clarification")
@@ -1632,6 +1818,7 @@ def _inspect_official_runner_leakage(game: dict, *, artifact_path: Path) -> list
                 },
             },
             artifact_path=artifact_path,
+            allowed_payloads=public_messages,
         )
     if not guard.reports:
         raise PartialInformationLeakageError(

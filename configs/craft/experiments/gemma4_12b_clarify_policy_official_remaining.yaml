@@ -1,0 +1,35 @@
+experiment:
+  name: craft_gemma4_12b_clarify_policy_official_remaining
+  description: Post-lifecycle current, budgeted, and value-of-information Clarify checkpoints.
+  result_root: result/craft
+  continue_on_error: false
+  overrides:
+    turns: 20
+  runs:
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag.yaml
+      suffix: _issue370_post_lifecycle_current_clarify_oracle5
+      seeds: [1, 3, 5]
+      structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_clarify_throughput_fix.yaml
+      suffix: _issue370_post_lifecycle_budgeted_clarify_oracle5
+      seeds: [1, 3, 5]
+      structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
+      overrides:
+        craft:
+          oracle_n: 5
+    - config: configs/craft/eval_gemma4_12b_ollama_dual_dag_value_of_information.yaml
+      suffix: _issue370_post_lifecycle_value_of_information_oracle5
+      seeds: [1, 3, 5]
+      structures: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      split_structures: true
+      overrides:
+        craft:
+          oracle_n: 5
+  report:
+    output: result/craft/comparison_gemma4_12b_clarify_policy_official_remaining.csv
+    json_output: result/craft/comparison_gemma4_12b_clarify_policy_official_remaining.json

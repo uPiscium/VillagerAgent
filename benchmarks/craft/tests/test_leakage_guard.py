@@ -33,6 +33,40 @@ def test_target_structure_not_in_prompt():
         )
 
 
+def test_forbidden_payload_is_allowed_after_explicit_public_disclosure():
+    guard = LeakageGuard({})
+    private_view = {"row_0": [{"color": "yellow", "size": 1}]}
+    public_message = json.dumps(private_view, sort_keys=True)
+
+    report = guard.inspect_prompt(
+        director_id="D2",
+        prompt_messages=[{
+            "role": "user",
+            "content": f"Public conversation:\nD1: {public_message}",
+        }],
+        forbidden_payloads={"other_private_view:D1": private_view},
+        allowed_payloads=[public_message],
+    )
+
+    assert report["passed"] is True
+
+
+def test_forbidden_payload_is_rejected_before_public_disclosure():
+    guard = LeakageGuard({})
+    private_view = {"row_0": [{"color": "yellow", "size": 1}]}
+
+    with pytest.raises(PartialInformationLeakageError, match="other_private_view:D1"):
+        guard.inspect_prompt(
+            director_id="D2",
+            prompt_messages=[{
+                "role": "user",
+                "content": json.dumps(private_view, sort_keys=True),
+            }],
+            forbidden_payloads={"other_private_view:D1": private_view},
+            allowed_payloads=[],
+        )
+
+
 def test_saved_builder_prompt_artifact_is_checked_without_leakage(tmp_path):
     artifact_path = tmp_path / "Builder_turn_001.json"
     artifact_path.write_text(
