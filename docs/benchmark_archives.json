@@ -332,6 +332,17 @@
       "manifest_path": "artifact_manifest.json",
       "manifest_sha256": "34388fa7acf0d5a60f8b0102200d43db55c4cf8b8486d21d3229a8767611342a",
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "tdw-mat-issue372-fixture-policy-smoke-v1",
+      "benchmark": "tdw_mat",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-tdw-mat-issue372-fixture-policy-smoke-v1/tdw-mat-issue372-fixture-policy-smoke-v1.tar.gz",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-tdw-mat-issue372-fixture-policy-smoke-v1/tdw-mat-issue372-fixture-policy-smoke-v1.tar.gz.metadata.json",
+      "archive_sha256": "1ec03b46fe663557382eb4fe17ef4c6edecc9fd790b8fc3f1e337ef16cb6d48f",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "a66598162f6d3c9bda4a8b7d94aed8d251c7b45072a65c53a0575c027894cb96",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     }
   ]
 }

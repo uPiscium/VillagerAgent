@@ -1,5 +1,7 @@
 # TDW-MAT Adapter
 
+<!-- benchmark-result: tdw-mat-issue372-fixture-policy-smoke-v1 -->
+
 This document records the source audit, diagnostic subset, adapter boundary, and execution gates for issue #372. The fixture-backed smoke validates the repository integration contract; it is not a TDW Unity performance run.
 
 ## Source Audit
@@ -120,6 +122,13 @@ Tracked evidence:
 - `docs/benchmarks/evidence/tdw_mat_issue_372/fixture_smoke.json`
 - `docs/benchmarks/evidence/tdw_mat_issue_372/fixture_comparison.json`
 - `docs/benchmarks/evidence/tdw_mat_issue_372/real_preflight.json`
+
+Immutable evidence release:
+
+- Release: `benchmark-tdw-mat-issue372-fixture-policy-smoke-v1`
+- URL: https://github.com/upiscium/VillagerAgent/releases/tag/benchmark-tdw-mat-issue372-fixture-policy-smoke-v1
+- Archive SHA-256: `1ec03b46fe663557382eb4fe17ef4c6edecc9fd790b8fc3f1e337ef16cb6d48f`
+- Manifest SHA-256: `a66598162f6d3c9bda4a8b7d94aed8d251c7b45072a65c53a0575c027894cb96`
 
 The real preflight found the CoELA source tree but did not start Unity because the
 isolated runtime lacks the Python `gym` package, the Python `tdw` package, and `DISPLAY`.
