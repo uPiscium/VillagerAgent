@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "benchmark": "tdw_mat",
+  "smoke_type": "fixture_contract",
+  "performance_claim": false,
+  "source_scenario": {
+    "scene": "5a",
+    "layout": "0_0",
+    "task": "food",
+    "seed": 2824
+  },
+  "episode": {
+    "episode_id": "tdw-mat-fixture-smoke",
+    "agent_ids": [
+      "agent_0",
+      "agent_1"
+    ],
+    "steps": 3
+  },
+  "metrics": {
+    "task_success": true,
+    "transport_rate": 1.0,
+    "transported_objects": 1,
+    "target_objects": 1,
+    "episode_steps": 3,
+    "physical_action_count": 2,
+    "communication_count": 1,
+    "communication_rate": 0.3333333333333333,
+    "goal_relevant_communication_rate": 1.0,
+    "communication_utility_proxy": 1.0,
+    "communication_utility": 1.0,
+    "invalid_physical_action_count": 0,
+    "false_feasible_action_rate": 0.0,
+    "false_infeasible_action_rate": 0.0,
+    "feasibility_prediction_precision": 1.0,
+    "feasibility_prediction_recall": 1.0,
+    "feasibility_true_positive": 2,
+    "feasibility_false_positive": 0,
+    "feasibility_true_negative": 0,
+    "feasibility_false_negative": 0,
+    "recovery_after_failure_rate": 0.0,
+    "recovered_failure_count": 0,
+    "physical_execution_frames": 10,
+    "mean_physical_action_frames": 5.0,
+    "communication_execution_frames": 5,
+    "mean_communication_action_frames": 5.0,
+    "total_execution_frames": 15,
+    "action_throughput": 0.2,
+    "information_action_to_progress_latency": 2.0
+  },
+  "trace": [
+    {
+      "step": 1,
+      "action_id": "send_message:agent_0",
+      "action_type": "send_message",
+      "information_action": true,
+      "succeeded": true,
+      "frames": 5
+    },
+    {
+      "step": 2,
+      "action_id": "grasp:agent_0:10:left",
+      "action_type": "grasp",
+      "information_action": false,
+      "succeeded": true,
+      "frames": 5
+    },
+    {
+      "step": 3,
+      "action_id": "drop:agent_0:left",
+      "action_type": "drop",
+      "information_action": false,
+      "succeeded": true,
+      "frames": 5
+    }
+  ],
+  "artifact_counts": {
+    "visible_epistemic_nodes": 3,
+    "visible_candidates": 5,
+    "public_events": 1
+  },
+  "caveat": "Dependency-free schema/adapter smoke using the official TDW-MAT observation and action contract; not a Unity simulator run."
+}

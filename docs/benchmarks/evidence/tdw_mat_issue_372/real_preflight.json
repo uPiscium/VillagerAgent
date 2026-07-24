@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "benchmark": "tdw_mat",
+  "coela_root": "external/CoELA/tdw_mat",
+  "python_version": "3.10",
+  "checks": {
+    "source_tree": true,
+    "python_version_3_10_or_newer": true,
+    "python_gym_package": false,
+    "python_tdw_package": false,
+    "display": false
+  },
+  "ready": false,
+  "missing": [
+    "python_gym_package",
+    "python_tdw_package",
+    "display"
+  ],
+  "source_files": {
+    "tdw_gym": "external/CoELA/tdw_mat/tdw-gym/tdw_gym.py",
+    "test_scenarios": "external/CoELA/tdw_mat/dataset/dataset_test/test_env.json",
+    "name_map": "external/CoELA/tdw_mat/dataset/name_map.json",
+    "room_types": "external/CoELA/tdw_mat/dataset/room_types.json",
+    "license": "external/CoELA/tdw_mat/LICENSE"
+  },
+  "asset_cache": {
+    "path": "external/CoELA/tdw_mat/transport_challenge_asset_bundles",
+    "present": false,
+    "required_before_launch": false,
+    "note": "Upstream normally downloads transport assets during first launch."
+  }
+}

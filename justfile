@@ -10,6 +10,18 @@ validate:
 test:
     pytest
 
+tdw-mat-smoke:
+    python -m benchmarks.tdw_mat.smoke --output result/tdw_mat/fixture_smoke.json
+
+tdw-mat-comparison:
+    python -m benchmarks.tdw_mat.comparison --output result/tdw_mat/fixture_comparison.json
+
+tdw-mat-real-preflight:
+    python -m benchmarks.tdw_mat.real_smoke --preflight-only --output result/tdw_mat/real_preflight.json
+
+tdw-mat-real-smoke:
+    python -m benchmarks.tdw_mat.real_smoke --require-ready --output result/tdw_mat/real_smoke.json
+
 real-smoke:
     pytest -q tests/test_minecraft_real_smoke.py -m real_smoke -rs
 
