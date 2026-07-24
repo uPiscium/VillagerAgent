@@ -1,5 +1,7 @@
 # CRAFT Clarify and Dual-DAG Evaluation
 
+<!-- benchmark-result: craft-issue370-bounded-policy-evaluation-v1 -->
+
 This report tracks issue #370. The paper-facing condition is oracle-assisted
 CRAFT with `oracle_n=5`, 20 turns, no Builder tool use, and matched model and
 sampling settings.
@@ -120,6 +122,22 @@ This stop makes the result bounded and prevents a performance claim. It does
 not invalidate the lifecycle integration result or the policy diagnostics.
 `docs/benchmarks/evidence/craft_issue_370/remaining_matrix_status.json` records
 the exact accounting and attempt identifiers.
+
+## Immutable Archive
+
+The self-contained sanitized bundle contains 145 completed source runs and one
+failed timeout source. GitHub marks the release immutable:
+
+- Release: `benchmark-craft-issue370-bounded-policy-evaluation-v1`
+- URL: https://github.com/upiscium/VillagerAgent/releases/tag/benchmark-craft-issue370-bounded-policy-evaluation-v1
+- Archive SHA-256: `49674a327d637aeb4003c01aa35b28dd3cc03dfcd037a3fe5628250033ef128c`
+- Metadata SHA-256: `9f82d2a24b747e51bce9c0bdbbee1c847c543bc92d8ae644f5f7bae8e8fedf65`
+- Source manifest SHA-256: `2ac3db8df5fc9383b00e70e149c8da409b9e80680ffb76cb24a0a8efbb87d3a6`
+
+Private-provenance objects, credentials, raw prompts, and hidden evaluator state
+are excluded from the public derivative. The archive retains aggregate metrics,
+public Clarify lifecycle diagnostics, leakage reports, provenance, and exact
+source status accounting.
 
 ## Policy Recommendation
 
