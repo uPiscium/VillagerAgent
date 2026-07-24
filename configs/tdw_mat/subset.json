@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "https://github.com/UMass-Embodied-AGI/CoELA.git",
+    "commit": "3e12dea925d735eefce33da71806ae9da6fcaf3f",
+    "license": "MIT",
+    "scenario_file": "external/CoELA/tdw_mat/dataset/dataset_test/test_env.json"
+  },
+  "diagnostic_subset": [
+    {"episode_index": 0, "scene": "5a", "layout": "0_0", "task": "food", "seed": 2824},
+    {"episode_index": 1, "scene": "5a", "layout": "0_1", "task": "food", "seed": 2824},
+    {"episode_index": 12, "scene": "5a", "layout": "0_0", "task": "stuff", "seed": 2824},
+    {"episode_index": 13, "scene": "5a", "layout": "0_1", "task": "stuff", "seed": 2824}
+  ],
+  "selection_reason": "One scene and layout family, both enough/rare container settings, and both official task types.",
+  "performance_claim": false
+}

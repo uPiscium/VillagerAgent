@@ -1,0 +1,3404 @@
+{
+  "schema_version": 1,
+  "benchmark": "tdw_mat",
+  "comparison_type": "fixture_policy_smoke",
+  "performance_claim": false,
+  "source": {
+    "repository": "https://github.com/UMass-Embodied-AGI/CoELA.git",
+    "commit": "3e12dea925d735eefce33da71806ae9da6fcaf3f",
+    "license": "MIT",
+    "scenario_file": "external/CoELA/tdw_mat/dataset/dataset_test/test_env.json"
+  },
+  "subset_size": 4,
+  "conditions": {
+    "baseline": {
+      "dual_dag": false,
+      "communication_policy": "planner_default"
+    },
+    "communication_disabled": {
+      "dual_dag": true,
+      "communication_policy": "disabled"
+    },
+    "current_communication": {
+      "dual_dag": true,
+      "communication_policy": "always_on"
+    },
+    "value_of_information": {
+      "dual_dag": true,
+      "communication_policy": "value_of_information"
+    }
+  },
+  "episodes": [
+    {
+      "episode_id": "tdw-mat-fixture-0-baseline",
+      "episode_index": 0,
+      "condition": "baseline",
+      "policy": {
+        "dual_dag": false,
+        "communication_policy": "planner_default"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "baseline"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": false,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-baseline:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-baseline:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-0-communication_disabled",
+      "episode_index": 0,
+      "condition": "communication_disabled",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "disabled"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "communication_disabled"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-communication_disabled:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-communication_disabled:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-0-current_communication",
+      "episode_index": 0,
+      "condition": "current_communication",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "always_on"
+      },
+      "communication_decision": {
+        "decision": "communicate",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "current_policy_communicates_on_goal_relevant_discovery"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 5,
+        "physical_action_count": 4,
+        "communication_count": 1,
+        "communication_rate": 0.2,
+        "goal_relevant_communication_rate": 1.0,
+        "communication_utility_proxy": 1.0,
+        "communication_utility": 1.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 5,
+        "mean_communication_action_frames": 5.0,
+        "total_execution_frames": 25,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 4.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "send_message",
+          "information_action": true,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 5,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-current_communication:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-current_communication:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 1
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-0-value_of_information",
+      "episode_index": 0,
+      "condition": "value_of_information",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "value_of_information"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "communication_value_does_not_exceed_frame_cost"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-value_of_information:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-0-value_of_information:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-1-baseline",
+      "episode_index": 1,
+      "condition": "baseline",
+      "policy": {
+        "dual_dag": false,
+        "communication_policy": "planner_default"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "baseline"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": false,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-baseline:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-baseline:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-1-communication_disabled",
+      "episode_index": 1,
+      "condition": "communication_disabled",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "disabled"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "communication_disabled"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-communication_disabled:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-communication_disabled:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-1-current_communication",
+      "episode_index": 1,
+      "condition": "current_communication",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "always_on"
+      },
+      "communication_decision": {
+        "decision": "communicate",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "current_policy_communicates_on_goal_relevant_discovery"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 5,
+        "physical_action_count": 4,
+        "communication_count": 1,
+        "communication_rate": 0.2,
+        "goal_relevant_communication_rate": 1.0,
+        "communication_utility_proxy": 1.0,
+        "communication_utility": 1.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 5,
+        "mean_communication_action_frames": 5.0,
+        "total_execution_frames": 25,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 4.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "send_message",
+          "information_action": true,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 5,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-current_communication:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-current_communication:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 1
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-1-value_of_information",
+      "episode_index": 1,
+      "condition": "value_of_information",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "value_of_information"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "communication_value_does_not_exceed_frame_cost"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "food",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-value_of_information:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-1-value_of_information:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-12-baseline",
+      "episode_index": 12,
+      "condition": "baseline",
+      "policy": {
+        "dual_dag": false,
+        "communication_policy": "planner_default"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "baseline"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": false,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-baseline:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-baseline:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-12-communication_disabled",
+      "episode_index": 12,
+      "condition": "communication_disabled",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "disabled"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "communication_disabled"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-communication_disabled:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-communication_disabled:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-12-current_communication",
+      "episode_index": 12,
+      "condition": "current_communication",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "always_on"
+      },
+      "communication_decision": {
+        "decision": "communicate",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "current_policy_communicates_on_goal_relevant_discovery"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 5,
+        "physical_action_count": 4,
+        "communication_count": 1,
+        "communication_rate": 0.2,
+        "goal_relevant_communication_rate": 1.0,
+        "communication_utility_proxy": 1.0,
+        "communication_utility": 1.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 5,
+        "mean_communication_action_frames": 5.0,
+        "total_execution_frames": 25,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 4.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "send_message",
+          "information_action": true,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 5,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-current_communication:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-current_communication:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 1
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-12-value_of_information",
+      "episode_index": 12,
+      "condition": "value_of_information",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "value_of_information"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "communication_value_does_not_exceed_frame_cost"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_0",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-value_of_information:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-12-value_of_information:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-13-baseline",
+      "episode_index": 13,
+      "condition": "baseline",
+      "policy": {
+        "dual_dag": false,
+        "communication_policy": "planner_default"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "baseline"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": false,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-baseline:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-baseline:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-13-communication_disabled",
+      "episode_index": 13,
+      "condition": "communication_disabled",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "disabled"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 0,
+        "reason": "communication_disabled"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-communication_disabled:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-communication_disabled:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-13-current_communication",
+      "episode_index": 13,
+      "condition": "current_communication",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "always_on"
+      },
+      "communication_decision": {
+        "decision": "communicate",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "current_policy_communicates_on_goal_relevant_discovery"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 5,
+        "physical_action_count": 4,
+        "communication_count": 1,
+        "communication_rate": 0.2,
+        "goal_relevant_communication_rate": 1.0,
+        "communication_utility_proxy": 1.0,
+        "communication_utility": 1.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 5,
+        "mean_communication_action_frames": 5.0,
+        "total_execution_frames": 25,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 4.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "send_message",
+          "information_action": true,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 5,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-current_communication:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-current_communication:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 1
+      }
+    },
+    {
+      "episode_id": "tdw-mat-fixture-13-value_of_information",
+      "episode_index": 13,
+      "condition": "value_of_information",
+      "policy": {
+        "dual_dag": true,
+        "communication_policy": "value_of_information"
+      },
+      "communication_decision": {
+        "decision": "act_physically",
+        "expected_progress_gain": 0.0,
+        "frame_cost": 5,
+        "reason": "communication_value_does_not_exceed_frame_cost"
+      },
+      "scenario": {
+        "scene": "5a",
+        "layout": "0_1",
+        "task": "stuff",
+        "seed": 2824
+      },
+      "metrics": {
+        "task_success": true,
+        "transport_rate": 1.0,
+        "transported_objects": 1,
+        "target_objects": 1,
+        "episode_steps": 4,
+        "physical_action_count": 4,
+        "communication_count": 0,
+        "communication_rate": 0.0,
+        "goal_relevant_communication_rate": 0.0,
+        "communication_utility_proxy": 0.0,
+        "communication_utility": 0.0,
+        "invalid_physical_action_count": 2,
+        "false_feasible_action_rate": 0.5,
+        "false_infeasible_action_rate": 0.5,
+        "feasibility_prediction_precision": 0.5,
+        "feasibility_prediction_recall": 0.5,
+        "feasibility_true_positive": 1,
+        "feasibility_false_positive": 1,
+        "feasibility_true_negative": 1,
+        "feasibility_false_negative": 1,
+        "recovery_after_failure_rate": 1.0,
+        "recovered_failure_count": 2,
+        "physical_execution_frames": 20,
+        "mean_physical_action_frames": 5.0,
+        "communication_execution_frames": 0,
+        "mean_communication_action_frames": 0.0,
+        "total_execution_frames": 20,
+        "action_throughput": 0.2,
+        "information_action_to_progress_latency": 0.0
+      },
+      "trace": [
+        {
+          "step": 1,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 2,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 3,
+          "action_type": "grasp",
+          "information_action": false,
+          "succeeded": false,
+          "frames": 5,
+          "transport_rate": 0.0
+        },
+        {
+          "step": 4,
+          "action_type": "drop",
+          "information_action": false,
+          "succeeded": true,
+          "frames": 5,
+          "transport_rate": 1.0
+        }
+      ],
+      "dual_dag_artifact": {
+        "used_for_decision": true,
+        "epistemic_nodes": [
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-value_of_information:0:agent_0:visible:0:10",
+            "node_type": "observed_fact",
+            "source_kind": "environment_observation",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [
+                "agent_0"
+              ],
+              "public": false,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "object_visible",
+              "subject": "10",
+              "object": "bread",
+              "object_type": 0
+            },
+            "grounding": {
+              "object_id": 10,
+              "object_name": "bread",
+              "object_type": 0
+            },
+            "confidence": 1.0
+          },
+          {
+            "node_id": "tdw_mat:tdw-mat-fixture-13-value_of_information:0:agent_0:goal:bread",
+            "node_type": "resolved_fact",
+            "source_kind": "task_goal",
+            "observer_id": "agent_0",
+            "step": 0,
+            "visibility": {
+              "visible_to": [],
+              "public": true,
+              "evaluator_only": false
+            },
+            "proposition": {
+              "predicate": "transport_goal",
+              "subject": "bread",
+              "count": 1
+            },
+            "grounding": {
+              "target_name": "bread",
+              "target_count": 1
+            },
+            "confidence": 1.0
+          }
+        ],
+        "action_candidates": [
+          {
+            "node_id": "move_forward:agent_0",
+            "candidate_id": "move_forward:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "move_forward",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_left:agent_0",
+            "candidate_id": "turn_left:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_left",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "turn_right:agent_0",
+            "candidate_id": "turn_right:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "turn_right",
+            "state": "executable_now",
+            "currently_legal": true,
+            "parameters": {}
+          },
+          {
+            "node_id": "grasp:agent_0:10:left",
+            "candidate_id": "grasp:agent_0:10:left",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "grasp",
+            "state": "uncertain_feasibility",
+            "currently_legal": true,
+            "parameters": {
+              "object_id": 10,
+              "object_name": "bread",
+              "arm": "left",
+              "precondition_status": "uncertain",
+              "precondition_reason": "visibility_does_not_guarantee_reachability",
+              "goal_object_match": true
+            }
+          },
+          {
+            "node_id": "send_message:agent_0",
+            "candidate_id": "send_message:agent_0",
+            "node_type": "action_candidate",
+            "actor_id": "agent_0",
+            "action_type": "send_message",
+            "state": "information_action",
+            "currently_legal": true,
+            "parameters": {
+              "message": ""
+            }
+          }
+        ]
+      },
+      "matched_communication_utility": {
+        "transport_rate_delta_vs_disabled": 0.0,
+        "step_delta_vs_disabled": 0
+      }
+    }
+  ],
+  "condition_summary": {
+    "baseline": {
+      "episodes": 4,
+      "task_success_rate": 1.0,
+      "mean_transport_rate": 1.0,
+      "mean_episode_steps": 4.0,
+      "mean_communication_count": 0.0,
+      "mean_communication_utility": 0.0,
+      "feasibility_prediction_precision": 0.5,
+      "feasibility_prediction_recall": 0.5,
+      "false_feasible_action_rate": 0.5,
+      "false_infeasible_action_rate": 0.5,
+      "recovery_after_failure_rate": 1.0,
+      "mean_action_throughput": 0.2,
+      "mean_information_action_to_progress_latency": 0.0,
+      "mean_transport_rate_delta_vs_disabled": 0.0,
+      "mean_step_delta_vs_disabled": 0.0
+    },
+    "communication_disabled": {
+      "episodes": 4,
+      "task_success_rate": 1.0,
+      "mean_transport_rate": 1.0,
+      "mean_episode_steps": 4.0,
+      "mean_communication_count": 0.0,
+      "mean_communication_utility": 0.0,
+      "feasibility_prediction_precision": 0.5,
+      "feasibility_prediction_recall": 0.5,
+      "false_feasible_action_rate": 0.5,
+      "false_infeasible_action_rate": 0.5,
+      "recovery_after_failure_rate": 1.0,
+      "mean_action_throughput": 0.2,
+      "mean_information_action_to_progress_latency": 0.0,
+      "mean_transport_rate_delta_vs_disabled": 0.0,
+      "mean_step_delta_vs_disabled": 0.0
+    },
+    "current_communication": {
+      "episodes": 4,
+      "task_success_rate": 1.0,
+      "mean_transport_rate": 1.0,
+      "mean_episode_steps": 5.0,
+      "mean_communication_count": 1.0,
+      "mean_communication_utility": 1.0,
+      "feasibility_prediction_precision": 0.5,
+      "feasibility_prediction_recall": 0.5,
+      "false_feasible_action_rate": 0.5,
+      "false_infeasible_action_rate": 0.5,
+      "recovery_after_failure_rate": 1.0,
+      "mean_action_throughput": 0.2,
+      "mean_information_action_to_progress_latency": 4.0,
+      "mean_transport_rate_delta_vs_disabled": 0.0,
+      "mean_step_delta_vs_disabled": 1.0
+    },
+    "value_of_information": {
+      "episodes": 4,
+      "task_success_rate": 1.0,
+      "mean_transport_rate": 1.0,
+      "mean_episode_steps": 4.0,
+      "mean_communication_count": 0.0,
+      "mean_communication_utility": 0.0,
+      "feasibility_prediction_precision": 0.5,
+      "feasibility_prediction_recall": 0.5,
+      "false_feasible_action_rate": 0.5,
+      "false_infeasible_action_rate": 0.5,
+      "recovery_after_failure_rate": 1.0,
+      "mean_action_throughput": 0.2,
+      "mean_information_action_to_progress_latency": 0.0,
+      "mean_transport_rate_delta_vs_disabled": 0.0,
+      "mean_step_delta_vs_disabled": 0.0
+    }
+  },
+  "limitations": [
+    "Dependency-free fixture using official TDW-MAT observation and action schemas.",
+    "No Unity physics, navigation, perception model, or simulator timing is represented.",
+    "Matched communication utility is diagnostic and cannot support embodied superiority claims."
+  ]
+}
