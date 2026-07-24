@@ -234,6 +234,12 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
         "normalized/events.jsonl": (
             '{"event":"step","hidden_state":"answer","token":"ordinary-secret",'
             '"api_keys":["SENTINEL_API_KEYS_SECRET"],'
+            '"private_state_agents":["D1"],'
+            '"observed_facts":['
+            '{"node_id":"private-fact","content":{"color":"secret-blue"},'
+            '"provenance":{"source":"private_view","visibility":"private"}},'
+            '{"node_id":"public-fact","content":{"color":"public-green"},'
+            '"provenance":{"source":"director_message","visibility":"public"}}],'
             '"target_structure":"SENTINEL_TARGET","oracle_moves":["SENTINEL_ORACLE"],'
             '"builder_prompt":"SENTINEL_BUILDER_PROMPT",'
             '"private_reasoning":"SENTINEL_REASONING","stdout":"SENTINEL_STDOUT"}\n'
@@ -263,6 +269,12 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
     assert "hidden_state" not in event
     assert event["token"] == "[REDACTED]"
     assert event["api_keys"] == "[REDACTED]"
+    assert "private_state_agents" not in event
+    assert event["observed_facts"] == [{
+        "node_id": "public-fact",
+        "content": {"color": "public-green"},
+        "provenance": {"source": "director_message", "visibility": "public"},
+    }]
     for hidden_key in (
         "target_structure",
         "oracle_moves",
