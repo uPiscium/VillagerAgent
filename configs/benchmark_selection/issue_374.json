@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "issue": 374,
+  "decision_date": "2026-07-24",
+  "selected_for_first_implementation": "partnr",
+  "deferred": ["habitat_mas"],
+  "performance_claim": false,
+  "sources": {
+    "partnr": {
+      "repository": "https://github.com/facebookresearch/partnr-planner",
+      "commit": "ddfff19f4b6c098a31edea4d19e7b75db72433c2",
+      "license": "MIT"
+    },
+    "habitat_mas": {
+      "repository": "https://github.com/SgtVincent/EMOS",
+      "branch": "embodied_mas",
+      "commit": "e9501db45d634b087bf5d1a14228266685e8feeb",
+      "license": "MIT"
+    }
+  },
+  "weighted_scores": {
+    "partnr": 86,
+    "habitat_mas": 59
+  },
+  "required_adapter_methods": [
+    "reset",
+    "agent_ids",
+    "capabilities",
+    "get_observation",
+    "get_public_observation",
+    "get_legal_actions",
+    "decision_context",
+    "execute_action",
+    "execute_information_action",
+    "is_terminal",
+    "task_progress",
+    "final_metrics"
+  ],
+  "partnr_first_gate": {
+    "split": "val_mini",
+    "baseline": "heuristic_full_obs",
+    "episode_limit": 4,
+    "requires_isolated_environment": true,
+    "requires_headless_preflight": true,
+    "expose_evaluator_propositions_to_agent": false
+  }
+}
