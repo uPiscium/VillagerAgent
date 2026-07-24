@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0.0",
+  "bundle_id": "craft-issue370-bounded-policy-evaluation-v1",
+  "benchmark": "craft",
+  "classification": "integration_validation",
+  "additional_run_manifests": [
+    "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_issue370_post_lifecycle_current_clarify_oracle5_structure10_seed1/artifact_manifest.json",
+    "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_clarify_throughput_fix_issue370_post_lifecycle_budgeted_clarify_oracle5_structure10_seed1/artifact_manifest.json",
+    "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_value_of_information_issue370_post_lifecycle_value_of_information_oracle5_structure10_seed1/artifact_manifest.json",
+    "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_issue370_post_lifecycle_current_clarify_oracle5_structure10_seed3/artifact_manifest.json",
+    "result/craft/craft_eval_gemma4_12b_ollama_dual_dag_clarify_lifecycle_probe_issue370_lifecycle_gate/artifact_manifest.json"
+  ],
+  "artifacts": [
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-v1-vs-v0-input.json",
+      "destination": "issue-370-v1-vs-v0-input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-v1-vs-v0-report.json",
+      "destination": "issue-370-v1-vs-v0-report.json"
+    },
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-current-vs-v0-input.json",
+      "destination": "issue-370-current-vs-v0-input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-current-vs-v0-report.json",
+      "destination": "issue-370-current-vs-v0-report.json"
+    },
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-budgeted-vs-v0-input.json",
+      "destination": "issue-370-budgeted-vs-v0-input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-budgeted-vs-v0-report.json",
+      "destination": "issue-370-budgeted-vs-v0-report.json"
+    },
+    {
+      "kind": "comparison_input",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-v4-vs-v0-input.json",
+      "destination": "issue-370-v4-vs-v0-input.json"
+    },
+    {
+      "kind": "comparison_report",
+      "source": "docs/benchmarks/evidence/craft_issue_370/issue-370-v4-vs-v0-report.json",
+      "destination": "issue-370-v4-vs-v0-report.json"
+    },
+    {
+      "kind": "diagnostics",
+      "source": "docs/benchmarks/evidence/craft_issue_370/bounded_diagnostics.json",
+      "destination": "bounded_diagnostics.json"
+    },
+    {
+      "kind": "matrix_status",
+      "source": "docs/benchmarks/evidence/craft_issue_370/remaining_matrix_status.json",
+      "destination": "remaining_matrix_status.json"
+    }
+  ]
+}

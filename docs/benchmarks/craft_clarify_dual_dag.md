@@ -75,14 +75,61 @@ the declared `oracle_n in {1,3,5}` candidate-count sensitivity and 20/30-turn
 horizon sensitivity. A 30-turn run reports progress@20. Sensitivity runs do not
 replace the official 20-turn result.
 
-## Current Recommendation
+## Bounded Matrix Result
 
-Issue #291 found no favorable adjusted performance interval for V1 or V4 over
-V0, no natural retrieval activation, and two neutral V4 Clarify outcomes. Until
-the post-lifecycle current/budgeted/V4 matrix is complete, keep current Clarify
-disabled for paper-facing use and treat V4 as opt-in/provisional. Do not use the
-historical pre-budget throughput-fix result as evidence for the new budgeted
-condition.
+The checkpointed execution completed all three post-lifecycle conditions for
+structures 0 through 9 and seeds 1, 3, and 5. These 30 matched pairs per
+condition form the bounded analysis set. Structure 10 seed 1 completed for all
+three conditions but is supplementary because the rest of that matched
+structure did not complete.
+
+The four comparisons against V0 use a prespecified Bonferroni family and a
+98.75% two-way cluster bootstrap interval:
+
+| Condition | Mean paired difference | Adjusted interval | Granted claim |
+|---|---:|---:|---|
+| V1 Clarify disabled | +0.00642 | [0.00000, +0.01764] | diagnostic |
+| Current Clarify | +0.00081 | [-0.01280, +0.01550] | diagnostic |
+| Budgeted Clarify | +0.02047 | [-0.00163, +0.05445] | diagnostic |
+| V4 value of information | +0.00695 | [-0.01130, +0.03119] | diagnostic |
+
+No adjusted interval establishes a favorable performance effect. The bounded
+post-lifecycle diagnostics are especially unfavorable for current Clarify:
+
+| Condition | Runs | Physical actions | Clarify | Beneficial | Neutral | Failed | Builder fallback |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Current Clarify | 30 | 414 | 186 | 1 | 2 | 183 | 0 |
+| Budgeted Clarify | 30 | 558 | 42 | 2 | 39 | 1 | 21 |
+| V4 value of information | 30 | 600 | 0 | 0 | 0 | 0 | 31 |
+
+All 90 analysis runs passed artifact, leakage, clean-provenance, and invalid
+action checks. Detailed inputs, reports, and aggregate diagnostics are under
+`docs/benchmarks/evidence/craft_issue_370/`.
+
+## Prespecified Stop
+
+The declared matrix contained 180 checkpoints. Execution stopped with 93
+completed checkpoints, one failed checkpoint, and 86 unstarted checkpoints.
+Current Clarify at structure 10 seed 3 exceeded the 1800-second runtime limit
+twice. No orphan process remained, and no downstream condition was started
+after either timeout. The user selected the prespecified 30-minute limit over a
+longer retry. The three completed structure 10 seed 1 runs are excluded from the
+matched analysis rather than mixed into an unbalanced comparison.
+
+This stop makes the result bounded and prevents a performance claim. It does
+not invalidate the lifecycle integration result or the policy diagnostics.
+`docs/benchmarks/evidence/craft_issue_370/remaining_matrix_status.json` records
+the exact accounting and attempt identifiers.
+
+## Policy Recommendation
+
+Keep current Clarify disabled. It consumed 31% of the bounded turn budget and
+98.4% of its outcomes failed. Keep budgeted Clarify disabled by default: its
+throughput control worked, but 92.9% of its outcomes were neutral and its
+adjusted interval crossed zero. Keep V4 opt-in and provisional; it preserved
+physical throughput but did not establish a favorable adjusted effect. Do not
+use the historical pre-budget throughput-fix result as evidence for the new
+budgeted condition.
 
 ## Verification
 

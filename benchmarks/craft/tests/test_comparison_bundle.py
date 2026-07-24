@@ -88,6 +88,10 @@ def test_build_bundle_sanitizes_and_accounts_for_source_runs(tmp_path, monkeypat
     assert summary["source_run_count"] == 2
     assert summary["source_run_statuses"] == {"completed": 1, "failed": 1}
     assert summary["performance_claim_eligible"] is False
+    provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["environment_notes"] == (
+        "sanitized_derivative=true; bundle_id=comparison-bundle; full_comparison=true"
+    )
     public_diagnostics = json.loads((output / "evidence/diagnostics.json").read_text(encoding="utf-8"))
     assert public_diagnostics["run_manifest"] == "runs/source/artifact_manifest.json"
 

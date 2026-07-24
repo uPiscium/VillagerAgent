@@ -1,0 +1,70 @@
+{
+  "analysis_scope": {
+    "excluded_failed_checkpoints": 1,
+    "excluded_supplementary_completed_runs": 3,
+    "execution_scope": "bounded",
+    "multiple_comparisons": {
+      "adjusted_confidence_level": 0.9875,
+      "family_id": "issue-370-v0-v1-current-budgeted-v4",
+      "family_size": 4,
+      "method": "bonferroni"
+    },
+    "requested_claim": "diagnostic"
+  },
+  "issue": 370,
+  "matrix": {
+    "analysis_matched_pairs_per_condition": 30,
+    "complete_matched_structures": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "completed_checkpoints": 93,
+    "expected_checkpoints": 180,
+    "failed_checkpoints": 1,
+    "supplementary_completed": [
+      {
+        "condition": "current",
+        "seed": 1,
+        "structure": 10
+      },
+      {
+        "condition": "budgeted",
+        "seed": 1,
+        "structure": 10
+      },
+      {
+        "condition": "v4",
+        "seed": 1,
+        "structure": 10
+      }
+    ],
+    "unstarted_checkpoints": 86
+  },
+  "runtime_commit": "5d7074559855f3fdc16076708ed1bf35148a770b",
+  "schema_version": "1.0.0",
+  "stop_reason": {
+    "attempt_count": 2,
+    "attempt_ids": [
+      "0aba254311ff4da094fc8419f70620a0",
+      "b5d31f26c24d4aec89ba617877430e3b"
+    ],
+    "checkpoint": {
+      "condition": "current",
+      "seed": 3,
+      "structure": 10
+    },
+    "decision": "retain_30_minute_limit_and_stop",
+    "downstream_conditions_started": false,
+    "kind": "prespecified_runtime_limit",
+    "orphan_processes_detected": false,
+    "timeout_seconds": 1800
+  }
+}
