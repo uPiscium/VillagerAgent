@@ -189,6 +189,7 @@ def normalize_results(*, config: dict, condition: str, raw_result: dict, output_
         "harmful_clarification_count",
         "failed_clarification_count",
         "beneficial_clarification_rate",
+        "blocked_oracle_candidate_count",
         "same_action_after_clarification_count",
         "same_action_after_clarification_rate",
         "mean_clarification_to_action_latency",
@@ -751,6 +752,7 @@ def _clarification_metrics(turns: list[dict]) -> dict:
     clarification_keys = []
     clarification_response_count = 0
     gated_clarification_count = 0
+    clarification_unlock_count = 0
     clarification_resolution_count = 0
     clarification_to_positive_action_count = 0
     positive_action_latencies = []
@@ -775,6 +777,8 @@ def _clarification_metrics(turns: list[dict]) -> dict:
             clarification_keys.append(_clarification_key(action))
             quality_scores.append(_clarification_quality_score(action))
             resolution = _clarification_resolution(turns, index)
+            if resolution["unlocked"]:
+                clarification_unlock_count += 1
             if resolution["resolved"]:
                 clarification_resolution_count += 1
             if resolution["progress_delta"] is not None:
@@ -787,7 +791,6 @@ def _clarification_metrics(turns: list[dict]) -> dict:
         if not gate:
             continue
         gate_invocation_count += 1
-        gated_clarification_count += 1
         reasons = gate.get("reasons", [])
         if not reasons and gate.get("reason"):
             reasons = [gate["reason"]]
@@ -799,6 +802,7 @@ def _clarification_metrics(turns: list[dict]) -> dict:
         elif decision == "clarify":
             gate_block_count += 1
             gate_clarify_count += 1
+            gated_clarification_count += 1
         elif decision == "wait_for_evidence":
             gate_block_count += 1
             gate_wait_count += 1
@@ -819,9 +823,9 @@ def _clarification_metrics(turns: list[dict]) -> dict:
         "unique_clarification_count": unique_clarification_count,
         "repeated_clarification_count": clarification_count - unique_clarification_count,
         "clarification_response_count": clarification_response_count,
-        "clarification_to_unlock_count": clarification_resolution_count,
+        "clarification_to_unlock_count": clarification_unlock_count,
         "clarification_to_unlock_rate": (
-            clarification_resolution_count / clarification_count
+            clarification_unlock_count / clarification_count
             if clarification_count else 0.0
         ),
         "clarification_to_positive_action_count": clarification_to_positive_action_count,
@@ -882,13 +886,16 @@ def _clarification_trace_rows(*, games: list[dict], config: dict) -> list[dict]:
     rows = []
     for game_index, game in enumerate(games):
         turns = game.get("turns", []) or []
+        seen_question_keys = set()
         for index, turn in enumerate(turns):
             action = turn.get("builder_action") or {}
             if action.get("action") != "clarify":
                 continue
             metadata = action.get("_action_candidate_metadata") or {}
             gate = action.get("_gated_clarification") or {}
-            candidates = metadata.get("candidates", []) or []
+            lifecycle = action.get("_clarification_lifecycle") or {}
+            candidates = lifecycle.get("candidates_before") or metadata.get("candidates", []) or []
+            candidates_after = lifecycle.get("candidates_after", []) or []
             ranked_candidates = sorted(
                 candidates,
                 key=lambda candidate: _candidate_score(candidate),
@@ -897,20 +904,39 @@ def _clarification_trace_rows(*, games: list[dict], config: dict) -> list[dict]:
             top_candidate = ranked_candidates[0] if ranked_candidates else {}
             top1_score = _candidate_score(top_candidate) if top_candidate else None
             top2_score = _candidate_score(ranked_candidates[1]) if len(ranked_candidates) > 1 else None
+            ranked_candidates_after = sorted(
+                candidates_after,
+                key=lambda candidate: _candidate_score(candidate),
+                reverse=True,
+            )
+            top_candidate_after = ranked_candidates_after[0] if ranked_candidates_after else {}
+            top1_score_after = _candidate_score(top_candidate_after) if top_candidate_after else None
+            top2_score_after = _candidate_score(ranked_candidates_after[1]) if len(ranked_candidates_after) > 1 else None
             next_turn = _next_non_clarify_turn(turns, index + 1)
             next_action = (next_turn or {}).get("builder_action") or {}
             turn_index = _turn_index(turn)
             next_turn_index = _turn_index(next_turn or {})
+            canonical_question_key = _clarification_key(action)
+            duplicate_clarification = canonical_question_key in seen_question_keys
+            seen_question_keys.add(canonical_question_key)
+            candidate_states_before = [candidate.get("state") for candidate in candidates]
+            candidate_states_after = [candidate.get("state") for candidate in candidates_after]
             rows.append({
                 "clarification_id": f"clarification:{game.get('structure_id', game_index)}:{turn_index if turn_index is not None else index}",
                 "structure_id": game.get("structure_id"),
                 "turn_index": turn_index,
-                "remaining_turns": _remaining_turns(config, turn_index),
+                "remaining_turns": _remaining_turns(config, index),
                 "oracle_enabled": bool(config.get("craft", {}).get("use_oracle", False)),
-                "oracle_candidate_count": config.get("craft", {}).get("oracle_n") if config.get("craft", {}).get("use_oracle", False) else 0,
+                "oracle_candidate_count": len(candidates) if config.get("craft", {}).get("use_oracle", False) else 0,
+                "valid_oracle_candidate_count": sum(
+                    state != "invalidated" for state in candidate_states_before
+                ) if config.get("craft", {}).get("use_oracle", False) else 0,
+                "blocked_oracle_candidate_count": sum(
+                    state in {"blocked", "waiting_for_evidence"} for state in candidate_states_before
+                ) if config.get("craft", {}).get("use_oracle", False) else 0,
                 "candidate_ids_before": [candidate.get("node_id") for candidate in candidates],
                 "candidate_actions_before": [_public_action(candidate.get("action", {})) for candidate in candidates],
-                "candidate_states_before": [candidate.get("state") for candidate in candidates],
+                "candidate_states_before": candidate_states_before,
                 "candidate_scores_before": [_candidate_score(candidate) for candidate in candidates],
                 "top_candidate_before": top_candidate.get("node_id"),
                 "top1_score_before": top1_score,
@@ -921,8 +947,42 @@ def _clarification_trace_rows(*, games: list[dict], config: dict) -> list[dict]:
                 "required_evidence_before": metadata.get("claim_required_evidence_count", gate.get("claim_required_evidence_count")),
                 "span_uncertainty_before": "large_block_span_uncertainty" in (gate.get("reasons", []) or []),
                 "gate_reasons": gate.get("reasons", []) or ([gate.get("reason")] if gate.get("reason") else []),
+                "target_director": action.get("target_director"),
                 "question_text": action.get("clarification", ""),
-                "canonical_question_key": _clarification_key(action),
+                "canonical_question_key": canonical_question_key,
+                "duplicate_clarification": duplicate_clarification,
+                "expected_evidence_ids": action.get("_expected_evidence_ids", []) or [],
+                "candidate_ids_expected_to_change": action.get("_expected_candidate_ids", []) or [],
+                "response_received": lifecycle.get("response_received"),
+                "response_parse_success": lifecycle.get("response_parse_success"),
+                "response_turn_index": lifecycle.get("response_turn_index"),
+                "response_director_id": lifecycle.get("response_director_id"),
+                "response_claim_id": lifecycle.get("response_claim_id"),
+                "resolved_fact_id": lifecycle.get("resolved_fact_id"),
+                "candidate_ids_after": [candidate.get("node_id") for candidate in candidates_after],
+                "candidate_actions_after": [_public_action(candidate.get("action", {})) for candidate in candidates_after],
+                "candidate_states_after": candidate_states_after,
+                "candidate_scores_after": [_candidate_score(candidate) for candidate in candidates_after],
+                "top_candidate_after": top_candidate_after.get("node_id"),
+                "top1_score_after": top1_score_after,
+                "top2_score_after": top2_score_after,
+                "top1_top2_margin_after": (
+                    top1_score_after - top2_score_after
+                    if top1_score_after is not None and top2_score_after is not None else None
+                ),
+                "action_confidence_after": top1_score_after,
+                "top_action_changed": bool(
+                    top_candidate and top_candidate_after
+                    and top_candidate.get("node_id") != top_candidate_after.get("node_id")
+                ),
+                "same_top_action_after_clarification": bool(
+                    top_candidate and top_candidate_after
+                    and top_candidate.get("node_id") == top_candidate_after.get("node_id")
+                ),
+                "newly_unlocked_candidate_ids": lifecycle.get("newly_unlocked_candidate_ids", []) or [],
+                "newly_invalidated_candidate_ids": lifecycle.get("newly_invalidated_candidate_ids", []) or [],
+                "resolved_hypothesis_ids": lifecycle.get("resolved_hypothesis_ids", []) or [],
+                "resolved_required_evidence_ids": lifecycle.get("resolved_required_evidence_ids", []) or [],
                 "next_physical_action_turn": next_turn_index,
                 "clarification_to_action_latency": (next_turn_index - turn_index) if turn_index is not None and next_turn_index is not None else None,
                 "next_physical_action": _public_action(next_action),
@@ -948,11 +1008,13 @@ def _clarification_outcome_metrics(games: list[dict], config: dict) -> dict:
     same_action_count = 0
     latencies = []
     progress_deltas = []
+    blocked_oracle_candidate_count = 0
     rows = _clarification_trace_rows(games=games, config=config)
     for row in rows:
         outcome = classify_clarification_outcome(row)
         counts[outcome["outcome"]] = counts.get(outcome["outcome"], 0) + 1
-        if row.get("next_action_was_original_top_candidate") or row.get("same_top_action_after_clarification"):
+        blocked_oracle_candidate_count += int(row.get("blocked_oracle_candidate_count", 0) or 0)
+        if row.get("next_action_was_original_top_candidate"):
             same_action_count += 1
         latency = row.get("clarification_to_action_latency")
         if latency is not None:
@@ -967,6 +1029,7 @@ def _clarification_outcome_metrics(games: list[dict], config: dict) -> dict:
         "harmful_clarification_count": counts["harmful"],
         "failed_clarification_count": counts["failed"],
         "beneficial_clarification_rate": counts["beneficial"] / total if total else 0.0,
+        "blocked_oracle_candidate_count": blocked_oracle_candidate_count,
         "same_action_after_clarification_count": same_action_count,
         "same_action_after_clarification_rate": same_action_count / total if total else 0.0,
         "mean_clarification_to_action_latency": _mean(latencies) if latencies else 0.0,
@@ -974,11 +1037,11 @@ def _clarification_outcome_metrics(games: list[dict], config: dict) -> dict:
     }
 
 
-def _remaining_turns(config: dict, turn_index: int | None) -> int | None:
+def _remaining_turns(config: dict, turn_offset: int | None) -> int | None:
     total_turns = config.get("run", {}).get("turns")
-    if not isinstance(total_turns, int) or turn_index is None:
+    if not isinstance(total_turns, int) or turn_offset is None:
         return None
-    return max(total_turns - turn_index - 1, 0)
+    return max(total_turns - turn_offset - 1, 0)
 
 
 def _candidate_score(candidate: dict) -> float:
@@ -1045,7 +1108,27 @@ def _clarification_resolution(turns: list[dict], index: int) -> dict:
     clarify_action = clarify_turn.get("builder_action") or {}
     next_action_turn = _next_non_clarify_turn(turns, index + 1)
     if next_action_turn is None:
-        return {"resolved": False, "progress_delta": None}
+        return {"unlocked": False, "resolved": False, "progress_delta": None}
+    lifecycle = clarify_action.get("_clarification_lifecycle")
+    if isinstance(lifecycle, dict):
+        unlocked = bool(lifecycle.get("newly_unlocked_candidate_ids"))
+        resolved = unlocked or any(
+            lifecycle.get(key)
+            for key in (
+                "newly_invalidated_candidate_ids",
+                "resolved_hypothesis_ids",
+                "resolved_required_evidence_ids",
+                "resolved_fact_id",
+            )
+        )
+        return {
+            "unlocked": unlocked,
+            "resolved": bool(resolved),
+            "progress_delta": (
+                _progress_value(next_action_turn.get("progress"))
+                - _progress_value(clarify_turn.get("progress"))
+            ),
+        }
     before_metadata = _action_metadata(clarify_action)
     after_action = next_action_turn.get("builder_action") or {}
     after_metadata = _action_metadata(after_action)
@@ -1063,6 +1146,7 @@ def _clarification_resolution(turns: list[dict], index: int) -> dict:
         "claim_required_evidence_count",
     )
     return {
+        "unlocked": progress_delta > 0.0 or confidence_improved or conflict_reduced or evidence_reduced,
         "resolved": progress_delta > 0.0 or confidence_improved or conflict_reduced or evidence_reduced,
         "progress_delta": progress_delta,
     }

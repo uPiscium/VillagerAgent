@@ -61,6 +61,7 @@ _FORBIDDEN_DATA_KEYS = {
     "private_reasoning",
     "private_observation",
     "private_observations",
+    "private_state_agents",
     "private_view",
     "raw_markdown",
     "raw_stdout",
@@ -707,6 +708,8 @@ def _write_sanitized_artifact(source: Path, target: Path) -> None:
 
 def _sanitize_value(value: Any) -> Any:
     if isinstance(value, dict):
+        if _has_private_provenance(value):
+            return None
         result = {}
         for key, child in value.items():
             key_text = str(key)
@@ -718,8 +721,22 @@ def _sanitize_value(value: Any) -> Any:
                 result[key] = _sanitize_value(child)
         return result
     if isinstance(value, list):
-        return [_sanitize_value(item) for item in value]
+        sanitized = [_sanitize_value(item) for item in value]
+        return [item for item in sanitized if item is not None]
     return value
+
+
+def _has_private_provenance(value: dict[str, Any]) -> bool:
+    provenance = value.get("provenance")
+    if not isinstance(provenance, dict):
+        return False
+    return (
+        str(provenance.get("visibility") or "").lower() == "private"
+        or str(provenance.get("source") or "").lower() in {
+            "private_observation",
+            "private_view",
+        }
+    )
 
 
 def _sanitize_scalar_for_key(key: str, value: Any) -> Any:

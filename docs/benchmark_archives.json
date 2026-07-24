@@ -290,6 +290,17 @@
       "run_accounting": {"expected": 164, "completed": 163, "failed": 1, "missing": 0}
     },
     {
+      "id": "craft-issue370-bounded-policy-evaluation-v1",
+      "benchmark": "craft",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue370-bounded-policy-evaluation-v1/craft-issue370-bounded-policy-evaluation-v1.zip",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-craft-issue370-bounded-policy-evaluation-v1/craft-issue370-bounded-policy-evaluation-v1.zip.metadata.json",
+      "archive_sha256": "49674a327d637aeb4003c01aa35b28dd3cc03dfcd037a3fe5628250033ef128c",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "2ac3db8df5fc9383b00e70e149c8da409b9e80680ffb76cb24a0a8efbb87d3a6",
+      "run_accounting": {"expected": 146, "completed": 145, "failed": 1, "missing": 0}
+    },
+    {
       "id": "minecraft-ollama-real-smoke-v1",
       "benchmark": "minecraft",
       "classification": "archived",

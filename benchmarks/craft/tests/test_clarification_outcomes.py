@@ -21,6 +21,15 @@ def test_classifier_marks_beneficial_when_top_action_changes_with_progress():
     assert result["outcome_reasons"] == ["top_action_changed_with_positive_progress"]
 
 
+def test_classifier_marks_beneficial_when_fact_is_resolved():
+    result = classify_clarification_outcome({
+        "next_physical_action_turn": 2,
+        "resolved_fact_id": "resolved_fact:clarification_response_claim_D1_2",
+    })
+
+    assert result == {"outcome": "beneficial", "outcome_reasons": ["fact_resolved"]}
+
+
 def test_classifier_marks_neutral_for_same_action_with_progress():
     result = classify_clarification_outcome({
         "next_physical_action_turn": 2,

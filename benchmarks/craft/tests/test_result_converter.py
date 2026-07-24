@@ -360,6 +360,40 @@ def test_result_converter_counts_gated_clarification_metadata(tmp_path):
     assert "gated_clarification_count" in metrics_text
 
 
+def test_result_converter_does_not_count_suppressed_gate_as_clarification(tmp_path):
+    config = {
+        "run": {"name": "test", "seed": 3, "structures": [0], "turns": 1},
+        "models": {"director": {"model": "d"}, "builder": {"model": "b"}},
+        "villageragent": {"enabled": True},
+    }
+    normalize_results(
+        config=config,
+        condition="villageragent_directors",
+        raw_result={
+            "structure_id": 0,
+            "turns": [{
+                "builder_action": {
+                    "action": "place",
+                    "_gated_clarification": {
+                        "decision": "allow",
+                        "suppression_reason": "clarification_budget_exhausted",
+                        "reasons": ["low_action_confidence"],
+                    },
+                },
+            }],
+            "final_progress": 0.0,
+            "completed": False,
+        },
+        output_dir=tmp_path,
+    )
+
+    runtime = json.loads((tmp_path / "normalized" / "summary.json").read_text())["runtime"]
+    assert runtime["gate_invocation_count"] == 1
+    assert runtime["gate_allow_count"] == 1
+    assert runtime["gated_clarification_count"] == 0
+    assert runtime["gated_clarification_rate"] == 0.0
+
+
 def test_result_converter_writes_clarification_trace_with_next_action_link(tmp_path):
     config = {
         "run": {"name": "test", "seed": 3, "structures": [0], "turns": 5},
@@ -424,7 +458,9 @@ def test_result_converter_writes_clarification_trace_with_next_action_link(tmp_p
     assert row["clarification_id"] == "clarification:0:0"
     assert row["remaining_turns"] == 4
     assert row["oracle_enabled"] is True
-    assert row["oracle_candidate_count"] == 1
+    assert row["oracle_candidate_count"] == 2
+    assert row["valid_oracle_candidate_count"] == 2
+    assert row["blocked_oracle_candidate_count"] == 0
     assert row["candidate_ids_before"] == ["action:0:0", "action:0:1"]
     assert row["candidate_states_before"] == ["executable", "candidate"]
     assert row["top_candidate_before"] == "action:0:0"
@@ -506,6 +542,148 @@ def test_result_converter_tracks_clarification_resolution_and_progress_delta(tmp
     assert summary["runtime"]["mean_clarification_quality_score"] == 1.0
     assert summary["runtime"]["mean_post_clarification_progress_delta"] == 0.30000000000000004
     assert "clarification_resolution_rate" in metrics_text
+
+
+def test_result_converter_emits_clarification_response_lifecycle(tmp_path):
+    config = {
+        "run": {"name": "test", "seed": 3, "structures": [0], "turns": 2},
+        "craft": {"use_oracle": True, "oracle_n": 5},
+        "models": {"director": {"model": "d"}, "builder": {"model": "b"}},
+        "villageragent": {"enabled": True},
+    }
+    candidate_action = {"action": "place", "block": "ys", "position": "(0,0)", "layer": 0}
+    normalize_results(
+        config=config,
+        condition="villageragent_directors",
+        raw_result={
+            "structure_id": 0,
+            "turns": [
+                {
+                    "turn_index": 1,
+                    "builder_action": {
+                        "action": "clarify",
+                        "clarification": "Please confirm bottom left.",
+                        "target_director": "D1",
+                        "_expected_evidence_ids": ["claim:D1:1"],
+                        "_expected_candidate_ids": ["action:1:0"],
+                        "_gated_clarification": {"reasons": ["required_evidence"]},
+                        "_action_candidate_metadata": {"chosen_confidence": 0.4},
+                        "_clarification_lifecycle": {
+                            "response_received": True,
+                            "response_parse_success": True,
+                            "response_turn_index": 2,
+                            "response_director_id": "D1",
+                            "response_claim_id": "claim:D1:2",
+                            "resolved_fact_id": "resolved_fact:clarification_response_claim_D1_2",
+                            "candidates_before": [{
+                                "node_id": "action:1:0",
+                                "state": "waiting_for_evidence",
+                                "confidence": 0.4,
+                                "action": candidate_action,
+                            }],
+                            "candidates_after": [{
+                                "node_id": "action:1:0",
+                                "state": "executable",
+                                "confidence": 0.8,
+                                "action": candidate_action,
+                            }],
+                            "newly_unlocked_candidate_ids": ["action:1:0"],
+                            "newly_invalidated_candidate_ids": [],
+                            "resolved_hypothesis_ids": ["hypothesis:required_evidence:1"],
+                            "resolved_required_evidence_ids": ["claim:D1:1"],
+                        },
+                    },
+                    "director_responses": {"D1": {"public_message": "Bottom left is yellow."}},
+                    "progress": {"overall_progress": 0.1},
+                },
+                {
+                    "turn_index": 2,
+                    "builder_action": candidate_action,
+                    "progress": {"overall_progress": 0.3},
+                },
+            ],
+            "final_progress": 0.3,
+            "completed": False,
+        },
+        output_dir=tmp_path,
+    )
+
+    trace = json.loads((tmp_path / "normalized" / "clarification_trace.jsonl").read_text().strip())
+    outcome = json.loads((tmp_path / "normalized" / "clarification_outcomes.jsonl").read_text().strip())
+    summary = json.loads((tmp_path / "normalized" / "summary.json").read_text())
+    assert trace["target_director"] == "D1"
+    assert trace["oracle_candidate_count"] == 1
+    assert trace["valid_oracle_candidate_count"] == 1
+    assert trace["blocked_oracle_candidate_count"] == 1
+    assert trace["candidate_states_before"] == ["waiting_for_evidence"]
+    assert trace["candidate_states_after"] == ["executable"]
+    assert trace["newly_unlocked_candidate_ids"] == ["action:1:0"]
+    assert trace["resolved_required_evidence_ids"] == ["claim:D1:1"]
+    assert outcome["outcome"] == "beneficial"
+    assert summary["runtime"]["clarification_to_unlock_count"] == 1
+    assert summary["runtime"]["clarification_resolution_count"] == 1
+    assert summary["runtime"]["blocked_oracle_candidate_count"] == 1
+
+
+def test_same_action_metric_requires_physical_followup_to_match_original_top(tmp_path):
+    config = {
+        "run": {"name": "test", "seed": 3, "structures": [0], "turns": 2},
+        "models": {"director": {"model": "d"}, "builder": {"model": "b"}},
+        "villageragent": {"enabled": True},
+    }
+    normalize_results(
+        config=config,
+        condition="villageragent_directors",
+        raw_result={
+            "structure_id": 0,
+            "turns": [
+                {
+                    "turn_index": 1,
+                    "builder_action": {
+                        "action": "clarify",
+                        "_action_candidate_metadata": {
+                            "chosen_candidate_id": "action:1:0",
+                            "candidates": [{
+                                "node_id": "action:1:0",
+                                "state": "executable",
+                                "confidence": 1.0,
+                                "action": {"action": "place", "block": "ys", "position": "(0,0)"},
+                            }],
+                        },
+                        "_clarification_lifecycle": {
+                            "candidates_before": [{
+                                "node_id": "action:1:0",
+                                "state": "executable",
+                                "confidence": 1.0,
+                                "action": {"action": "place", "block": "ys", "position": "(0,0)"},
+                            }],
+                            "candidates_after": [{
+                                "node_id": "action:1:0",
+                                "state": "executable",
+                                "confidence": 1.0,
+                                "action": {"action": "place", "block": "ys", "position": "(0,0)"},
+                            }],
+                            "response_received": True,
+                            "response_parse_success": True,
+                        },
+                    },
+                    "progress": {"overall_progress": 0.0},
+                },
+                {
+                    "turn_index": 2,
+                    "builder_action": {"action": "place", "block": "bs", "position": "(1,0)"},
+                    "progress": {"overall_progress": 0.1},
+                },
+            ],
+            "final_progress": 0.1,
+            "completed": False,
+        },
+        output_dir=tmp_path,
+    )
+
+    runtime = json.loads((tmp_path / "normalized" / "summary.json").read_text())["runtime"]
+    assert runtime["same_action_after_clarification_count"] == 0
+    assert runtime["same_action_after_clarification_rate"] == 0.0
 
 
 def test_result_converter_tracks_duplicate_clarifications_and_positive_latency(tmp_path):

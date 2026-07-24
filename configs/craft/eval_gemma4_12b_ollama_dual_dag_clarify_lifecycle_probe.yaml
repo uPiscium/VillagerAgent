@@ -1,5 +1,5 @@
 run:
-  name: "craft_eval_gemma4_12b_ollama_dual_dag_clarify_throughput_fix"
+  name: "craft_eval_gemma4_12b_ollama_dual_dag_clarify_lifecycle_probe"
   seed: 3
   output_dir: "result/craft"
   structures: [0, 1, 2]
@@ -9,7 +9,7 @@ craft:
   repo_path: "external/CRAFT"
   dataset_path: "external/CRAFT/data/structures_dataset_20.json"
   use_oracle: true
-  oracle_n: 1
+  oracle_n: 5
   builder_tool_use: false
   preserve_partial_observation: true
   use_common_ground: false
@@ -22,16 +22,12 @@ dual_dag:
       enabled: true
   gated_clarification:
     enabled: true
-    suppress_executable_low_confidence: true
-    max_clarifications_per_episode: 2
-    clarification_cooldown_turns: 1
-    prevent_duplicate_clarifications: true
-    min_remaining_turns_after_clarification: 2
-    min_action_confidence: 0.55
+    min_action_confidence: 1.1
     max_conflict_count: 0
     clarify_on_large_block_span_uncertainty: true
     clarification_cost: 0.4
     mistake_cost_weight: 1.0
+    max_clarifications_per_episode: 1
 
 villageragent:
   enabled: true

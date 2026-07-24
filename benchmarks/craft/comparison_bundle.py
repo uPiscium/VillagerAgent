@@ -117,7 +117,10 @@ def build_bundle(config_path: Path, output_dir: Path, *, overwrite: bool = False
                 str(output_dir),
             ],
             resolved_config=resolved_config,
-            environment_notes="sanitized_derivative=true; issue=291; full_comparison=true",
+            environment_notes=(
+                "sanitized_derivative=true; "
+                f"bundle_id={config['bundle_id']}; full_comparison=true"
+            ),
         )
         finalize_provenance(output_dir, status="success")
         finalize_run_directory(
