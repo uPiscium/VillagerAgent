@@ -19,17 +19,24 @@ from benchmarks.common.publish_bundle import (
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 
 
-def _bundle(tmp_path, *, extra=None, verification_only=False):
+def _bundle(
+    tmp_path,
+    *,
+    extra=None,
+    verification_only=False,
+    producer="benchmarks.minecraft.matrix",
+    benchmark="minecraft",
+):
     bundle = tmp_path / "bundle"
-    attempt_id = prepare_run_directory(bundle, producer="benchmarks.minecraft.matrix")
+    attempt_id = prepare_run_directory(bundle, producer=producer)
     files = {
-        "provenance.json": {"benchmark": "minecraft", "lifecycle": {"status": "success"}},
+        "provenance.json": {"benchmark": benchmark, "lifecycle": {"status": "success"}},
         "config.resolved.json": {"model": "test", "api_key": "[REDACTED]"},
     }
     if verification_only:
         files["verification.json"] = {"check": "ollama_preflight", "status": "success"}
     else:
-        files["matrix_summary.json"] = {"benchmark": "minecraft", "runs": 1}
+        files["matrix_summary.json"] = {"benchmark": benchmark, "runs": 1}
         files["metrics.json"] = {"success_rate": 1.0}
     files.update(extra or {})
     for name, payload in files.items():
@@ -39,7 +46,7 @@ def _bundle(tmp_path, *, extra=None, verification_only=False):
     finalize_run_directory(
         bundle,
         attempt_id=attempt_id,
-        producer="benchmarks.minecraft.matrix",
+        producer=producer,
         status="completed",
     )
     return bundle
@@ -67,6 +74,16 @@ def test_validates_real_smoke_verification_bundle(tmp_path):
 
     assert validation.benchmark == "minecraft"
     assert validation.run_statuses == {"completed": 1}
+
+
+def test_validates_partnr_bundle_producer(tmp_path):
+    bundle = _bundle(
+        tmp_path,
+        producer="benchmarks.partnr.evidence",
+        benchmark="partnr",
+    )
+
+    assert validate_public_bundle(bundle).benchmark == "partnr"
 
 
 def test_validator_does_not_treat_model_token_limit_as_credential(tmp_path):

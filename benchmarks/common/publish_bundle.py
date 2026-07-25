@@ -308,7 +308,7 @@ def validate_public_bundle(
     benchmark = _benchmark_from_producer(producer)
     if not benchmark:
         raise PublicBundleValidationError(
-            "Bundle producer must identify CRAFT, C-WAH, or Minecraft/VillagerBench"
+            "Bundle producer must identify a supported benchmark"
         )
 
     paths = sorted(path for path in bundle_dir.rglob("*") if path.is_file())
@@ -910,6 +910,8 @@ def _benchmark_from_producer(producer: str) -> str:
         return "cwah"
     if "tdw_mat" in lowered or "tdw-mat" in lowered:
         return "tdw_mat"
+    if "partnr" in lowered:
+        return "partnr"
     return ""
 
 
@@ -919,7 +921,7 @@ def _validate_registry_entry(
     fetcher: Callable[[str], bytes] | None = None,
 ) -> None:
     result_id = entry["id"]
-    if entry.get("benchmark") not in {"craft", "cwah", "minecraft", "tdw_mat"}:
+    if entry.get("benchmark") not in {"craft", "cwah", "minecraft", "tdw_mat", "partnr"}:
         raise PublicBundleValidationError(f"Invalid benchmark for archived result {result_id}")
     classification = entry.get("classification")
     if classification not in {"archived", "legacy-diagnostic-unarchived"}:

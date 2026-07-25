@@ -343,6 +343,17 @@
       "manifest_path": "artifact_manifest.json",
       "manifest_sha256": "a66598162f6d3c9bda4a8b7d94aed8d251c7b45072a65c53a0575c027894cb96",
       "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
+    },
+    {
+      "id": "partnr-issue378-bounded-oracle-smoke-v1",
+      "benchmark": "partnr",
+      "classification": "archived",
+      "archive_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-partnr-issue378-bounded-oracle-smoke-v1/partnr-issue378-bounded-oracle-smoke-v1.tar.gz",
+      "metadata_url": "https://github.com/upiscium/VillagerAgent/releases/download/benchmark-partnr-issue378-bounded-oracle-smoke-v1/partnr-issue378-bounded-oracle-smoke-v1.tar.gz.metadata.json",
+      "archive_sha256": "f2d1a2837f963b73f11d2008e91ab80b33ca578e29f227cdf65993ecd6555010",
+      "manifest_path": "artifact_manifest.json",
+      "manifest_sha256": "f94a07d3d39c8119f091e5e6fd9cbe0f5b160acbd3213cff02ed2f0b8225e1a7",
+      "run_accounting": {"expected": 1, "completed": 1, "failed": 0, "missing": 0}
     }
   ]
 }

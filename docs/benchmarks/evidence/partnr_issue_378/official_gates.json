@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "benchmark": "partnr",
+  "performance_claim": false,
+  "source_commit": "ddfff19f4b6c098a31edea4d19e7b75db72433c2",
+  "dataset": {
+    "split": "val_mini",
+    "sha256": "62d9aded9bb315ccdc22b3540f92a83c0c0ca593da798cf16bdba6ce5ecc57e1"
+  },
+  "step_zero": {
+    "classification": "dataset_verifier",
+    "episode_limit": 1,
+    "timeout_seconds": 1800,
+    "status": "completed",
+    "expected_episode_ids": ["0"],
+    "completed_episode_ids": ["0"],
+    "successful_episode_ids": ["0"],
+    "failed_episode_ids": [],
+    "missing_episode_ids": [],
+    "records": [
+      {
+        "episode_id": "0",
+        "success": true,
+        "task_percent_complete": 0.0,
+        "task_state_success": 0.0
+      }
+    ]
+  },
+  "bounded_smoke": {
+    "classification": "official_oracle_heuristic",
+    "baseline": "heuristic_full_obs",
+    "partial_observability": false,
+    "episode_limit": 4,
+    "timeout_seconds": 1800,
+    "status": "completed",
+    "expected_episode_ids": ["0", "1", "2", "3"],
+    "completed_episode_ids": ["0", "1", "2", "3"],
+    "successful_episode_ids": ["0", "1", "2", "3"],
+    "failed_episode_ids": [],
+    "missing_episode_ids": [],
+    "records": [
+      {"episode_id": "0", "success": true, "task_percent_complete": 1.0, "task_state_success": 1.0, "runtime": 19.16123056411743, "sim_step_count": 742.0},
+      {"episode_id": "1", "success": true, "task_percent_complete": 1.0, "task_state_success": 1.0, "runtime": 13.710426092147827, "sim_step_count": 540.0},
+      {"episode_id": "2", "success": true, "task_percent_complete": 1.0, "task_state_success": 1.0, "runtime": 5.6571364402771, "sim_step_count": 220.0},
+      {"episode_id": "3", "success": true, "task_percent_complete": 1.0, "task_state_success": 1.0, "runtime": 60.14943265914917, "sim_step_count": 2293.0}
+    ]
+  },
+  "limitations": [
+    "The official smoke uses the upstream full-observation scripted oracle and is not a partial-observation policy result.",
+    "Only the prespecified first four val_mini episodes were executed.",
+    "The bounded smoke cannot support benchmark-scale, comparative, or superiority claims."
+  ]
+}

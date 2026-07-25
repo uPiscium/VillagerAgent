@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "benchmark": "partnr",
+  "source_repository": "https://github.com/facebookresearch/partnr-planner",
+  "source_commit": "ddfff19f4b6c098a31edea4d19e7b75db72433c2",
+  "split": "val_mini",
+  "baseline": "heuristic_full_obs",
+  "source_root": "external/partnr-planner",
+  "dataset_path": "external/partnr-planner/data/datasets/partnr_episodes/v0_0/val_mini.json.gz",
+  "scene_root": "external/partnr-planner/data/hssd-hab",
+  "output_dir": "result/partnr/issue_378_real",
+  "step_zero_episode_limit": 1,
+  "bounded_episode_limit": 4,
+  "wall_timeout_seconds": 1800,
+  "performance_claim": false,
+  "expose_evaluator_propositions_to_agent": false
+}
