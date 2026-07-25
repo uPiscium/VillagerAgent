@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "benchmark": "partnr",
+  "smoke_type": "dependency_free_contract_fixture",
+  "performance_claim": false,
+  "source_contract": {
+    "repository": "https://github.com/facebookresearch/partnr-planner",
+    "commit": "ddfff19f4b6c098a31edea4d19e7b75db72433c2"
+  },
+  "trace": [
+    {"step": 1, "action_type": "FindObjectTool", "information_action": true, "succeeded": true, "task_percent_complete": 0.0},
+    {"step": 2, "action_type": "Navigate", "information_action": false, "succeeded": true, "task_percent_complete": 0.0},
+    {"step": 3, "action_type": "Pick", "information_action": false, "succeeded": false, "task_percent_complete": 0.0},
+    {"step": 4, "action_type": "Pick", "information_action": false, "succeeded": true, "task_percent_complete": 0.5},
+    {"step": 5, "action_type": "Place", "information_action": false, "succeeded": true, "task_percent_complete": 1.0}
+  ],
+  "metrics": {
+    "task_percent_complete": 1.0,
+    "task_state_success": 1.0,
+    "task_success": true,
+    "episode_steps": 5,
+    "physical_action_count": 4,
+    "information_action_count": 1,
+    "failed_action_count": 1,
+    "recovered_failure_count": 1,
+    "recovery_after_failure_rate": 1.0
+  },
+  "artifact_counts": {
+    "initial_epistemic_nodes": 3,
+    "initial_action_candidates": 3,
+    "final_epistemic_nodes": 4,
+    "final_action_candidates": 3
+  },
+  "evaluator_isolation": {
+    "evaluation_propositions_agent_visible": false,
+    "full_world_graph_agent_visible": false
+  },
+  "limitations": [
+    "Dependency-free fixture; Habitat-Sim physics and PARTNR perception are not executed.",
+    "Official evaluator metric names are mirrored but fixture values are not official results.",
+    "The fixture cannot support scale or performance claims."
+  ]
+}

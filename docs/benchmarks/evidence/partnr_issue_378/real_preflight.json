@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "benchmark": "partnr",
+  "preflight_type": "official_val_mini_headless",
+  "performance_claim": false,
+  "source_identity": {
+    "repository": "https://github.com/facebookresearch/partnr-planner",
+    "commit": "ddfff19f4b6c098a31edea4d19e7b75db72433c2"
+  },
+  "data_identity": {
+    "split": "val_mini",
+    "dataset_sha256": "62d9aded9bb315ccdc22b3540f92a83c0c0ca593da798cf16bdba6ce5ecc57e1",
+    "episode_count": 369,
+    "hssd_repository": "https://huggingface.co/datasets/hssd/hssd-hab",
+    "hssd_branch": "partnr",
+    "hssd_commit": "bdc2c6c1e2e96e5ab690e9a8555ebf1a16d39632"
+  },
+  "runtime": {
+    "python_version": "3.9",
+    "headless_required": true,
+    "isolated_from_project_environment": true
+  },
+  "checks": {
+    "source_tree": true,
+    "source_commit": true,
+    "python_3_9": true,
+    "python_habitat_package": true,
+    "python_habitat_sim_package": true,
+    "python_torch_package": true,
+    "python_hydra_package": true,
+    "habitat_lab_submodule": true,
+    "semantic_exploration_submodule": true,
+    "transformers_cfg_submodule": true,
+    "val_mini_dataset": true,
+    "hssd_scene_root": true,
+    "hssd_metadata": true,
+    "headless_context": true,
+    "bounded_scene_assets": true,
+    "output_identity": true
+  },
+  "scene_asset_audit": {
+    "scene_ids": ["102817140"],
+    "required_file_count": 566,
+    "missing": [],
+    "lfs_pointers": []
+  },
+  "ready": true,
+  "missing": []
+}

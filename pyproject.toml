@@ -34,6 +34,6 @@ dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["benchmarks/common/tests", "benchmarks/craft/tests", "benchmarks/cwah/tests", "benchmarks/tdw_mat/tests", "tests"]
+testpaths = ["benchmarks/common/tests", "benchmarks/craft/tests", "benchmarks/cwah/tests", "benchmarks/partnr/tests", "benchmarks/tdw_mat/tests", "tests"]
 norecursedirs = ["external"]
 markers = ["real_smoke: opt-in tests requiring real Ollama or Minecraft services"]

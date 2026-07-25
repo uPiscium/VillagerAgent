@@ -10,6 +10,21 @@ validate:
 test:
     pytest
 
+partnr-smoke:
+    python -m benchmarks.partnr.smoke --output result/partnr/fixture_smoke.json
+
+partnr-real-preflight:
+    "${PARTNR_PYTHON:-python}" -m benchmarks.partnr.real_smoke --mode preflight --output result/partnr/real_preflight.json
+
+partnr-step-zero:
+    "${PARTNR_PYTHON:-python}" -m benchmarks.partnr.real_smoke --mode step-zero --require-ready --output result/partnr/step_zero_gate.json
+
+partnr-bounded-smoke:
+    "${PARTNR_PYTHON:-python}" -m benchmarks.partnr.real_smoke --mode bounded --require-ready --output result/partnr/bounded_gate.json
+
+partnr-evidence-bundle:
+    python -m benchmarks.partnr.evidence_bundle --output result/partnr/issue_378_evidence --overwrite
+
 tdw-mat-smoke:
     python -m benchmarks.tdw_mat.smoke --output result/tdw_mat/fixture_smoke.json
 
