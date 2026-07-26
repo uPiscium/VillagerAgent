@@ -4,6 +4,7 @@ import math
 import os
 import sys
 import time
+import inspect
 from functools import wraps
 from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
@@ -62,11 +63,15 @@ os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
 
 def _with_runtime_paths(function):
+    signature = inspect.signature(function)
+
     @wraps(function)
-    def wrapped(*args, runtime_paths: RuntimePaths | None = None, **kwargs):
-        paths = runtime_paths or RuntimePaths.legacy()
+    def wrapped(*args, **kwargs):
+        bound = signature.bind_partial(*args, **kwargs)
+        paths = bound.arguments.get("runtime_paths") or RuntimePaths.legacy()
+        bound.arguments["runtime_paths"] = paths
         with paths.activated():
-            return function(*args, runtime_paths=paths, **kwargs)
+            return function(*bound.args, **bound.kwargs)
 
     return wrapped
 

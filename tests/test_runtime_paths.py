@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from env.env import VillagerBench, env_type
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
+from start_with_config import _with_runtime_paths
 
 
 def test_default_runtime_paths_preserve_legacy_layout(tmp_path):
@@ -48,6 +49,16 @@ def test_runtime_path_environment_is_restored(tmp_path, monkeypatch):
 
     assert os.environ["VILLAGER_RUNTIME_ROOT"] == "/previous"
     assert os.environ["VILLAGER_RUNTIME_LAYOUT"] == "legacy"
+
+
+def test_runtime_path_wrapper_accepts_positional_runtime_paths(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+
+    @_with_runtime_paths
+    def wrapped(value, runtime_paths=None):
+        return value, runtime_paths, os.environ["VILLAGER_RUNTIME_LAYOUT"]
+
+    assert wrapped("value", paths) == ("value", paths, "isolated")
 
 
 def test_environment_reads_injected_score_and_status_paths(tmp_path):
