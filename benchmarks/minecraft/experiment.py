@@ -716,8 +716,9 @@ def validate_minecraft_config(config: dict, *, context: str = "config", execute:
     agent_num = _required_int(config, "agent_num", context=context)
     port = _required_int(config, "port", context=context)
     task_idx = _required_int(config, "task_idx", context=context)
-    if agent_num < 0:
-        raise ValueError(f"{context}.agent_num must be non-negative")
+    if agent_num < 0 or execute and agent_num < 1:
+        requirement = "positive" if execute else "non-negative"
+        raise ValueError(f"{context}.agent_num must be {requirement}")
     if port <= 0:
         raise ValueError(f"{context}.port must be positive")
     if task_idx < 0:
@@ -750,15 +751,48 @@ def _validate_smoke_tasks(config: dict, *, context: str) -> None:
         for list_field in ("candidate_agents", "assigned_agents", "required_subtasks", "required subtasks"):
             if list_field in task and not isinstance(task[list_field], list):
                 raise ValueError(f"{task_context}.{list_field} must be a list")
-        if "number" in task and _required_int(task, "number", context=task_context) <= 0:
+        candidate_agents = task.get("candidate_agents")
+        assigned_agents = task.get("assigned_agents")
+        if candidate_agents is None and assigned_agents is None:
+            raise ValueError(f"{task_context} must provide non-empty candidate_agents")
+        for field, names in (
+            ("candidate_agents", candidate_agents),
+            ("assigned_agents", assigned_agents),
+        ):
+            if names is None:
+                continue
+            if not names:
+                raise ValueError(f"{task_context}.{field} must be non-empty")
+            if any(not isinstance(name, str) or not name for name in names):
+                raise ValueError(f"{task_context}.{field} must contain non-empty names")
+            if len({name.casefold() for name in names}) != len(names):
+                raise ValueError(f"{task_context}.{field} must contain unique names")
+        candidates = candidate_agents if candidate_agents is not None else assigned_agents
+        required = _required_int(task, "number", context=task_context) if "number" in task else (
+            len(assigned_agents) if assigned_agents is not None else 1
+        )
+        if required <= 0:
             raise ValueError(f"{task_context}.number must be positive")
+        if required > len(candidates):
+            raise ValueError(
+                f"{task_context}.number must not exceed candidate agent count"
+            )
+        if assigned_agents is not None and required != len(assigned_agents):
+            raise ValueError(
+                f"{task_context}.number must match assigned agent count"
+            )
+        if candidate_agents is not None and assigned_agents is not None and any(
+            name.casefold() not in {candidate.casefold() for candidate in candidate_agents}
+            for name in assigned_agents
+        ):
+            raise ValueError(f"{task_context}.assigned_agents must be candidate agents")
 
 
 def _required_int(config: dict, field: str, *, context: str) -> int:
-    try:
-        return int(config[field])
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{context}.{field} must be an integer") from exc
+    value = config[field]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{context}.{field} must be an integer")
+    return value
 
 
 def _last_load_status(diagnostics: dict) -> str | None:
@@ -1175,8 +1209,10 @@ def task_graph_from_runtime_task_dag_snapshot(snapshot: dict) -> tuple[list[Task
         task.reflect = deepcopy(content.get("reflect"))
         task.status = str(lifecycle.get("status", Task.unknown))
         task.candidate_list = list(lifecycle.get("candidate_agents", []) or [])
+        task._candidate_agents_explicit = bool(lifecycle.get("candidate_agents_explicit", False))
+        task._candidate_agent_count_exact = bool(lifecycle.get("candidate_agent_count_exact", False))
         task._agent = list(lifecycle.get("active_agents", []) or [])
-        task.number = int(lifecycle.get("required_agent_count", 1) or 1)
+        task.number = lifecycle.get("required_agent_count")
         task.available = bool(derived.get("dependency_ready", False)) and task.status == Task.unknown
         tasks.append(task)
         task_by_node_id[node_id] = task
@@ -1207,9 +1243,16 @@ def _task_from_config(config: dict, task_config: dict) -> Task:
     if task_config.get("id"):
         task.id = str(task_config["id"])
     agent_num = int(config.get("agent_num", 0) or 0)
-    task.candidate_list = task_config.get("candidate_agents") or _agent_names(agent_num)
+    if "candidate_agents" in task_config:
+        task.candidate_list = list(task_config["candidate_agents"])
+        task._candidate_agents_explicit = True
+    elif "assigned_agents" in task_config:
+        task.candidate_list = list(task_config["assigned_agents"])
+        task._candidate_agents_explicit = True
+    else:
+        task.candidate_list = _agent_names(agent_num)
     task._agent = task_config.get("assigned_agents", [])
-    task.number = int(task_config.get("number", max(1, min(agent_num, 1))))
+    task.number = task_config.get("number", max(1, min(agent_num, 1)))
     dependency_key = next(
         (key for key in ("required_subtasks", "required subtasks") if key in task_config),
         None,

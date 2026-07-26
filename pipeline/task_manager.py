@@ -265,8 +265,13 @@ class TaskManager:
         self.update_history(system_prompt, user_prompt, response)
         result = extract_info(response, guard_keys=["description", "milestones"])
         omit_keys = [("assigned agents", "list"), ("required subtasks", "list"), ("retrieval paths", "list")]
-        result = self.fill_keys_omit(result, omit_keys) # fill the result with empty data
-        result = self.fill_agents(result, self.agent_list)
+        result = self.fill_keys_omit(
+            result,
+            omit_keys,
+            required_keys={"assigned agents"} if self.manage_method == "update" else set(),
+        )
+        if self.manage_method == "update":
+            result = self.fill_agents(result, self.agent_list)
         self.logger.warning(result)
 
         subtask_list = []
@@ -282,9 +287,12 @@ class TaskManager:
             if self.manage_method == "update":
                 subtask.candidate_list = subtask_data["assigned agents"]
                 subtask.number = len(subtask_data["assigned agents"])
+                subtask._candidate_agents_explicit = True
+                subtask._candidate_agent_count_exact = True
             else:
                 subtask.candidate_list = subtask_data["candidate list"]
-                subtask.number = int(subtask_data["minimum required agents"])
+                subtask.number = subtask_data["minimum required agents"]
+                subtask._candidate_agents_explicit = True
             subtask._pre_idxs = list(subtask_data["required subtasks"])
             subtask._pre_idxs_explicit = True
             subtask_list.append(subtask)
@@ -364,21 +372,45 @@ class TaskManager:
     
     def fill_agents(self, result:[dict], agents:list):
         self.logger.debug(f"fill agents:")
-        agent_names = list(dict.fromkeys(agent.name for agent in agents))
+        canonical_by_casefold = {}
+        for agent in agents:
+            folded = agent.name.casefold()
+            if folded in canonical_by_casefold and canonical_by_casefold[folded] != agent.name:
+                raise ValueError(
+                    f"Ambiguous agent names {canonical_by_casefold[folded]!r} and {agent.name!r}"
+                )
+            canonical_by_casefold[folded] = agent.name
         for res in result:
+            if "assigned agents" not in res:
+                raise ValueError(
+                    f'Task {res.get("description", "")!r} must provide assigned agents'
+                )
+            if not isinstance(res["assigned agents"], list):
+                raise ValueError(
+                    f'Task {res.get("description", "")!r} assigned agents must be a list'
+                )
+            if not res["assigned agents"]:
+                raise ValueError(
+                    f'Task {res.get("description", "")!r} must assign at least one known agent'
+                )
             assigned_agents = []
             for agent_name in res["assigned agents"]:
-                if agent_name not in agent_names:
+                if not isinstance(agent_name, str) or agent_name.casefold() not in canonical_by_casefold:
                     raise ValueError(
-                        f'Unknown assigned agent {agent_name!r} for task {res["description"]!r}'
+                        f'Unknown assigned agent {agent_name!r} for task {res.get("description", "")!r}'
                     )
-                if agent_name not in assigned_agents:
-                    assigned_agents.append(agent_name)
+                canonical_name = canonical_by_casefold[agent_name.casefold()]
+                if canonical_name in assigned_agents:
+                    raise ValueError(
+                        f'Duplicate assigned agent {agent_name!r} for task {res.get("description", "")!r}'
+                    )
+                assigned_agents.append(canonical_name)
             res["assigned agents"] = assigned_agents
         self.logger.debug(f"fill agents: {result}")
         return result
 
-    def fill_keys_omit(self, result:[dict], keys:list):
+    def fill_keys_omit(self, result:[dict], keys:list, required_keys:set[str] | None = None):
+        required_keys = required_keys or set()
         def normalize_key(value):
             return " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
 
@@ -398,6 +430,10 @@ class TaskManager:
                         res[key[0]] = res[similar_key]
 
                     else:
+                        if key[0] in required_keys:
+                            raise ValueError(
+                                f'Task {res.get("description", "")!r} missing required field: {key[0]}'
+                            )
                         if key[1] == "dict":
                             res[key[0]] = {}
                         elif key[1] == "list":
@@ -584,7 +620,11 @@ class TaskManager:
         self.update_history(system_prompt, user_prompt, response)
         result = extract_info(response, guard_keys=["description", "milestones"])
         omit_keys = [("assigned agents", "list"), ("required subtasks", "list"), ("retrieval paths", "list")]
-        result = self.fill_keys_omit(result, omit_keys)
+        result = self.fill_keys_omit(
+            result,
+            omit_keys,
+            required_keys={"assigned agents"},
+        )
         result = self.fill_agents(result, self.agent_list)
         self.logger.warning(result)
 
@@ -600,6 +640,8 @@ class TaskManager:
             subtask.milestones = subtask_data["milestones"]
             subtask.candidate_list = subtask_data["assigned agents"]
             subtask.number = len(subtask_data["assigned agents"])
+            subtask._candidate_agents_explicit = True
+            subtask._candidate_agent_count_exact = True
             subtask._pre_idxs = list(subtask_data["required subtasks"])
             subtask._pre_idxs_explicit = True
             subtask_list.append(subtask)

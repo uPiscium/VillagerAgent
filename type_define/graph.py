@@ -34,6 +34,8 @@ class Task:
         self.milestones = []
         self.status = Task.unknown
         self.candidate_list = []
+        self._candidate_agents_explicit = False
+        self._candidate_agent_count_exact = False
         self.number = 1
         self.available = True
         self.reflect = None
@@ -52,6 +54,8 @@ class Task:
         new_task.milestones = self.milestones
         new_task.status = self.status
         new_task.candidate_list = self.candidate_list
+        new_task._candidate_agents_explicit = self._candidate_agents_explicit
+        new_task._candidate_agent_count_exact = self._candidate_agent_count_exact
         new_task.number = self.number
         new_task.available = self.available
         new_task.reflect = self.reflect

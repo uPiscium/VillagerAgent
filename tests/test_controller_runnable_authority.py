@@ -96,6 +96,18 @@ def test_controller_assigns_empty_candidate_task_from_store_projected_free_agent
     assert node["lifecycle"]["active_agents"] == ["Alice"]
 
 
+def test_controller_rejects_explicit_empty_candidate_task():
+    controller = _controller(["Alice"])
+    task = _task("A", [], 1)
+    task._candidate_agents_explicit = True
+    controller.task_list = [task]
+
+    with pytest.raises(ValueError, match="explicit empty candidate"):
+        controller.assign_runnable_tasks()
+
+    assert controller.assignment == {}
+
+
 def test_validate_assignments_rejects_incomplete_and_duplicate_agent_sets():
     controller = _controller(["Alice", "Bob"])
     controller.task_list = [_task("A", ["Alice", "Bob"], 2)]
