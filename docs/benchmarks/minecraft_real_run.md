@@ -30,6 +30,58 @@ sanitized evidence is registered as immutable release
 `benchmark-minecraft-bridge-smoke-v1`. This is connectivity/integration evidence
 only; it does not establish world reset, judged scoring, or task performance.
 
+On 2026-07-26, a bounded single-agent `meta` move run reached the real judger
+and task runtime against the same endpoint. The source world was captured while
+server autosave was disabled and flushed, then autosave was restored. The local,
+git-ignored snapshot is 36,764,270 bytes with SHA-256
+`8519378f5d71195ac67294acb318994ef660afdba92eada7289faa9be9f74673`.
+The server was Minecraft 1.19.2 (protocol 760), and `meta_judger` had to be a
+server operator because the judger creates and resets its arena with commands.
+
+The final 600-second attempt reached `load_status=loaded` and preserved a real
+runtime task snapshot, but it produced no score. `gemma4:12b` returned an empty
+tool-call result for the first agent action, after which task decomposition kept
+retrying a response rejected as `assigned agents not in content`. The normalized
+artifacts report `snapshot_source=real_runtime`, `action_count=0`,
+`score_available=false`, `progress=null`, and `error_type=timeout`. This is
+actionable integration evidence, not a performance result. The retained local
+bundle is
+`result/minecraft/issue_243_judged_20260726_retry_after_judger_op/`.
+
+The run used git base `fc4f7c0` plus the uncommitted runtime fixes documented
+below, task index 0, one agent, and this command:
+
+```bash
+VILLAGER_MINECRAFT_JUDGED_SMOKE=1 \
+OLLAMA_API_BASE=http://ollama.arc.upiscium.dev/v1 \
+OLLAMA_MODEL=gemma4:12b \
+python -m benchmarks.minecraft.real_smoke judged \
+  --config configs/minecraft/experiments/comparison-2026-07-20.json \
+  --output-dir result/minecraft/issue_243_judged_20260726_retry_after_judger_op \
+  --timeout-seconds 600
+```
+
+Two local runtime failures were fixed before that attempt: a zero-byte legacy
+`API_KEY_LIST` now falls back to the configured Ollama key, and the meta judger
+loads its arena chunks before sampling block heights. Environment launch errors
+are also re-raised so the original failure reaches normalized artifacts.
+
+A follow-up attempt on 2026-07-26 closed the score evidence gap. Additional
+runtime fixes recovered structured actions returned in Ollama's `reasoning`
+field, accepted underscore JSON key variants, matched bridge movement tolerance
+to the judger's one-block coordinate requirement, captured Mineflayer spawn
+before handler registration could race, stopped the controller at terminal
+judger status, and isolated runtime scratch paths by benchmark attempt ID.
+
+The successful bundle is
+`result/minecraft/issue_243_judged_20260726_isolated_terminal_score/`. Its parent
+and experiment attempts are both complete. The experiment records
+`snapshot_source=real_runtime`, one successful `navigateTo` action,
+`score_available=true`, `score=100`, `progress=100`, `error=null`, and
+`timed_out=false`. The server was healthy with zero players after cleanup, and
+no local bridge or judger process remained. This single canary demonstrates the
+judged execution and scoring path only; it is not benchmark performance evidence.
+
 ## Required Runtime Assets
 
 Do not commit these assets or generated outputs:
@@ -113,7 +165,10 @@ When server access is available, start with `env_type.none` before running a jud
 
 Prior local connectivity evidence verified Python `VillagerBench` to FastAPI/mineflayer bridge to a remote Minecraft server and back, but it did not launch a benchmark judger or measure scored task completion. Keep new evidence in this document or in run-specific notes under `result/`; the legacy documentation directory has been removed.
 
-Issue #243 remains externally blocked on access to the required Ollama model, resettable Minecraft server/world, bridge, and judged task assets. Automated tests validate the opt-in harness and artifacts only; they are not real-run evidence and do not satisfy the issue's judged-execution requirement.
+Issue #243 is no longer blocked on Ollama, Minecraft, bridge, world snapshot,
+judger loading, agent action parsing, or score capture. The bounded canary
+satisfies the real-execution evidence path. No comparative performance claim is
+made from this single smoke run.
 
 ## Opt-In Real Smoke Targets
 
@@ -173,16 +228,20 @@ Record the following in a verification note before making any performance claims
 - Server host, port, and world assumptions.
 - Task type, task index, agent count, and timeout.
 - Whether `.cache/load_status.cache` reached `loaded`.
+- Whether the task judger identity has the required server operator permission.
 - Whether `data/score.json` was produced.
 - Observed `summary.json` `progress`, `error`, `error_type`, and `timed_out` fields.
 - Any runtime failure mode.
 
 ## Validation Status For This Change
 
-This change validates the bounded execute artifact path without requiring a server:
+The automated coverage validates the bounded execute artifact path without
+requiring a server:
 
 - A monkeypatched runtime error preserves `summary.json` and `metrics.json` and records `error_type == "RuntimeError"`.
 - A monkeypatched slow runtime triggers `--execute-timeout-seconds`, preserves artifacts, and records `error_type == "timeout"` and `timed_out == true`.
 - A monkeypatched runtime snapshot with a task different from the config fixture drives execute task artifacts, lifecycle status, dependency edges, and post-hoc ranking without mixing fixture state.
 
-No real Minecraft server was launched for this repository change, and no benchmark performance is claimed.
+The final 2026-07-26 real run reached judged loading, executed one Minecraft
+action, captured a real runtime task snapshot, and produced score 100. No
+benchmark performance is claimed.

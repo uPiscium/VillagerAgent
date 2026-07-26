@@ -102,6 +102,7 @@ class VillagerBench:
             tb = traceback.format_exc()
             self.logger.error(f"Exception occurred: {e}\n{tb}")
             self.stop()
+            raise
         finally:
             self.stop()
             if os.path.exists(".cache/state.json"):
@@ -360,7 +361,17 @@ class VillagerBench:
                 with open(".cache/load_status.cache", "r") as f:
                     status_data = json.load(f)
                 if self.env_type == env_type.meta:
-                    diagnostics["load_status_history"].append({"status": status_data.get("status"), "time": time.time()})
+                    phase = None
+                    phase_path = ".cache/meta_judger_phase.cache"
+                    if os.path.exists(phase_path):
+                        with open(phase_path, "r", encoding="utf-8") as f:
+                            phase = f.read().strip() or None
+                    diagnostics["load_status_history"].append({
+                        "status": status_data.get("status"),
+                        "phase": phase,
+                        "time": time.time(),
+                    })
+                    diagnostics["load_phase"] = phase
                     diagnostics["exit_code"] = judger_process.poll()
                     self._write_meta_judger_diagnostics(diagnostics)
                     if diagnostics["exit_code"] is not None and status_data.get("status") != "loaded":
@@ -471,6 +482,15 @@ class VillagerBench:
         if self.env_type == env_type.meta:
             with open("data/score.json") as f:
                 return json.load(f)
+
+    def is_task_complete(self):
+        if self.env_type != env_type.meta or not os.path.exists(".cache/load_status.cache"):
+            return False
+        try:
+            with open(".cache/load_status.cache", "r", encoding="utf-8") as f:
+                return json.load(f).get("status") == "end"
+        except (OSError, json.JSONDecodeError):
+            return False
 
 
 if __name__ == "__main__":

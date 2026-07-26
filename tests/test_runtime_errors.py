@@ -8,7 +8,7 @@ import pytest
 
 import env.env as env_module
 from env.env import VillagerBench, env_type
-from env.minecraft_client import Agent
+from env.minecraft_client import Agent, OllamaReasoningChatOpenAI
 from env.minecraft_define import MinecraftEvent
 from pipeline.agent import BaseAgent
 from pipeline.task_manager import TaskManager
@@ -79,6 +79,63 @@ def test_environment_reset_rejects_unsupported_type(monkeypatch):
         environment.reset()
 
 
+def test_environment_run_propagates_launch_failure(monkeypatch):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = False
+    environment.logger = SimpleNamespace(info=lambda *_: None, error=lambda *_: None)
+    environment.launch = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("launch failed"))
+    environment.stop = lambda: None
+    monkeypatch.setattr(env_module.os.path, "exists", lambda *_: False)
+
+    with pytest.raises(RuntimeError, match="launch failed"):
+        with environment.run(fast_api=True):
+            pytest.fail("launch failure must prevent entering the run context")
+
+
+def test_ollama_chat_model_uses_reasoning_when_content_is_empty():
+    model = OllamaReasoningChatOpenAI(
+        model="gemma4:12b",
+        openai_api_key="ollama",
+        base_url="http://localhost:11434/v1",
+    )
+
+    result = model._create_chat_result({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "reasoning": '{"action": "navigateTo"}',
+            },
+            "finish_reason": "stop",
+        }],
+        "usage": {},
+    })
+
+    assert result.generations[0].text == '{"action": "navigateTo"}'
+
+
+def test_ollama_chat_model_keeps_nonempty_content():
+    model = OllamaReasoningChatOpenAI(
+        model="gemma4:12b",
+        openai_api_key="ollama",
+        base_url="http://localhost:11434/v1",
+    )
+
+    result = model._create_chat_result({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "final content",
+                "reasoning": "hidden reasoning",
+            },
+            "finish_reason": "stop",
+        }],
+        "usage": {},
+    })
+
+    assert result.generations[0].text == "final content"
+
+
 def test_meta_reset_bounds_missing_load_status_and_persists_diagnostics(monkeypatch, tmp_path):
     class FakeProcess:
         pid = 4321
@@ -132,6 +189,21 @@ def test_meta_get_score_reads_runtime_score_path(monkeypatch, tmp_path):
     environment.task_name = "meta-smoke"
 
     assert environment.get_score() == score
+
+
+def test_meta_task_completion_reads_terminal_load_status(monkeypatch, tmp_path):
+    cache_dir = tmp_path / ".cache"
+    cache_dir.mkdir()
+    status_path = cache_dir / "load_status.cache"
+    environment = object.__new__(VillagerBench)
+    environment.env_type = env_type.meta
+    monkeypatch.chdir(tmp_path)
+
+    status_path.write_text(json.dumps({"status": "loaded"}), encoding="utf-8")
+    assert environment.is_task_complete() is False
+
+    status_path.write_text(json.dumps({"status": "end"}), encoding="utf-8")
+    assert environment.is_task_complete() is True
 
 
 def _meta_environment():

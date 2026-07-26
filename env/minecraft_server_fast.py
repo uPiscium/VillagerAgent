@@ -196,7 +196,8 @@ async def move_to_pos(request: Request):
     """move_to_pos x y z: move to the position x y z."""
     data = await request.json()
     x, y, z = data.get('x'), data.get('y'), data.get('z')
-    tag, msg = move_to(pathfinder, bot, Vec3, 3, Vec3(x, y, z))
+    # Judged coordinate tasks require every axis to be within one block.
+    tag, msg = move_to(pathfinder, bot, Vec3, 1, Vec3(x, y, z))
     done = tag
     # lookAtPlayer(bot, entity['position'])
     return JSONResponse({'message': msg, 'status': done})

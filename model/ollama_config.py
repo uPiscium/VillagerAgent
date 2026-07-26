@@ -44,8 +44,10 @@ def load_agent_api_key_list(path: str | Path = "API_KEY_LIST", key: str = "AGENT
     key_path = Path(path)
     if not key_path.exists():
         return [OLLAMA_API_KEY]
-    with key_path.open("r", encoding="utf-8") as f:
-        payload = json.load(f)
+    content = key_path.read_text(encoding="utf-8")
+    if not content.strip():
+        return [OLLAMA_API_KEY]
+    payload = json.loads(content)
     keys = payload.get(key, []) if isinstance(payload, dict) else []
     if isinstance(keys, str):
         keys = [keys]

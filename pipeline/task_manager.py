@@ -382,6 +382,9 @@ class TaskManager:
         return result
 
     def fill_keys_omit(self, result:[dict], keys:list):
+        def normalize_key(value):
+            return " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
+
         for res in result:
             for key in keys:
                 if key[0] not in res.keys():
@@ -390,12 +393,7 @@ class TaskManager:
                     similar_score = 0
                     for k in res.keys():
                         similar_score = 0
-                        if k.replace(" ", "") == key[0] or \
-                            k.replace("_", "") == key[0] or \
-                            k.replace(" ", "_") == key[0] or \
-                            k.replace("_", " ") == key[0] or \
-                            k.upper() == key[0].upper() or \
-                            k.lower() == key[0].lower():
+                        if normalize_key(k) == normalize_key(key[0]):
                             similar_score = 1
                             similar_key = k
                     if similar_score > 0.8:
@@ -587,7 +585,7 @@ class TaskManager:
         response = self.llm.few_shot_generate_thoughts(system_prompt, user_prompt, cache_enabled=False, json_check=True,
                                                        check_tags=["description", "milestones", "assigned agents"])
         self.update_history(system_prompt, user_prompt, response)
-        result = extract_info(response, guard_keys=["description", "milestones", "assigned agents"])
+        result = extract_info(response, guard_keys=["description", "milestones"])
         omit_keys = [("assigned agents", "list"), ("required subtasks", "list"), ("retrieval paths", "list")]
         result = self.fill_keys_omit(result, omit_keys)
         result = self.fill_agents(result, self.agent_list)

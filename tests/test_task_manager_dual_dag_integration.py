@@ -77,6 +77,28 @@ def test_task_manager_status_updates_write_dual_dag_before_projection():
     assert manager.dual_dag_store.terminal_state() == GraphState.FAILURE
 
 
+def test_task_manager_normalizes_underscore_assigned_agents_key():
+    manager = TaskManager(silent=True)
+    result = [{
+        "description": "Move Alice",
+        "milestones": ["Reached target"],
+        "assigned_agents": ["Alice"],
+    }]
+
+    normalized = manager.fill_keys_omit(result, [("assigned agents", "list")])
+
+    assert normalized[0]["assigned agents"] == ["Alice"]
+
+
+def test_task_manager_normalizes_hyphenated_case_variant_key():
+    manager = TaskManager(silent=True)
+    result = [{"Assigned-Agents": ["Alice"]}]
+
+    normalized = manager.fill_keys_omit(result, [("assigned agents", "list")])
+
+    assert normalized[0]["assigned agents"] == ["Alice"]
+
+
 def test_task_manager_checkpoints_decomposition_and_lifecycle_transitions():
     task = Task("A", {})
     manager = TaskManager(silent=True)

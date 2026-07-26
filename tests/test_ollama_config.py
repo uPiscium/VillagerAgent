@@ -21,6 +21,13 @@ def test_load_agent_api_key_list_falls_back_to_ollama_key_when_file_missing(tmp_
     assert load_agent_api_key_list(missing_path) == [OLLAMA_API_KEY]
 
 
+def test_load_agent_api_key_list_falls_back_when_file_is_empty(tmp_path):
+    key_path = tmp_path / "API_KEY_LIST"
+    key_path.write_text("", encoding="utf-8")
+
+    assert load_agent_api_key_list(key_path) == [OLLAMA_API_KEY]
+
+
 def test_load_agent_api_key_list_preserves_legacy_file_keys(tmp_path):
     key_path = tmp_path / "API_KEY_LIST"
     key_path.write_text(json.dumps({"AGENT_KEY": ["key-a", "key-b"]}), encoding="utf-8")
