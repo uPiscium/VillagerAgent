@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from pipeline.agent import BaseAgent
@@ -40,6 +42,55 @@ class FakeDataManager:
 
     def update_database(self, payload):
         self.updated.append(payload)
+
+
+class FakeLocalModel:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.calls = 0
+
+    def few_shot_generate_thoughts(self, *args, **kwargs):
+        self.calls += 1
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+class FakeTool:
+    name = "inspect"
+
+    def __init__(self, feedback=None, error=None, on_call=None):
+        self.feedback = feedback
+        self.error = error
+        self.on_call = on_call
+        self.calls = 0
+
+    def __call__(self, tool_input):
+        self.calls += 1
+        if self.on_call is not None:
+            self.on_call()
+        if self.error is not None:
+            raise self.error
+        return self.feedback
+
+
+def make_local_agent(responses, *, tools=None, **kwargs):
+    env = FakeEnv()
+    dm = FakeDataManager()
+    llm = FakeLocalModel(responses)
+    agent = BaseAgent(
+        llm=llm,
+        env=env,
+        data_manager=dm,
+        name="Alice",
+        silent=True,
+        all_tools=tools or [],
+        **kwargs,
+    )
+    task = Task("Inspect area", {"document": "public"})
+    task._agent = ["Alice"]
+    return agent, task, llm, dm
 
 
 def test_base_agent_normal_step_raises_original_error_after_retry_exhaustion(monkeypatch):
@@ -91,3 +142,143 @@ def test_base_agent_normal_step_truncates_long_task_content(monkeypatch):
     assert "visible-tail" not in env.last_task_prompt
     assert "..." in env.last_task_prompt
     assert "*** The relevant data of task(not environment data)***" in env.last_task_prompt
+
+
+def test_local_step_bounds_repeated_malformed_model_output():
+    agent, task, llm, dm = make_local_agent(
+        ["not an action"] * 3,
+        local_model_max_attempts=3,
+    )
+
+    feedback, detail = agent.local_step(task)
+
+    assert llm.calls == 3
+    assert feedback["status"] is False
+    assert detail["failure"]["reason"] == "model_attempt_budget_exhausted"
+    assert detail["failure"]["model_attempts"] == 3
+    assert detail["failure"]["successful_actions"] == 0
+    assert detail["failure"]["last_failure"]["reason"] == "malformed_model_output"
+    assert dm.updated[0]["detail"] == detail
+
+
+def test_local_step_bounds_repeated_unknown_tools():
+    response = "Action: {'tool': 'missing', 'tool_input': {}}"
+    agent, task, llm, _ = make_local_agent(
+        [response] * 2,
+        local_model_max_attempts=2,
+    )
+
+    feedback, detail = agent.local_step(task)
+
+    assert llm.calls == 2
+    assert feedback["status"] is False
+    assert detail["failure"]["reason"] == "model_attempt_budget_exhausted"
+    assert detail["failure"]["last_failure"]["reason"] == "unknown_tool"
+
+
+def test_local_step_immediate_stop_returns_initialized_success():
+    response = "Action: {'tool': 'stop', 'tool_input': {'final_answer': 'finished'}}"
+    agent, task, _, _ = make_local_agent([response])
+
+    feedback, detail = agent.local_step(task)
+
+    assert feedback == {"message": "finished", "status": True, "new_events": []}
+    assert detail["final_answer"] == "finished"
+    assert detail["action_list"] == []
+    assert "failure" not in detail
+    assert agent.IDLE is True
+
+
+@pytest.mark.parametrize(
+    ("tool", "reason"),
+    [
+        (FakeTool(error=RuntimeError("broken tool")), "tool_exception"),
+        (FakeTool(feedback={"status": True}), "invalid_tool_feedback"),
+    ],
+)
+def test_local_step_returns_structured_tool_failures(tool, reason):
+    response = "Action: {'tool': 'inspect', 'tool_input': {}}"
+    agent, task, _, _ = make_local_agent([response], tools=[tool])
+
+    feedback, detail = agent.local_step(task)
+
+    assert feedback["status"] is False
+    assert feedback["error"]["reason"] == reason
+    assert detail["failure"]["reason"] == reason
+    assert detail["failure"]["model_attempts"] == 1
+    assert detail["failure"]["successful_actions"] == 0
+    assert agent.IDLE is True
+
+
+def test_local_step_cancellation_prevents_another_tool_action():
+    cancellation = threading.Event()
+    response = "Action: {'tool': 'inspect', 'tool_input': {}}"
+    tool = FakeTool(
+        feedback={"message": "ok", "status": True},
+        on_call=cancellation.set,
+    )
+    agent, task, llm, _ = make_local_agent(
+        [response, response],
+        tools=[tool],
+        local_model_inter_action_delay=0,
+    )
+
+    feedback, detail = agent.local_step(task, cancellation_token=cancellation)
+
+    assert tool.calls == 1
+    assert llm.calls == 1
+    assert feedback["status"] is False
+    assert detail["failure"]["reason"] == "cancelled"
+    assert detail["failure"]["successful_actions"] == 1
+
+
+def test_local_step_uses_bounded_configurable_inter_action_delay(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("pipeline.agent.time.sleep", sleeps.append)
+    response = "Action: {'tool': 'inspect', 'tool_input': {}}"
+    tool = FakeTool(feedback={"message": "ok", "status": True})
+    agent, task, _, _ = make_local_agent(
+        [response, "Action: {'tool': 'stop', 'tool_input': {'final_answer': 'done'}}"],
+        tools=[tool],
+        local_model_inter_action_delay=100,
+    )
+
+    agent.local_step(task)
+
+    assert sleeps == [BaseAgent.MAX_LOCAL_INTER_ACTION_DELAY]
+
+
+def test_local_step_separates_model_attempt_and_action_budgets():
+    malformed = "not an action"
+    action = "Action: {'tool': 'inspect', 'tool_input': {}}"
+    tool = FakeTool(feedback={"message": "ok", "status": True})
+    agent, task, llm, _ = make_local_agent(
+        [malformed, action, action],
+        tools=[tool],
+        local_model_max_attempts=4,
+        local_model_max_actions=2,
+    )
+
+    feedback, detail = agent.local_step(task)
+
+    assert llm.calls == 3
+    assert tool.calls == 2
+    assert feedback["status"] is False
+    assert detail["failure"]["reason"] == "action_budget_exhausted"
+    assert detail["failure"]["model_attempts"] == 3
+    assert detail["failure"]["successful_actions"] == 2
+
+
+def test_local_step_has_no_default_inter_action_sleep(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("pipeline.agent.time.sleep", sleeps.append)
+    response = "Action: {'tool': 'inspect', 'tool_input': {}}"
+    tool = FakeTool(feedback={"message": "ok", "status": True})
+    agent, task, _, _ = make_local_agent(
+        [response, "Action: {'tool': 'stop', 'tool_input': {'final_answer': 'done'}}"],
+        tools=[tool],
+    )
+
+    agent.local_step(task)
+
+    assert sleeps == []
