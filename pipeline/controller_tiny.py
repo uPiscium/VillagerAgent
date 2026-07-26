@@ -29,6 +29,12 @@ class TaskExecutionGroup:
     started_at: float | None = None
     submission_complete: bool = False
     completed: bool = False
+    cancellation_tokens: dict[str, threading.Event] = field(default_factory=dict)
+    cancellation_requested: set[str] = field(default_factory=set)
+    cancellation_acknowledged: set[str] = field(default_factory=set)
+    cancellation_forced: set[str] = field(default_factory=set)
+    cancellation_requested_at: dict[str, float] = field(default_factory=dict)
+    timeout_details: dict[str, dict] = field(default_factory=dict)
 
 
 class ControllerShutdownError(RuntimeError):
@@ -115,6 +121,7 @@ class GlobalController:
         self._first_failure = None
         self._controller_threads = []
         self.shutdown_grace_period = 5.0
+        self.cancellation_grace_period = 5.0
         self._run_started = False
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
@@ -248,7 +255,19 @@ class GlobalController:
                     f"Task {group.task.description} submission interrupted by controller shutdown"
                 )
             with self.result_list_lock:
-                group.futures[agent.name] = self.executor.submit(agent.step, group.task)
+                supports_cancellation = getattr(
+                    agent, "supports_cooperative_cancellation", None
+                )
+                if callable(supports_cancellation) and supports_cancellation():
+                    token = threading.Event()
+                    group.cancellation_tokens[agent.name] = token
+                    group.futures[agent.name] = self.executor.submit(
+                        agent.step,
+                        group.task,
+                        cancellation_token=token,
+                    )
+                else:
+                    group.futures[agent.name] = self.executor.submit(agent.step, group.task)
             self.logger.info(f"Agent {agent.name} is executing task now ...")
         with self.result_list_lock:
             group.submission_complete = True
@@ -259,11 +278,60 @@ class GlobalController:
         if not group.submission_complete:
             return False
         now = time.time() if now is None else now
-        timed_out = (
+        timed_out = bool(group.cancellation_requested) or (
             group.started_at is not None
             and now - group.started_at > self.max_task_time
             and not all(future.done() for future in group.futures.values())
         )
+        if timed_out:
+            for agent in group.agents:
+                agent_name = agent.name
+                future = group.futures[agent_name]
+                if future.done() or agent_name in group.cancellation_requested:
+                    continue
+                group.cancellation_requested.add(agent_name)
+                group.cancellation_requested_at[agent_name] = now
+                group.timeout_details[agent_name] = {
+                    "status": "timeout",
+                    "error": f"Task {group.task.description} timeout for agent {agent_name}",
+                    "cooperative_cancellation": agent_name in group.cancellation_tokens,
+                    "cancellation_requested": True,
+                    "cancellation_acknowledged": False,
+                    "cancellation_forced": False,
+                }
+                token = group.cancellation_tokens.get(agent_name)
+                if token is not None:
+                    token.set()
+
+        unacknowledged = []
+        for agent_name in group.cancellation_requested:
+            future = group.futures[agent_name]
+            if future.done() and self._is_cancellation_acknowledgement(future):
+                group.cancellation_acknowledged.add(agent_name)
+                group.timeout_details[agent_name]["cancellation_acknowledged"] = True
+                continue
+            unacknowledged.append(agent_name)
+
+        cancellation_grace_period = getattr(
+            self, "cancellation_grace_period", self.shutdown_grace_period
+        )
+        forced_agents = [
+            agent_name
+            for agent_name in unacknowledged
+            if now - group.cancellation_requested_at[agent_name] >= cancellation_grace_period
+        ]
+        if forced_agents:
+            for agent_name in forced_agents:
+                group.cancellation_forced.add(agent_name)
+                group.timeout_details[agent_name]["cancellation_forced"] = True
+            self._request_shutdown()
+            names = ", ".join(sorted(forced_agents))
+            raise ControllerShutdownError(
+                f"Task {group.task.description} cancellation was not acknowledged by {names}"
+            )
+        if unacknowledged:
+            return False
+
         if not timed_out and not all(future.done() for future in group.futures.values()):
             return False
 
@@ -271,12 +339,8 @@ class GlobalController:
         group_succeeded = not timed_out
         for agent in group.agents:
             future = group.futures[agent.name]
-            if timed_out and not future.done():
-                future.cancel()
-                agent_results[agent.name] = {
-                    "status": "timeout",
-                    "error": f"Task {group.task.description} timeout for agent {agent.name}",
-                }
+            if agent.name in group.cancellation_requested:
+                agent_results[agent.name] = dict(group.timeout_details[agent.name])
                 group_succeeded = False
                 continue
 
@@ -304,12 +368,33 @@ class GlobalController:
         status = Task.success if group_succeeded else Task.failure
         if len(group.agents) == 1:
             result = agent_results[group.agents[0].name]
-            feedback = result.get("detail", result.get("error"))
+            feedback = (
+                result
+                if result.get("status") == "timeout"
+                else result.get("detail", result.get("error"))
+            )
         else:
             feedback = {"agent_results": agent_results}
         self.update_task_status(group.task, status, feedback)
         group.completed = True
         return True
+
+    @staticmethod
+    def _is_cancellation_acknowledgement(future: Future) -> bool:
+        if future.cancelled():
+            return False
+        try:
+            result = future.result()
+        except BaseException:
+            return False
+        if not isinstance(result, tuple) or len(result) != 2:
+            return False
+        detail = result[1]
+        return (
+            isinstance(detail, dict)
+            and isinstance(detail.get("failure"), dict)
+            and detail["failure"].get("reason") == "cancelled"
+        )
 
     # worker
     def worker(self):
@@ -655,6 +740,13 @@ class GlobalController:
                     "agent_reuse_blocked": True,
                     "requires_agent_reconciliation": True,
                 }
+                if group.cancellation_requested:
+                    feedback.update({
+                        "cancellation_requested": sorted(group.cancellation_requested),
+                        "cancellation_acknowledged": sorted(group.cancellation_acknowledged),
+                        "cancellation_forced": sorted(group.cancellation_forced),
+                        "timeout_details": dict(group.timeout_details),
+                    })
                 group.task.status = Task.failure
                 self.task_manager.mark_task_status(group.task.id, Task.failure, feedback)
                 group.completed = True

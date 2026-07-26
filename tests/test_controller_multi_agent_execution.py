@@ -5,7 +5,9 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 
 import pipeline.controller_tiny as controller_tiny
-from pipeline.controller_tiny import GlobalController
+import pytest
+
+from pipeline.controller_tiny import ControllerShutdownError, GlobalController
 from pipeline.task_manager import TaskManager
 from type_define.graph import Task
 
@@ -168,20 +170,100 @@ def test_execution_group_does_not_reflect_explicit_agent_failure():
     ]
 
 
-def test_execution_group_fails_once_when_one_agent_times_out():
+def test_running_future_timeout_does_not_release_or_reassign_agent():
     controller, task, agents = _controller_with_task(["Alice", "Bob"], required=2)
+    agents[1].cooperative_cancellation = True
     group = _started_group(controller, task, agents, pending_agent="Bob")
     group.started_at = time.time() - controller.max_task_time - 1
+    group.futures["Bob"].set_running_or_notify_cancel()
 
-    assert controller.finalize_execution_group(group) is True
+    assert controller.finalize_execution_group(group) is False
 
+    assert group.cancellation_requested == {"Bob"}
+    assert group.cancellation_acknowledged == set()
+    assert group.cancellation_forced == set()
+    assert group.cancellation_tokens["Bob"].is_set()
+    assert controller.assignment == {"Alice": task.id, "Bob": task.id}
+    assert controller.task_manager.status_updates == []
+    next_task = _task("Next task", ["Bob"], required=1)
+    controller.task_list = [next_task]
+    assert controller.assign_runnable_tasks() == 0
+
+
+def test_cancellation_acknowledgement_releases_assignments_and_fails_once():
+    controller, task, agents = _controller_with_task(["Alice", "Bob"], required=2)
+    agents[1].cooperative_cancellation = True
+    group = _started_group(controller, task, agents, pending_agent="Bob")
+    timeout_at = group.started_at + controller.max_task_time + 1
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is False
+    group.futures["Bob"].set_result(_cancelled_result())
+    assert controller.finalize_execution_group(group, now=timeout_at + 0.1) is True
+
+    assert group.cancellation_acknowledged == {"Bob"}
+    assert controller.assignment == {}
     assert len(controller.task_manager.status_updates) == 1
     _, status, feedback = controller.task_manager.status_updates[0]
     assert status == Task.failure
     assert feedback["agent_results"]["Bob"] == {
         "status": "timeout",
         "error": f"Task {task.description} timeout for agent Bob",
+        "cooperative_cancellation": True,
+        "cancellation_requested": True,
+        "cancellation_acknowledged": True,
+        "cancellation_forced": False,
     }
+    assert controller.finalize_execution_group(group) is True
+    assert len(controller.task_manager.status_updates) == 1
+
+
+def test_non_cooperative_timeout_stops_controller_and_retains_assignment():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    controller.cancellation_grace_period = 0.5
+    group = _started_group(controller, task, agents, pending_agent="Alice")
+    group.futures["Alice"].set_running_or_notify_cancel()
+    timeout_at = group.started_at + controller.max_task_time + 1
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is False
+    with pytest.raises(ControllerShutdownError, match="not acknowledged by Alice"):
+        controller.finalize_execution_group(group, now=timeout_at + 0.5)
+
+    assert controller.shutdown_event.is_set()
+    assert group.cancellation_tokens == {}
+    assert group.cancellation_forced == {"Alice"}
+    assert controller.assignment == {"Alice": task.id}
+    assert controller.task_manager.status_updates == []
+
+
+def test_timeout_acknowledgement_preserves_multi_agent_lifecycle_history():
+    manager = TaskManager(silent=True)
+    task = _task("Shared task", ["Alice", "Bob"], required=2)
+    manager.set_task_list_from_decomposition([task])
+    projected_task = manager.query_runnable_subtasks(["Alice", "Bob"])[0]
+    manager.feedback_task = lambda _task: None
+    controller, _, agents = _controller_with_task(["Alice", "Bob"], required=2)
+    agents[1].cooperative_cancellation = True
+    controller.task_manager = manager
+    controller.task_list = [projected_task]
+    controller.execute_assignments([{
+        "task_instance": projected_task,
+        "agent_instances": agents,
+    }])
+    group = _started_group(
+        controller, projected_task, agents, pending_agent="Bob", enqueue_assignment=False
+    )
+    timeout_at = group.started_at + controller.max_task_time + 1
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is False
+    running_node = manager.runtime_task_store.snapshot()["nodes"][0]
+    assert running_node["lifecycle"]["active_agents"] == ["Alice", "Bob"]
+    group.futures["Bob"].set_result(_cancelled_result())
+    assert controller.finalize_execution_group(group, now=timeout_at + 0.1) is True
+
+    node = manager.runtime_task_store.snapshot()["nodes"][0]
+    assert node["lifecycle"]["status"] == Task.failure
+    assert node["lifecycle"]["active_agents"] == []
+    assert node["lifecycle"]["last_assigned_agents"] == ["Alice", "Bob"]
 
 
 def test_execution_group_terminal_transition_preserves_assignment_history():
@@ -216,8 +298,12 @@ class _AgentStub:
         self.step_detail = f"{name} detail"
         self.reflect_success = True
         self.reflect_calls = 0
+        self.cooperative_cancellation = False
 
-    def step(self, _task):
+    def supports_cooperative_cancellation(self):
+        return self.cooperative_cancellation
+
+    def step(self, _task, cancellation_token=None):
         if self.step_error is not None:
             raise self.step_error
         return "done", self.step_detail
@@ -232,14 +318,14 @@ class _ExecutorStub:
         self.pending_agent = pending_agent
         self.submitted_agents = []
 
-    def submit(self, fn, task):
+    def submit(self, fn, task, **kwargs):
         agent = fn.__self__
         self.submitted_agents.append(agent.name)
         future = Future()
         if agent.name == self.pending_agent:
             return future
         try:
-            future.set_result(fn(task))
+            future.set_result(fn(task, **kwargs))
         except Exception as exc:
             future.set_exception(exc)
         return future
@@ -276,6 +362,8 @@ def _controller_with_task(agent_names, required):
     controller.task_manager = _TaskManagerStub(task)
     controller.logger = logging.getLogger("test-controller-multi-agent")
     controller.max_task_time = 30
+    controller.shutdown_grace_period = 1
+    controller.cancellation_grace_period = 1
     return controller, task, agents
 
 
@@ -300,3 +388,12 @@ def _task(description, candidates, required):
     task.available = True
     task.status = Task.unknown
     return task
+
+
+def _cancelled_result():
+    return ({"status": False}, {
+        "failure": {
+            "reason": "cancelled",
+            "cancellation_acknowledged": True,
+        },
+    })
