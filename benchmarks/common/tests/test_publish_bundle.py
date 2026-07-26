@@ -15,8 +15,35 @@ from benchmarks.common.publish_bundle import (
     derive_public_bundle,
     publish_bundle,
     validate_public_bundle,
+    _validate_minecraft_judged_summaries,
 )
 from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
+
+
+def test_publish_validator_rejects_inconsistent_judged_success(tmp_path):
+    summary_path = tmp_path / "summary.json"
+    summary_path.write_text(json.dumps({
+        "attempt_id": "attempt-a",
+        "execute_real_environment": True,
+        "task_type": "meta",
+        "final_score": {
+            "attempt_id": "attempt-a",
+            "status": "success",
+            "score": 100,
+        },
+        "error": None,
+        "timed_out": False,
+        "score_available": True,
+        "score_ownership_verified": True,
+        "controller_shutdown_complete": True,
+    }), encoding="utf-8")
+    (tmp_path / "runtime_dual_dag_snapshot.json").write_text(json.dumps({
+        "summary": {"terminal_state": "running"},
+        "nodes": [{"lifecycle": {"status": "running", "active_agents": ["Alice"]}}],
+    }), encoding="utf-8")
+
+    with pytest.raises(PublicBundleValidationError, match="runtime lifecycle is inconsistent"):
+        _validate_minecraft_judged_summaries([summary_path])
 
 
 def _bundle(

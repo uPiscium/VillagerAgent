@@ -352,6 +352,7 @@ def validate_public_bundle(
         statuses = source_statuses
     if not ({"summary.json", "matrix_summary.json", "verification.json"} & present_names):
         raise PublicBundleValidationError("Public bundle must include per-run or matrix status summaries")
+    _validate_minecraft_judged_summaries(paths)
     if not any(
         "metrics" in path.name or "report" in path.name or path.name == "verification.json"
         for path in paths
@@ -367,6 +368,65 @@ def validate_public_bundle(
         run_statuses=dict(sorted(statuses.items())),
         source_manifest_sha256=_sha256(manifest_path),
     )
+
+
+def _validate_minecraft_judged_summaries(paths: list[Path]) -> None:
+    for summary_path in paths:
+        if summary_path.name != "summary.json":
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        score = summary.get("final_score")
+        if not (
+            summary.get("execute_real_environment") is True
+            and summary.get("task_type") == "meta"
+            and isinstance(score, dict)
+            and score.get("status") == "success"
+        ):
+            continue
+        required_true = (
+            "score_available",
+            "score_ownership_verified",
+            "controller_shutdown_complete",
+        )
+        if summary.get("error") is not None or summary.get("timed_out") is not False:
+            raise PublicBundleValidationError(
+                f"Judged success summary is not publishable: {summary_path}"
+            )
+        if any(summary.get(field) is not True for field in required_true):
+            raise PublicBundleValidationError(
+                f"Judged success summary lacks verified completion fields: {summary_path}"
+            )
+        if summary.get("controller_active_assignments"):
+            raise PublicBundleValidationError(
+                f"Judged success controller still has active assignments: {summary_path}"
+            )
+        if score.get("attempt_id") != summary.get("attempt_id"):
+            raise PublicBundleValidationError(
+                f"Judged success score attempt mismatch: {summary_path}"
+            )
+        snapshot_path = summary_path.parent / "runtime_dual_dag_snapshot.json"
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PublicBundleValidationError(
+                f"Judged success runtime snapshot is unavailable: {summary_path}"
+            ) from exc
+        nodes = snapshot.get("nodes", [])
+        if (
+            snapshot.get("summary", {}).get("terminal_state") != "success"
+            or not nodes
+            or any(
+                node.get("lifecycle", {}).get("status") != "success"
+                or node.get("lifecycle", {}).get("active_agents")
+                for node in nodes
+            )
+        ):
+            raise PublicBundleValidationError(
+                f"Judged success runtime lifecycle is inconsistent: {summary_path}"
+            )
 
 
 def derive_public_bundle(source_dir: Path, destination_dir: Path) -> BundleValidation:

@@ -10,6 +10,21 @@ Issues: #226, #243
 
 Minecraft/Villager Agent benchmark execute mode is optional and must stay outside CI. The default benchmark paths remain dry-run artifact validation. Real execute mode is for local, bounded checks against an explicitly configured Minecraft server and judger.
 
+## Runtime authority
+
+The external judger is authoritative only for evaluator-owned Minecraft outcomes
+such as score, progress, and task success or failure, and only after its payload is
+verified against the current attempt and runtime task name. `RuntimeTaskDAGStore`
+is authoritative for VillagerAgent task lifecycle and assignment state.
+`GlobalController` owns execution submission, draining, cancellation, assignment
+release, and shutdown.
+
+A judged success is publishable only when the attempt-owned score reports success,
+the runtime task DAG is terminal success with every task successful and no active
+agents, controller shutdown is complete, and the run has neither an error nor a
+timeout. The controller must persist this canonical state before stopping the
+environment; a terminal score file alone is not success evidence.
+
 The opt-in Ollama preflight completed against `gemma4:12b` on 2026-07-15 and
 recorded immutable model digest
 `4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c`.
