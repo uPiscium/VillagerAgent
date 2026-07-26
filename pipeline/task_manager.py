@@ -189,13 +189,15 @@ class TaskManager:
     def emit_task_graph_snapshot(self, source: str) -> None:
         self.emit_runtime_event("task_graph_snapshot", source=source, payload={"graph": self.runtime_task_store.snapshot()})
 
-    def checkpoint_runtime_state(self) -> None:
+    def checkpoint_runtime_state(self, *, raise_on_error: bool = False) -> None:
         if not callable(self.runtime_checkpoint):
             return
         try:
             self.runtime_checkpoint()
         except Exception as exc:
             self.logger.warning(f"Failed to checkpoint runtime task state: {exc}")
+            if raise_on_error:
+                raise
 
     def update_history(self, system_prompt, user_prompt, response):
         if type(user_prompt) == str:

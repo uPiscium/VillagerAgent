@@ -27,6 +27,7 @@ class TaskExecutionGroup:
     agents: list[BaseAgent]
     futures: dict[str, Future] = field(default_factory=dict)
     started_at: float | None = None
+    submission_complete: bool = False
     completed: bool = False
 
 
@@ -220,17 +221,27 @@ class GlobalController:
 
             task_instance.status = Task.running
 
-    def start_execution_group(self, group: TaskExecutionGroup) -> None:
+    def start_execution_group(self, group: TaskExecutionGroup, *, enqueue: bool = True) -> None:
+        if enqueue:
+            with self.result_list_lock:
+                self.result_queue.append(group)
         group.started_at = time.time()
         for agent in group.agents:
-            group.futures[agent.name] = self.executor.submit(agent.step, group.task)
+            if self.shutdown_event.is_set():
+                raise ControllerShutdownError(
+                    f"Task {group.task.description} submission interrupted by controller shutdown"
+                )
+            with self.result_list_lock:
+                group.futures[agent.name] = self.executor.submit(agent.step, group.task)
             self.logger.info(f"Agent {agent.name} is executing task now ...")
         with self.result_list_lock:
-            self.result_queue.append(group)
+            group.submission_complete = True
 
     def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
         if group.completed:
             return True
+        if not group.submission_complete:
+            return False
         now = time.time() if now is None else now
         timed_out = (
             group.started_at is not None
@@ -295,12 +306,16 @@ class GlobalController:
 
             with self.task_list_lock:
                 if not self.task_queue:
-                    self.shutdown_event.wait(self.query_interval)
-                    continue
-                while self.task_queue:
-                    group = self.task_queue.pop(0)
-                    self.start_execution_group(group)
-                    # time.sleep(self.query_interval)
+                    group = None
+                else:
+                    group = self.task_queue[0]
+                    with self.result_list_lock:
+                        self.result_queue.append(group)
+                        self.task_queue.pop(0)
+            if group is None:
+                self.shutdown_event.wait(self.query_interval)
+                continue
+            self.start_execution_group(group, enqueue=False)
 
     def set_task_status(self, task_id, status, feedback):
         self.task_manager.mark_task_status(task_id, status, feedback)
@@ -509,8 +524,19 @@ class GlobalController:
             for thread in [*started_threads, *executor_threads]
             if thread.is_alive()
         ]
-        interrupted_task_ids, active_task_ids, undrained_queues = self._finalize_shutdown_groups()
-        shutdown_complete = not alive_threads and not active_task_ids and not undrained_queues
+        (
+            interrupted_task_ids,
+            active_task_ids,
+            active_agent_ids,
+            incomplete_submission_task_ids,
+            undrained_queues,
+        ) = self._finalize_shutdown_groups()
+        shutdown_complete = (
+            not alive_threads
+            and not active_task_ids
+            and not incomplete_submission_task_ids
+            and not undrained_queues
+        )
         if not shutdown_complete or interrupted_task_ids:
             message = "Controller shutdown incomplete"
             if alive_threads:
@@ -525,6 +551,8 @@ class GlobalController:
                 "undrained_queues": undrained_queues,
                 "interrupted_task_ids": interrupted_task_ids,
                 "active_task_ids": active_task_ids,
+                "active_agent_ids": active_agent_ids,
+                "incomplete_submission_task_ids": incomplete_submission_task_ids,
             })
             setattr(self._first_failure[0], "controller_shutdown_context", {
                 "shutdown_complete": shutdown_complete,
@@ -532,10 +560,12 @@ class GlobalController:
                 "undrained_queues": undrained_queues,
                 "interrupted_task_ids": interrupted_task_ids,
                 "active_task_ids": active_task_ids,
+                "active_agent_ids": active_agent_ids,
+                "incomplete_submission_task_ids": incomplete_submission_task_ids,
             })
 
         try:
-            self.task_manager.checkpoint_runtime_state()
+            self.task_manager.checkpoint_runtime_state(raise_on_error=True)
         except BaseException as exc:
             if self._first_failure is not None:
                 self._first_failure[2]["checkpoint_error"] = {
@@ -564,6 +594,8 @@ class GlobalController:
     def _finalize_shutdown_groups(self):
         interrupted_task_ids = []
         active_task_ids = []
+        active_agent_ids = []
+        incomplete_submission_task_ids = []
         undrained_queues = []
         groups = []
         for name, lock, queue in (
@@ -586,12 +618,25 @@ class GlobalController:
                     future.running() for future in group.futures.values()
                 )
                 agent_names = [agent.name for agent in group.agents]
+                submitted_agent_names = list(group.futures)
+                active_group_agents = [
+                    agent_name
+                    for agent_name, future in group.futures.items()
+                    if future.running()
+                ]
                 feedback = {
                     "reason": "controller_shutdown",
                     "execution_may_still_be_active": execution_may_still_be_active,
                     "assigned_agents": agent_names,
-                    "agent_reuse_blocked": execution_may_still_be_active,
-                    "requires_agent_reconciliation": execution_may_still_be_active,
+                    "submitted_agents": submitted_agent_names,
+                    "active_agents": active_group_agents,
+                    "unsubmitted_agents": [
+                        agent_name for agent_name in agent_names
+                        if agent_name not in group.futures
+                    ],
+                    "submission_complete": group.submission_complete,
+                    "agent_reuse_blocked": True,
+                    "requires_agent_reconciliation": True,
                 }
                 group.task.status = Task.failure
                 self.task_manager.mark_task_status(group.task.id, Task.failure, feedback)
@@ -599,8 +644,17 @@ class GlobalController:
                 interrupted_task_ids.append(group.task.id)
                 if execution_may_still_be_active:
                     active_task_ids.append(group.task.id)
+                    active_agent_ids.extend(active_group_agents)
+                if not group.submission_complete:
+                    incomplete_submission_task_ids.append(group.task.id)
             except BaseException as exc:
                 if queue_name not in undrained_queues:
                     undrained_queues.append(queue_name)
                 self._record_failure("run.finalize_shutdown", exc)
-        return interrupted_task_ids, active_task_ids, undrained_queues
+        return (
+            interrupted_task_ids,
+            active_task_ids,
+            active_agent_ids,
+            incomplete_submission_task_ids,
+            undrained_queues,
+        )

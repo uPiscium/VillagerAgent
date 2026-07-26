@@ -1,13 +1,14 @@
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
 
 from pipeline.controller_tiny import ControllerShutdownError, GlobalController, TaskExecutionGroup
 from pipeline.runtime_events import InMemoryRuntimeEventRecorder
+from pipeline.task_manager import TaskManager
 from type_define.graph import Task
 
 
@@ -111,6 +112,7 @@ def test_active_future_is_interrupted_without_releasing_agent_for_reuse():
         agents=[agent],
         futures={"Alice": future},
         started_at=time.time(),
+        submission_complete=True,
     )
     controller.result_queue.append(group)
     controller.assignment["Alice"] = task.id
@@ -133,6 +135,10 @@ def test_active_future_is_interrupted_without_releasing_agent_for_reuse():
         "reason": "controller_shutdown",
         "execution_may_still_be_active": True,
         "assigned_agents": ["Alice"],
+        "submitted_agents": ["Alice"],
+        "active_agents": ["Alice"],
+        "unsubmitted_agents": [],
+        "submission_complete": True,
         "agent_reuse_blocked": True,
         "requires_agent_reconciliation": True,
     })]
@@ -168,8 +174,12 @@ def test_queued_group_is_checkpointed_as_interrupted():
         "reason": "controller_shutdown",
         "execution_may_still_be_active": False,
         "assigned_agents": ["Alice"],
-        "agent_reuse_blocked": False,
-        "requires_agent_reconciliation": False,
+        "submitted_agents": [],
+        "active_agents": [],
+        "unsubmitted_agents": ["Alice"],
+        "submission_complete": False,
+        "agent_reuse_blocked": True,
+        "requires_agent_reconciliation": True,
     })]
     assert len(controller.task_queue) == 1
     assert checkpoints == ["checkpoint"]
@@ -281,6 +291,70 @@ def test_group_remains_queued_when_final_checkpoint_fails():
     }
 
 
+def test_worker_retains_group_when_shutdown_interrupts_second_submit():
+    controller, _, sink = _controller()
+    task = Task("Shared task", {})
+    task.status = Task.running
+    agents = [SimpleNamespace(name=name, step=lambda _task: None) for name in ("Alice", "Bob")]
+    group = TaskExecutionGroup(task, agents)
+    controller.task_queue.append(group)
+    controller.assignment = {agent.name: task.id for agent in agents}
+    controller.agent_list = agents
+    controller.env = SimpleNamespace(agents_ping=lambda: {"status": True})
+    controller.executor.shutdown(wait=True)
+    controller.executor = _ShutdownDuringSecondSubmitExecutor(controller)
+    controller.execute_tasks = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    with pytest.raises(RuntimeError, match="second submit failed"):
+        controller.run()
+
+    assert controller.task_queue == []
+    assert controller.result_queue == [group]
+    assert list(group.futures) == ["Alice"]
+    assert group.submission_complete is False
+    assert controller.assignment == {"Alice": task.id, "Bob": task.id}
+    assert controller.task_manager.status_updates[0][2] == {
+        "reason": "controller_shutdown",
+        "execution_may_still_be_active": True,
+        "assigned_agents": ["Alice", "Bob"],
+        "submitted_agents": ["Alice"],
+        "active_agents": ["Alice"],
+        "unsubmitted_agents": ["Bob"],
+        "submission_complete": False,
+        "agent_reuse_blocked": True,
+        "requires_agent_reconciliation": True,
+    }
+    assert sink.events[0]["payload"]["active_task_ids"] == [task.id]
+    assert sink.events[0]["payload"]["active_agent_ids"] == ["Alice"]
+    assert sink.events[0]["payload"]["incomplete_submission_task_ids"] == [task.id]
+
+    next_task = Task("Do not reuse agents", {})
+    next_task.candidate_list = ["Alice", "Bob"]
+    next_task.number = 1
+    controller.task_list = [next_task]
+    assert controller.assign_runnable_tasks() == 0
+
+
+def test_terminal_checkpoint_failure_surfaces_through_real_task_manager():
+    controller, _, sink = _controller()
+    manager = TaskManager(silent=True, event_sink=sink)
+    checkpoint_error = RuntimeError("terminal checkpoint failed")
+    manager.runtime_checkpoint = lambda: (_ for _ in ()).throw(checkpoint_error)
+    controller.task_manager = manager
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    manager.checkpoint_runtime_state()
+    with pytest.raises(RuntimeError) as raised:
+        controller.run()
+
+    assert raised.value is checkpoint_error
+    assert [event["event_type"] for event in sink.events] == ["run_failed"]
+    assert sink.events[0]["payload"]["thread"] == "run.checkpoint"
+
+
 def _controller():
     controller = object.__new__(GlobalController)
     controller.logger = logging.getLogger("test-controller-shutdown")
@@ -317,7 +391,28 @@ class _TaskManagerStub:
             raise self.mark_error
         self.status_updates.append((task_id, status, feedback))
 
-    def checkpoint_runtime_state(self):
+    def checkpoint_runtime_state(self, *, raise_on_error=False):
         if self.checkpoint_error is not None:
-            raise self.checkpoint_error
+            if raise_on_error:
+                raise self.checkpoint_error
+            return
         self.checkpoints.append("checkpoint")
+
+
+class _ShutdownDuringSecondSubmitExecutor:
+    def __init__(self, controller):
+        self.controller = controller
+        self.submit_count = 0
+        self._threads = set()
+
+    def submit(self, _fn, _task):
+        self.submit_count += 1
+        if self.submit_count == 2:
+            self.controller._request_shutdown()
+            raise RuntimeError("second submit failed")
+        future = Future()
+        future.set_running_or_notify_cancel()
+        return future
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        return None
