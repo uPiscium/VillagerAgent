@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from dataclasses import replace
 import gzip
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -21,18 +24,28 @@ from benchmarks.partnr.real_env import (
 
 
 def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, Any]:
+    if mode == "step-zero":
+        attempt_prefix = "step-zero-"
+    elif mode == "bounded":
+        attempt_prefix = "bounded-"
+    else:
+        raise ValueError("PARTNR official gate mode must be 'step-zero' or 'bounded'.")
     preflight = inspect_real_preflight(runtime)
     if not preflight["ready"]:
         raise RuntimeError("PARTNR real preflight failed: " + ", ".join(preflight["missing"]))
+    attempts_dir = runtime.output_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+    attempt_output = Path(tempfile.mkdtemp(prefix=attempt_prefix, dir=attempts_dir))
+    attempt_runtime = replace(runtime, output_dir=attempt_output)
     episode_limit = 1 if mode == "step-zero" else runtime.episode_limit
-    subset = runtime.output_dir / "inputs" / f"val_mini_first_{episode_limit}.json.gz"
+    subset = attempt_output / "inputs" / f"val_mini_first_{episode_limit}.json.gz"
     subset_audit = write_bounded_dataset(
         runtime.dataset_path, subset, episode_limit=episode_limit
     )
     command = (
-        build_step_zero_command(runtime, subset.resolve())
+        build_step_zero_command(attempt_runtime, subset.resolve())
         if mode == "step-zero"
-        else build_bounded_smoke_command(runtime, subset.resolve())
+        else build_bounded_smoke_command(attempt_runtime, subset.resolve())
     )
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
@@ -49,14 +62,21 @@ def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, A
             check=False,
         )
         returncode = completed.returncode
-        status = "completed" if returncode == 0 else "failed"
+        subprocess_status = "completed" if returncode == 0 else "failed"
         stdout = completed.stdout
         stderr = completed.stderr
     except subprocess.TimeoutExpired as exc:
         returncode = None
-        status = "timed_out"
+        subprocess_status = "timed_out"
         stdout = _subprocess_text(exc.stdout)
         stderr = _subprocess_text(exc.stderr)
+    official_metrics = _collect_official_metrics(attempt_runtime, mode)
+    gate_completed = (
+        subprocess_status == "completed"
+        and bool(official_metrics["expected_episode_ids"])
+        and official_metrics["exact_episode_accounting"]
+        and not official_metrics["failed_episode_ids"]
+    )
     result = {
         "schema_version": 1,
         "benchmark": "partnr",
@@ -68,11 +88,12 @@ def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, A
         "command": command,
         "timeout_seconds": runtime.wall_timeout_seconds,
         "returncode": returncode,
-        "status": status,
+        "subprocess_status": subprocess_status,
+        "status": "completed" if gate_completed else "failed",
         "stdout": stdout[-20000:],
         "stderr": stderr[-20000:],
     }
-    result["official_metrics"] = _collect_official_metrics(runtime, mode)
+    result["official_metrics"] = official_metrics
     return result
 
 
@@ -101,12 +122,21 @@ def _collect_official_metrics(runtime: PARTNRRuntimeConfig, mode: str) -> dict[s
     completed_ids = [record["episode_id"] for record in records]
     successful_ids = [record["episode_id"] for record in records if record["success"]]
     failed_ids = [record["episode_id"] for record in records if not record["success"]]
+    expected_counts = Counter(expected_ids)
+    completed_counts = Counter(completed_ids)
     return {
         "expected_episode_ids": expected_ids,
         "completed_episode_ids": completed_ids,
         "successful_episode_ids": successful_ids,
         "failed_episode_ids": failed_ids,
         "missing_episode_ids": [episode_id for episode_id in expected_ids if episode_id not in completed_ids],
+        "unexpected_episode_ids": [
+            episode_id for episode_id in completed_ids if episode_id not in expected_counts
+        ],
+        "duplicate_episode_ids": sorted(
+            episode_id for episode_id, count in completed_counts.items() if count > 1
+        ),
+        "exact_episode_accounting": completed_counts == expected_counts,
         "record_count": len(records),
         "records": records,
     }

@@ -41,7 +41,7 @@ class PARTNRAdapter:
         self._tools: dict[str, tuple[str, ...]] = {}
         self._evaluator: dict[str, Any] = {}
         self._public_events: list[TraceEvent] = []
-        self._terminal = False
+        self._environment_terminated = False
         self._physical_actions = 0
         self._information_actions = 0
         self._failed_actions = 0
@@ -52,7 +52,7 @@ class PARTNRAdapter:
         self.episode_id = episode_id
         self.step_index = 0
         self._public_events = []
-        self._terminal = False
+        self._environment_terminated = False
         self._physical_actions = 0
         self._information_actions = 0
         self._failed_actions = 0
@@ -149,6 +149,8 @@ class PARTNRAdapter:
         )
 
     def get_legal_actions(self, agent_id: str) -> tuple[ActionSpec, ...]:
+        if self.is_terminal():
+            return ()
         rows = self._observations.get(agent_id, {}).get("action_candidates", ())
         actions: list[ActionSpec] = []
         for index, row in enumerate(rows):
@@ -226,15 +228,17 @@ class PARTNRAdapter:
                 parameters=action.parameters,
                 information_subtype=action.action_type,
             ))
+        self._ensure_can_step()
         self._physical_actions += 1
         return self._step(agent_id, action)
 
     def execute_information_action(self, agent_id: str, action: InformationActionSpec) -> StepResult:
+        self._ensure_can_step()
         self._information_actions += 1
         return self._step(agent_id, action)
 
     def is_terminal(self) -> bool:
-        return self._terminal
+        return self._environment_terminated or self._budget_exhausted()
 
     def task_progress(self) -> float | None:
         return float(self._evaluator.get("task_percent_complete", 0.0))
@@ -243,10 +247,14 @@ class PARTNRAdapter:
         return deepcopy(self._evaluator)
 
     def final_metrics(self) -> dict[str, float | int | bool]:
+        task_success = bool(self._evaluator.get("task_state_success", 0.0))
+        budget_exhausted = self._budget_exhausted()
         return {
             "task_percent_complete": self.task_progress() or 0.0,
             "task_state_success": float(self._evaluator.get("task_state_success", 0.0)),
-            "task_success": bool(self._evaluator.get("task_state_success", 0.0)),
+            "task_success": task_success,
+            "environment_terminated": self._environment_terminated,
+            "budget_exhausted": budget_exhausted,
             "episode_steps": self.step_index,
             "physical_action_count": self._physical_actions,
             "information_action_count": self._information_actions,
@@ -264,7 +272,7 @@ class PARTNRAdapter:
             arguments=dict(action.parameters.get("arguments") or {}),
         )
         self.step_index += 1
-        self._terminal = bool(done)
+        self._environment_terminated = bool(done)
         self._observations = _normalize_observations(observations, self.agent_ids())
         self._evaluator = _evaluator_metrics(info)
         succeeded = bool(info.get("action_succeeded", False))
@@ -293,6 +301,15 @@ class PARTNRAdapter:
             },
             error=None if succeeded else str(info.get("response") or "PARTNR tool failed"),
         )
+
+    def _budget_exhausted(self) -> bool:
+        return not self._environment_terminated and self.step_index >= self.config.max_steps
+
+    def _ensure_can_step(self) -> None:
+        if self._environment_terminated:
+            raise RuntimeError("PARTNR episode has already terminated.")
+        if self._budget_exhausted():
+            raise RuntimeError("PARTNR step budget is exhausted.")
 
     def _instruction_record(self, agent_id: str) -> ObservationRecord:
         return self._record(
