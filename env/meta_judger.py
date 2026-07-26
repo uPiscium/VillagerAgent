@@ -54,6 +54,14 @@ bot = mineflayer.createBot({
     'auth': 'offline',
     'version': "1.19.2",
 })
+spawn_event = threading.Event()
+
+
+@On(bot, "spawn")
+def capture_spawn(*args):
+    spawn_event.set()
+
+
 bot.loadPlugin(pathfinder.pathfinder)
 bot.loadPlugin(collectBlock.plugin)
 bot.loadPlugin(pvp)
@@ -68,6 +76,17 @@ with open(".cache/env.cache", "w") as f:
 
 with open(".cache/load_status.cache", "w") as f:
     json.dump({"status": "loading"}, f, indent=4)
+
+
+def write_load_phase(phase):
+    path = ".cache/meta_judger_phase.cache"
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as f:
+        f.write(phase)
+    os.replace(temporary_path, path)
+
+
+write_load_phase("waiting_for_spawn")
 
 if not os.path.exists("result"):
     os.makedirs("result")
@@ -110,8 +129,8 @@ def aligned_item_name(item): #去掉可能的物品名前缀
     else:
         return item
 
-@On(bot, 'spawn')
-def handleViewer(*args):   
+def handleViewer(*args):
+    write_load_phase("spawned")
     for name in agent_names:
         bot.chat(f'/op {name}')
         time.sleep(.2) 
@@ -167,7 +186,12 @@ def handleViewer(*args):
         y = ory + 1
         flag = False
         while y <= ory + room_height:
-            block = bot.blockAt(Vec3(x, y, z))
+            block = None
+            for _ in range(20):
+                block = bot.blockAt(Vec3(x, y, z))
+                if block is not None:
+                    break
+                time.sleep(.1)
             if block:
                 if block["name"] == "air":
                     if flag:
@@ -177,9 +201,7 @@ def handleViewer(*args):
                 else:
                     flag = False
             else:
-                bot.chat("/tellraw @a {\"text\":\"UNLOADED POSITION!\", \"color\":\"red\"}")
-                bot.chat(f"{x} {y} {z}")
-                return None
+                raise RuntimeError(f"arena position remained unloaded: ({x}, {y}, {z})")
             y = y + 1
             
         return ory + 1
@@ -236,6 +258,11 @@ def handleViewer(*args):
     time.sleep(.2)
     bot.chat("/weather clear")
     time.sleep(.2)
+
+    # Load the arena chunks before blockAt() samples randomized positions.
+    write_load_phase("teleporting_to_arena")
+    bot.chat(f"/tp @s {orx + room_width // 2} {ory + room_height // 2} {orz + room_width // 2}")
+    time.sleep(2)
     
     # bot.chat(f"/fill {orx} {ory} {orz} {orx + room_width + wall_width} {ory + room_height + wall_width} {orz + room_width + wall_width} glass hollow")
     # time.sleep(.2)
@@ -256,6 +283,7 @@ def handleViewer(*args):
     with open(".cache/meta_setting.json", "r") as f:
         config = json.load(f)
     arg_dict = config["evaluation_arg"]
+    write_load_phase("sampling_random_positions")
 
     global max_time
     if arg_dict["item_position"] == "chest":
@@ -275,6 +303,7 @@ def handleViewer(*args):
     tx, ty, tz = random_position(orx + wall_width + 3, orz + wall_width + 3, orx + room_width + wall_width - 3, orz + room_width + wall_width - 3, 1, invalid_pos)
     # 树位置
 
+    write_load_phase("clearing_arena")
     for i in range(4):
         bot.chat(f"/fill {orx + wall_width + room_width // 2 - clear_w} {ory + clear_h * i + 1} {orz + wall_width + room_width // 2 - clear_w} {orx + wall_width + room_width // 2 + clear_w} {ory + clear_h * (i+1) + 1} {orz + wall_width + room_width // 2 + clear_w} air")
         time.sleep(.2)
@@ -302,6 +331,7 @@ def handleViewer(*args):
     with open("data/template_houses.json", "r") as f:
         template_houses = json.load(f)
     house = random.choice(template_houses[feature])
+    write_load_phase("placing_structure")
     bot.chat(f"/tp {crx} {ory + 1} {crz}")
     time.sleep(.2) 
     bot.chat(f"/place template village/{feature}/houses/{house}")
@@ -316,6 +346,7 @@ def handleViewer(*args):
     time.sleep(.2)
     # 生成房屋和树
 
+    write_load_phase("building_arena_shell")
     bot.chat(f"/fill {orx} {ory} {orz} {orx + room_width + wall_width} {ory + room_height + wall_width} {orz} glass")
     time.sleep(.2)
     bot.chat(f"/fill {orx} {ory} {orz} {orx} {ory + room_height + wall_width} {orz + room_width + wall_width} glass")
@@ -675,6 +706,7 @@ def handleViewer(*args):
     else:
         bot.chat("/tellraw @a {\"text\":\"INVALID SCENARIO!\", \"color\":\"red\"}")
 
+    write_load_phase("loaded")
     with open(".cache/load_status.cache", "w") as f:
         json.dump({"status": "loaded"}, f, indent=4)
     
@@ -1234,3 +1266,9 @@ def handleAttack(_, entity):
             if now_time - start_time  > environment_set_time:
                 if aligned_item_name(arg_dict["target"]) == aligned_item_name(entity.name):
                     score = 100
+
+
+if not spawn_event.wait(timeout=60):
+    write_load_phase("spawn_timeout")
+    raise TimeoutError("meta judger did not receive the Mineflayer spawn event within 60 seconds")
+handleViewer()

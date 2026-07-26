@@ -129,6 +129,8 @@ class GlobalController:
         self.shutdown_grace_period = 5.0
         self.cancellation_grace_period = 5.0
         self._run_started = False
+        self._terminal_shutdown_lock = threading.Lock()
+        self._judged_task_complete = False
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
         self.emit_terminal_events = emit_terminal_events
@@ -162,6 +164,19 @@ class GlobalController:
                 )
         except BaseException as exc:
             self._record_failure(name, exc)
+
+    def should_shutdown(self):
+        if self.shutdown_event.is_set():
+            return True
+        if not hasattr(self.env, "is_task_complete") or not self.env.is_task_complete():
+            return False
+        with self._terminal_shutdown_lock:
+            if not self.shutdown_event.is_set():
+                self.logger.info("judged task reached terminal score status")
+                self._judged_task_complete = True
+                self.env.stop()
+                self._request_shutdown()
+        return True
 
     def validate_assignments(self, result: [dict]):
         validated_assignments = []
@@ -461,7 +476,7 @@ class GlobalController:
     # worker
     def worker(self):
         while True:
-            if self.shutdown_event.is_set():
+            if self.should_shutdown():
                 break
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
@@ -521,7 +536,7 @@ class GlobalController:
 
     def process_completed_tasks(self):
         while True:
-            if self.shutdown_event.is_set():
+            if self.should_shutdown():
                 break
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
@@ -532,7 +547,7 @@ class GlobalController:
                 result_list_copy = []
                 for index, group in enumerate(self.result_queue):
 
-                    if self.shutdown_event.is_set():
+                    if self.should_shutdown():
                         result_list_copy.extend(self.result_queue[index:])
                         break
                     if self.finalize_execution_group(group):
@@ -584,7 +599,7 @@ class GlobalController:
     # 生产者
     def execute_tasks(self):
         while True:
-            if self.shutdown_event.is_set():
+            if self.should_shutdown():
                 break
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
@@ -788,6 +803,15 @@ class GlobalController:
                     for agent_name, future in group.futures.items()
                     if future.running()
                 ]
+                # The external judger is authoritative; do not overwrite its
+                # successful terminal result with an interrupted-task failure.
+                if self._judged_task_complete and not execution_may_still_be_active:
+                    for agent_name in agent_names:
+                        if self.assignment.get(agent_name) == group.task.id:
+                            self.assignment.pop(agent_name)
+                    group.post_processing_complete = True
+                    group.completed = True
+                    continue
                 feedback = {
                     "reason": "controller_shutdown",
                     "execution_may_still_be_active": execution_may_still_be_active,

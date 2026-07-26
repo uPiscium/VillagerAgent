@@ -152,11 +152,14 @@ def _run_minecraft_experiment_attempt(
         "event_sink": event_sink,
         "terminal_event_emitted": False,
     })
+    runtime_launch_config = dict(launch_config)
+    if execute:
+        runtime_launch_config["task_name"] = f"{launch_config['task_name']}_{attempt_id[:12]}"
     safe_emit_runtime_event(event_sink, "run_started", source="benchmarks.minecraft.experiment", payload={"mode": "execute" if execute else "dry_run"})
     runtime_llm_config = {}
     requested_policy = task_selection_policy or launch_config.get("task_selection_policy")
     effective_settings = _minecraft_effective_settings(
-        launch_config=launch_config,
+        launch_config=runtime_launch_config,
         config_path=config_path,
         config_index=config_index,
         run_name=selected_run_name,
@@ -195,7 +198,7 @@ def _run_minecraft_experiment_attempt(
     )
     dual_dag_config = _dual_dag_config(selected_policy)
     effective_settings = _minecraft_effective_settings(
-        launch_config=launch_config,
+        launch_config=runtime_launch_config,
         config_path=config_path,
         config_index=config_index,
         run_name=selected_run_name,
@@ -231,7 +234,7 @@ def _run_minecraft_experiment_attempt(
         _remove_runtime_result(runtime_result_path)
         try:
             runtime_result = _execute_real_runtime_bounded(
-                launch_config,
+                runtime_launch_config,
                 dual_dag_config=dual_dag_config,
                 timeout_seconds=execute_timeout_seconds,
                 runtime_result_path=runtime_result_path,
@@ -318,6 +321,7 @@ def _run_minecraft_experiment_attempt(
         "started_at": started_at,
         "output_dir": str(output_dir),
         "task_name": launch_config.get("task_name", ""),
+        "runtime_task_name": runtime_launch_config.get("task_name", ""),
         "task_type": launch_config.get("task_type", ""),
         "task_idx": launch_config.get("task_idx"),
         "dual_dag_runtime_enabled": True,

@@ -489,6 +489,7 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     assert summary["timed_out"] is False
     assert summary["runtime_process_isolated"] is True
     assert summary["runtime_process_exit_code"] == 0
+    assert summary["runtime_task_name"].startswith("bounded_execute_")
     assert (output_dir / "summary.json").exists()
     assert (output_dir / "metrics.json").exists()
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))

@@ -3,6 +3,7 @@ import langchain
 # langchain.debug = True
 from langchain.agents import tool, initialize_agent, AgentType
 from langchain.callbacks import get_openai_callback
+from langchain.chat_models import ChatOpenAI
 from langchain.load.dump import dumps
 from langchain_core.callbacks.base import BaseCallbackManager
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -14,6 +15,7 @@ import subprocess
 import logging
 import datetime
 import threading
+from copy import deepcopy
 from functools import wraps
 import os
 import random
@@ -128,6 +130,24 @@ def _log_action_diagnostics(agent_name, call_site, response, action_list, llmhan
         response_keys,
         _short_diagnostic_value(last_llm_output),
     )
+
+
+class OllamaReasoningChatOpenAI(ChatOpenAI):
+    """Expose Ollama reasoning text to legacy structured-chat parsers."""
+
+    def _create_chat_result(self, response):
+        if isinstance(response, dict):
+            payload = deepcopy(response)
+        elif hasattr(response, "model_dump"):
+            payload = response.model_dump()
+        else:
+            payload = response.dict()
+        for choice in payload.get("choices", []):
+            message = choice.get("message", {})
+            reasoning = message.get("reasoning")
+            if not message.get("content") and isinstance(reasoning, str) and reasoning:
+                message["content"] = reasoning
+        return super()._create_chat_result(payload)
 
 
 def timeit(func):
@@ -1025,7 +1045,9 @@ class Agent():
             raise RuntimeError(
                 "Minecraft Agent has no API keys configured; set Agent.api_key_list before calling 'step()'"
             )
-        if 'qwen' in self.model:
+        if getattr(Agent, "provider", "") == "ollama":
+            self.llm = OllamaReasoningChatOpenAI(model=self.model, temperature=0, max_tokens=1024, openai_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url)
+        elif 'qwen' in self.model:
             from langchain_community.chat_models.tongyi import ChatTongyi
             self.llm = ChatTongyi(model=self.model, temperature=0, max_tokens=256, dashscope_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url,model_kwargs={"enable_thinking": False})
         elif "default" in self.model:
@@ -1136,8 +1158,7 @@ class Agent():
         # dynamic api key
 
         if getattr(Agent, "provider", "") == "ollama":
-            from langchain.chat_models import ChatOpenAI
-            self.llm = ChatOpenAI(model=self.model, temperature=0, max_tokens=256, openai_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url)
+            self.llm = OllamaReasoningChatOpenAI(model=self.model, temperature=0, max_tokens=1024, openai_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url)
         elif 'qwen' in self.model:
             from langchain_community.chat_models.tongyi import ChatTongyi
             self.llm = ChatTongyi(model=self.model, temperature=0, max_tokens=256, dashscope_api_key=random.choice(Agent.api_key_list), base_url=Agent.base_url,model_kwargs={"enable_thinking": False})

@@ -20,6 +20,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _contains_tag(content: str, tag: str) -> bool:
+    def normalize(value: str) -> str:
+        return " ".join(value.casefold().replace("_", " ").replace("-", " ").split())
+
+    return normalize(tag) in normalize(content)
+
+
 class OpenAILanguageModel(AbstractLanguageModel):
     _supported_models = ["gpt-4o-mini", "gpt-4o", "gpt-4-0125-preview", "gpt-4-1106-preview", "gpt-4", "gpt-4-0314", "gpt-4-0613", "gpt-4-32k", "gpt-4-32k-0314",
                          "gpt-4-32k-0613", "gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-3.5-turbo-0301",
@@ -319,7 +326,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
             content = self.filter_emoji(content)
 
             for tag in check_tags:
-                if tag not in content:
+                if not _contains_tag(content, tag):
                     raise Exception(f"tag {tag} not in content {content}")
             if json_check:
                 if len(extract_info(content)) == 0:
@@ -456,7 +463,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     content = response.choices[0].message.content
 
                 for tag in check_tags:
-                    if tag not in content:
+                    if not _contains_tag(content, tag):
                         raise Exception(f"tag {tag} not in content {content}")
                 if json_check:
                     if len(extract_info(content)) == 0:
@@ -509,4 +516,3 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 logger.warning(e.__cause__)
                 raise e
                
-
