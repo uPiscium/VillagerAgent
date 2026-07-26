@@ -62,7 +62,23 @@ class GlobalController:
         llm = init_language_model(llm_config)
         base_agent_config = llm_config.copy() if base_agent_config is None else base_agent_config
         base_llm = init_language_model(base_agent_config)
-        self.agent_list = [BaseAgent(base_llm, env, data_manager, name=a.name, silent=False, all_tools=all_tools) for a in env.agent_pool]
+        base_agent_runtime_config = {
+            key: base_agent_config[key]
+            for key in BaseAgent.LOCAL_MODEL_CONFIG_KEYS
+            if key in base_agent_config
+        }
+        self.agent_list = [
+            BaseAgent(
+                base_llm,
+                env,
+                data_manager,
+                name=a.name,
+                silent=False,
+                all_tools=all_tools,
+                **base_agent_runtime_config,
+            )
+            for a in env.agent_pool
+        ]
         self.task_manager.agent_list = self.agent_list
         self.assignment = {}
         self.feedback = {}
@@ -218,7 +234,8 @@ class GlobalController:
 
             try:
                 _, detail = future.result()
-                reflected_success = bool(agent.reflect(group.task, detail))
+                explicit_failure = isinstance(detail, dict) and "failure" in detail
+                reflected_success = False if explicit_failure else bool(agent.reflect(group.task, detail))
                 agent_results[agent.name] = {
                     "status": "success" if reflected_success else "failure",
                     "detail": detail,

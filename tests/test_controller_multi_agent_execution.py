@@ -4,6 +4,7 @@ import time
 from concurrent.futures import Future
 from types import SimpleNamespace
 
+import pipeline.controller_tiny as controller_tiny
 from pipeline.controller_tiny import GlobalController
 from pipeline.task_manager import TaskManager
 from type_define.graph import Task
@@ -32,6 +33,59 @@ def test_start_execution_group_creates_one_future_per_agent():
     group = controller.result_queue[0]
     assert list(group.futures) == ["Alice", "Bob"]
     assert controller.executor.submitted_agents == ["Alice", "Bob"]
+
+
+def test_controller_forwards_local_runtime_config_to_base_agents(monkeypatch):
+    created_agents = []
+    model_configs = []
+
+    class AgentFactory:
+        LOCAL_MODEL_CONFIG_KEYS = (
+            "local_model_max_attempts",
+            "local_model_max_actions",
+            "local_model_inter_action_delay",
+        )
+
+        def __init__(self, llm, env, data_manager, **kwargs):
+            self.name = kwargs["name"]
+            created_agents.append(kwargs)
+
+    def init_model(config):
+        model_configs.append(dict(config))
+        return SimpleNamespace(role_name="")
+
+    monkeypatch.setattr(controller_tiny, "BaseAgent", AgentFactory)
+    monkeypatch.setattr(controller_tiny, "init_language_model", init_model)
+    task_manager = SimpleNamespace()
+    data_manager = SimpleNamespace()
+    env = SimpleNamespace(agent_pool=[SimpleNamespace(name="Alice")])
+    base_agent_config = {
+        "provider": "vllm",
+        "api_model": "local-model",
+        "local_model_max_attempts": 7,
+        "local_model_max_actions": 3,
+        "local_model_inter_action_delay": 0.25,
+    }
+
+    controller = GlobalController(
+        {"provider": "openai", "api_model": "controller-model"},
+        task_manager,
+        data_manager,
+        env,
+        silent=True,
+        base_agent_config=base_agent_config,
+    )
+    controller.executor.shutdown()
+
+    assert base_agent_config in model_configs
+    assert created_agents == [{
+        "name": "Alice",
+        "silent": False,
+        "all_tools": [],
+        "local_model_max_attempts": 7,
+        "local_model_max_actions": 3,
+        "local_model_inter_action_delay": 0.25,
+    }]
 
 
 def test_execution_group_succeeds_only_after_all_agents_succeed():
@@ -96,6 +150,24 @@ def test_execution_group_waits_for_all_agents_and_fails_on_reflection():
     assert feedback["agent_results"]["Bob"]["status"] == "success"
 
 
+def test_execution_group_does_not_reflect_explicit_agent_failure():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    failure_detail = {
+        "final_answer": "Local model attempt budget exhausted.",
+        "failure": {"reason": "model_attempt_budget_exhausted"},
+    }
+    agents[0].step_detail = failure_detail
+    agents[0].reflect_success = True
+    group = _started_group(controller, task, agents)
+
+    assert controller.finalize_execution_group(group) is True
+
+    assert agents[0].reflect_calls == 0
+    assert controller.task_manager.status_updates == [
+        (task.id, Task.failure, failure_detail)
+    ]
+
+
 def test_execution_group_fails_once_when_one_agent_times_out():
     controller, task, agents = _controller_with_task(["Alice", "Bob"], required=2)
     group = _started_group(controller, task, agents, pending_agent="Bob")
@@ -141,14 +213,17 @@ class _AgentStub:
     def __init__(self, name):
         self.name = name
         self.step_error = None
+        self.step_detail = f"{name} detail"
         self.reflect_success = True
+        self.reflect_calls = 0
 
     def step(self, _task):
         if self.step_error is not None:
             raise self.step_error
-        return "done", f"{self.name} detail"
+        return "done", self.step_detail
 
     def reflect(self, _task, _detail):
+        self.reflect_calls += 1
         return self.reflect_success
 
 

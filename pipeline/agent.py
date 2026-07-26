@@ -18,6 +18,8 @@ import numpy as np
 import threading
 import torch
 import platform
+import math
+from numbers import Integral, Real
 from model.utils import extract_info
 
 class AgentFeedback:
@@ -45,6 +47,11 @@ class BaseAgent:
     '''
     _virtual_debug = False
     MAX_LOCAL_INTER_ACTION_DELAY = 5.0
+    LOCAL_MODEL_CONFIG_KEYS = (
+        "local_model_max_attempts",
+        "local_model_max_actions",
+        "local_model_inter_action_delay",
+    )
     def __init__(self, llm:OpenAILanguageModel , env:VillagerBench, data_manager:DataManager, name:str, logger:logging.Logger = None, silent = False, 
     RL_mode = "", rl_env = None, rl_model = None, all_tools = [], local_model_max_attempts = 10,
     local_model_max_actions = 5, local_model_inter_action_delay = 0.0, **kwargs):
@@ -57,16 +64,34 @@ class BaseAgent:
         self.RL_mode = RL_mode
         self.logger = logger
         self.all_tools = all_tools
-        if local_model_max_attempts <= 0:
-            raise ValueError("local_model_max_attempts must be positive")
-        if local_model_max_actions <= 0:
-            raise ValueError("local_model_max_actions must be positive")
-        if local_model_inter_action_delay < 0:
-            raise ValueError("local_model_inter_action_delay must be non-negative")
-        self.local_model_max_attempts = int(local_model_max_attempts)
-        self.local_model_max_actions = int(local_model_max_actions)
+        if (
+            isinstance(local_model_max_attempts, bool)
+            or not isinstance(local_model_max_attempts, Integral)
+            or local_model_max_attempts <= 0
+        ):
+            raise ValueError("local_model_max_attempts must be a positive integer")
+        if (
+            isinstance(local_model_max_actions, bool)
+            or not isinstance(local_model_max_actions, Integral)
+            or local_model_max_actions <= 0
+        ):
+            raise ValueError("local_model_max_actions must be a positive integer")
+        if isinstance(local_model_inter_action_delay, bool) or not isinstance(
+            local_model_inter_action_delay, Real
+        ):
+            raise ValueError("local_model_inter_action_delay must be a finite non-negative number")
+        try:
+            local_model_inter_action_delay = float(local_model_inter_action_delay)
+        except (OverflowError, TypeError, ValueError) as error:
+            raise ValueError(
+                "local_model_inter_action_delay must be a finite non-negative number"
+            ) from error
+        if not math.isfinite(local_model_inter_action_delay) or local_model_inter_action_delay < 0:
+            raise ValueError("local_model_inter_action_delay must be a finite non-negative number")
+        self.local_model_max_attempts = local_model_max_attempts
+        self.local_model_max_actions = local_model_max_actions
         self.local_model_inter_action_delay = min(
-            float(local_model_inter_action_delay), self.MAX_LOCAL_INTER_ACTION_DELAY
+            local_model_inter_action_delay, self.MAX_LOCAL_INTER_ACTION_DELAY
         )
         if not env.running:
             BaseAgent._virtual_debug = True
@@ -115,8 +140,17 @@ class BaseAgent:
     def step(self, task:Task, cancellation_token=None) -> (str, dict):
         '''
         take an action and return the feedback and detail
+        cancellation_token is supported only by the local VLLM path.
         return: final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
         '''
+        local_model_step = (
+            not BaseAgent._virtual_debug
+            and self.RL_mode == ""
+            and isinstance(self.llm, VLLMLanguageModel)
+        )
+        if cancellation_token is not None and not local_model_step:
+            raise ValueError("cancellation_token is only supported for local VLLM agent steps")
+
         if BaseAgent._virtual_debug:
             return self.virtual_step(task)
 
@@ -634,6 +668,10 @@ class BaseAgent:
                 prompts.append(user)
                 final_answer = user
                 detail["final_answer"] = final_answer
+
+                if is_cancelled():
+                    fail("cancelled", "Local agent execution was cancelled.")
+                    break
 
                 if (
                     self.local_model_inter_action_delay > 0

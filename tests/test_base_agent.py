@@ -232,6 +232,28 @@ def test_local_step_cancellation_prevents_another_tool_action():
     assert detail["failure"]["successful_actions"] == 1
 
 
+def test_local_step_acknowledges_cancellation_at_action_budget_boundary():
+    cancellation = threading.Event()
+    response = "Action: {'tool': 'inspect', 'tool_input': {}}"
+    tool = FakeTool(
+        feedback={"message": "ok", "status": True},
+        on_call=cancellation.set,
+    )
+    agent, task, _, _ = make_local_agent(
+        [response],
+        tools=[tool],
+        local_model_max_attempts=1,
+        local_model_max_actions=1,
+    )
+
+    feedback, detail = agent.local_step(task, cancellation_token=cancellation)
+
+    assert feedback["status"] is False
+    assert detail["failure"]["reason"] == "cancelled"
+    assert detail["failure"]["model_attempts"] == 1
+    assert detail["failure"]["successful_actions"] == 1
+
+
 def test_local_step_uses_bounded_configurable_inter_action_delay(monkeypatch):
     sleeps = []
     monkeypatch.setattr("pipeline.agent.time.sleep", sleeps.append)
@@ -282,3 +304,40 @@ def test_local_step_has_no_default_inter_action_sleep(monkeypatch):
     agent.local_step(task)
 
     assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"local_model_max_attempts": True}, "local_model_max_attempts"),
+        ({"local_model_max_attempts": 1.5}, "local_model_max_attempts"),
+        ({"local_model_max_attempts": 0}, "local_model_max_attempts"),
+        ({"local_model_max_actions": False}, "local_model_max_actions"),
+        ({"local_model_max_actions": 2.5}, "local_model_max_actions"),
+        ({"local_model_max_actions": 0}, "local_model_max_actions"),
+        ({"local_model_inter_action_delay": True}, "local_model_inter_action_delay"),
+        ({"local_model_inter_action_delay": float("nan")}, "local_model_inter_action_delay"),
+        ({"local_model_inter_action_delay": 10 ** 1000}, "local_model_inter_action_delay"),
+    ],
+)
+def test_base_agent_rejects_ambiguous_local_budget_configuration(config, message):
+    with pytest.raises(ValueError, match=message):
+        make_local_agent([], **config)
+
+
+def test_step_rejects_cancellation_token_for_non_local_path(monkeypatch):
+    monkeypatch.setattr(BaseAgent, "_virtual_debug", False)
+    env = FakeEnv()
+    agent = BaseAgent(
+        llm=object(),
+        env=env,
+        data_manager=FakeDataManager(),
+        name="Alice",
+        silent=True,
+    )
+    task = Task("Inspect area", {"document": "public"})
+
+    with pytest.raises(ValueError, match="only supported for local VLLM"):
+        agent.step(task, cancellation_token=threading.Event())
+
+    assert env.step_calls == 0
