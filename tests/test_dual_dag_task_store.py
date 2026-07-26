@@ -109,6 +109,56 @@ def test_store_query_runnable_tasks_treats_empty_candidates_as_all_free_agents()
     assert runnable[0].candidate_list == ["Alice", "Bob"]
 
 
+def test_store_rejects_explicit_empty_candidates():
+    task = Task("A", {})
+    task._candidate_agents_explicit = True
+
+    with pytest.raises(TaskDependencyError, match="explicit empty candidate"):
+        RuntimeTaskDAGStore().load_tasks_from_decomposition([task])
+
+
+@pytest.mark.parametrize("required", [0, -1, True, 1.5, "1"])
+def test_store_rejects_invalid_required_agent_count(required):
+    task = Task("A", {})
+    task.number = required
+
+    with pytest.raises(TaskDependencyError, match="positive integer"):
+        RuntimeTaskDAGStore().load_tasks_from_decomposition([task])
+
+
+def test_store_rejects_required_count_above_candidate_count():
+    task = Task("A", {})
+    task.candidate_list = ["Alice"]
+    task.number = 2
+
+    with pytest.raises(TaskDependencyError, match="only 1 candidate"):
+        RuntimeTaskDAGStore().load_tasks_from_decomposition([task])
+
+
+def test_store_requires_exact_count_for_update_assignment_tasks():
+    task = Task("A", {})
+    task.candidate_list = ["Alice", "Bob"]
+    task.number = 1
+    task._candidate_agents_explicit = True
+    task._candidate_agent_count_exact = True
+
+    with pytest.raises(TaskDependencyError, match="count to match candidates"):
+        RuntimeTaskDAGStore().load_tasks_from_decomposition([task])
+
+
+def test_store_rejects_running_assignment_with_wrong_cardinality_or_candidate():
+    task = Task("A", {})
+    task.candidate_list = ["Alice", "Bob"]
+    task.number = 2
+    store = RuntimeTaskDAGStore()
+    store.load_tasks_from_decomposition([task])
+
+    with pytest.raises(TaskDependencyError, match="exactly 2"):
+        store.mark_task_running(task.id, ["Alice"])
+    with pytest.raises(TaskDependencyError, match="outside its candidates"):
+        store.mark_task_running(task.id, ["Alice", "Ghost"])
+
+
 def test_store_terminal_state_matches_graph_semantics():
     store, tasks = _store_with_chain(2)
 

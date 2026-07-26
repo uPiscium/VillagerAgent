@@ -22,7 +22,7 @@
         "id": "find_chest",
         "description": "Find chest",
         "candidate_agents": ["Bob"],
-        "assigned_agents": []
+        "assigned_agents": ["Bob"]
       }
     ],
     "smoke_action_log": {

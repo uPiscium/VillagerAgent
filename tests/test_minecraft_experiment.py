@@ -17,6 +17,7 @@ from benchmarks.minecraft.experiment import (
     _terminate_runtime_process,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
+    validate_minecraft_config,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
@@ -211,6 +212,41 @@ def test_minecraft_experiment_rejects_invalid_smoke_fixture_shape(tmp_path):
 
     with pytest.raises(ValueError, match=r"config.smoke_tasks\[0\] missing required field: description"):
         run_minecraft_experiment(config_path=config_path, output_root=tmp_path / "result")
+
+
+def test_minecraft_execute_rejects_zero_agents():
+    config = _minecraft_config("zero_agents")
+    config["agent_num"] = 0
+
+    with pytest.raises(ValueError, match="agent_num must be positive"):
+        validate_minecraft_config(config, execute=True)
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1"])
+def test_minecraft_config_rejects_non_integer_agent_count(value):
+    config = _minecraft_config("invalid_agents")
+    config["agent_num"] = value
+
+    with pytest.raises(ValueError, match="agent_num must be an integer"):
+        validate_minecraft_config(config)
+
+
+@pytest.mark.parametrize(
+    ("task", "message"),
+    [
+        ({"description": "A", "candidate_agents": []}, "candidate_agents must be non-empty"),
+        ({"description": "A", "assigned_agents": []}, "assigned_agents must be non-empty"),
+        ({"description": "A", "candidate_agents": ["Alice"], "number": 2}, "must not exceed"),
+        ({"description": "A", "assigned_agents": ["Alice", "Bob"], "number": 1}, "must match"),
+        ({"description": "A", "candidate_agents": ["Alice"], "number": True}, "must be an integer"),
+    ],
+)
+def test_minecraft_config_rejects_invalid_smoke_assignment(task, message):
+    config = _minecraft_config("invalid_smoke")
+    config["smoke_tasks"] = [task]
+
+    with pytest.raises(ValueError, match=message):
+        validate_minecraft_config(config)
 
 
 def test_minecraft_meta_execute_requires_non_empty_task_scenario(tmp_path):

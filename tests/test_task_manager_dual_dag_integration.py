@@ -155,6 +155,8 @@ def test_initial_decomposition_preserves_complete_multi_agent_assignment(monkeyp
     assert len(manager.graph.vertex) == 1
     assert node["lifecycle"]["candidate_agents"] == ["Alice", "Bob"]
     assert node["lifecycle"]["required_agent_count"] == 2
+    assert node["lifecycle"]["candidate_agents_explicit"] is True
+    assert node["lifecycle"]["candidate_agent_count_exact"] is True
     assert manager.graph.vertex[0].candidate_list == ["Alice", "Bob"]
     assert manager.graph.vertex[0].number == 2
 
@@ -172,15 +174,48 @@ def test_initial_decomposition_recovers_idle_status_after_dependency_error(monke
     assert manager.status == TaskManager.idle
 
 
-def test_fill_agents_deduplicates_in_order_and_rejects_unknown_names():
+def test_fill_agents_canonicalizes_case_and_rejects_duplicates_and_unknown_names():
     manager = TaskManager(silent=True)
     agents = [SimpleNamespace(name="Alice"), SimpleNamespace(name="Bob")]
-    result = [_decomposition_task("A", ["Bob", "Alice", "Bob"], [])]
+    result = [_decomposition_task("A", ["bob", "ALICE"], [])]
 
     assert manager.fill_agents(result, agents)[0]["assigned agents"] == ["Bob", "Alice"]
 
+    with pytest.raises(ValueError, match="Duplicate assigned agent"):
+        manager.fill_agents([_decomposition_task("A", ["Bob", "bob"], [])], agents)
+
     with pytest.raises(ValueError, match="Unknown assigned agent 'Ghost'.*task 'B'"):
         manager.fill_agents([_decomposition_task("B", ["Ghost"], [])], agents)
+
+
+@pytest.mark.parametrize("assigned_agents", [None, []])
+def test_fill_agents_rejects_missing_or_empty_assignment(assigned_agents):
+    manager = TaskManager(silent=True)
+    task = _decomposition_task("A", assigned_agents or [], [])
+    if assigned_agents is None:
+        task.pop("assigned agents")
+
+    with pytest.raises(ValueError, match="must provide assigned agents|at least one"):
+        manager.fill_agents([task], [SimpleNamespace(name="Alice")])
+
+
+def test_fill_agents_rejects_casefold_ambiguous_agent_configuration():
+    manager = TaskManager(silent=True)
+
+    with pytest.raises(ValueError, match="Ambiguous agent names"):
+        manager.fill_agents(
+            [_decomposition_task("A", ["alice"], [])],
+            [SimpleNamespace(name="Alice"), SimpleNamespace(name="ALICE")],
+        )
+
+
+def test_initial_decomposition_rejects_missing_assigned_agents(monkeypatch):
+    task = _decomposition_task("A", ["Alice"], [])
+    task.pop("assigned agents")
+    manager = _decomposition_manager(monkeypatch, [task])
+
+    with pytest.raises(ValueError, match="missing required field: assigned agents"):
+        manager.init_task("parent", {})
 
 
 def test_redecomposition_preserves_chains_branches_parallel_roots_and_projections(monkeypatch):

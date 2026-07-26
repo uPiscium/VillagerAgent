@@ -58,6 +58,43 @@ class RuntimeTaskDAGStore:
     def upsert_task(self, task: Task) -> str:
         node_id = self.task_node_id(task)
         existing = self.nodes.get(node_id, {})
+        required_agent_count = getattr(task, "number", None)
+        if (
+            isinstance(required_agent_count, bool)
+            or not isinstance(required_agent_count, int)
+            or required_agent_count <= 0
+        ):
+            raise TaskDependencyError(
+                f'task "{task.description}" required agent count must be a positive integer'
+            )
+        candidate_agents = getattr(task, "candidate_list", None)
+        if not isinstance(candidate_agents, list):
+            raise TaskDependencyError(
+                f'task "{task.description}" candidate agents must be a list'
+            )
+        if any(not isinstance(agent, str) or not agent for agent in candidate_agents):
+            raise TaskDependencyError(
+                f'task "{task.description}" candidate agents must be non-empty names'
+            )
+        if len({agent.casefold() for agent in candidate_agents}) != len(candidate_agents):
+            raise TaskDependencyError(
+                f'task "{task.description}" candidate agents must be unique'
+            )
+        candidates_explicit = bool(getattr(task, "_candidate_agents_explicit", False))
+        exact_count = bool(getattr(task, "_candidate_agent_count_exact", False))
+        if candidates_explicit and not candidate_agents:
+            raise TaskDependencyError(
+                f'task "{task.description}" has an explicit empty candidate list'
+            )
+        if candidate_agents and required_agent_count > len(candidate_agents):
+            raise TaskDependencyError(
+                f'task "{task.description}" requires {required_agent_count} agent(s), '
+                f'but only {len(candidate_agents)} candidate(s) are available'
+            )
+        if exact_count and required_agent_count != len(candidate_agents):
+            raise TaskDependencyError(
+                f'task "{task.description}" requires assignment count to match candidates'
+            )
         self.nodes[node_id] = {
             "node_id": node_id,
             "node_type": "runtime_task",
@@ -69,10 +106,12 @@ class RuntimeTaskDAGStore:
             },
             "lifecycle": {
                 "status": getattr(task, "status", Task.unknown),
-                "candidate_agents": list(getattr(task, "candidate_list", []) or []),
+                "candidate_agents": list(candidate_agents),
+                "candidate_agents_explicit": candidates_explicit,
+                "candidate_agent_count_exact": exact_count,
                 "active_agents": list(getattr(task, "_agent", []) or []) if getattr(task, "status", Task.unknown) == Task.running else [],
                 "last_assigned_agents": list(getattr(task, "_agent", []) or []),
-                "required_agent_count": int(getattr(task, "number", 1) or 1),
+                "required_agent_count": required_agent_count,
             },
             "provenance": existing.get("provenance", {"source": "TaskManager.decomposition"}),
         }
@@ -275,17 +314,41 @@ class RuntimeTaskDAGStore:
             if task.status != Task.unknown or task.predecessor_task_list:
                 task.available = False
             elif free_agent_names is not None:
-                candidates = list(task.candidate_list or free_agent_names)
+                candidates_explicit = bool(lifecycle.get("candidate_agents_explicit", False))
+                if candidates_explicit and not task.candidate_list:
+                    raise TaskDependencyError(
+                        f'task "{task.description}" has an explicit empty candidate list'
+                    )
+                candidates = list(
+                    task.candidate_list
+                    if task.candidate_list
+                    else free_agent_names
+                )
                 eligible_free_agents = [agent for agent in free_agent_names if agent in set(candidates)]
-                if not task.candidate_list:
+                if not task.candidate_list and not candidates_explicit:
                     task.candidate_list = eligible_free_agents
-                if len(eligible_free_agents) < int(lifecycle.get("required_agent_count", 1) or 1):
+                required_agent_count = lifecycle.get("required_agent_count")
+                if len(eligible_free_agents) < required_agent_count:
                     task.available = False
             if task.available:
                 runnable.append(task)
         return runnable
 
     def mark_task_running(self, task_id: str, assigned_agents: list[str] | None = None) -> None:
+        node = self._require_node(self.task_node_id(task_id))
+        assigned_agents = list(assigned_agents or [])
+        required = node["lifecycle"]["required_agent_count"]
+        if len(assigned_agents) != required:
+            raise TaskDependencyError(
+                f"task {task_id} requires exactly {required} assigned agent(s)"
+            )
+        if any(not isinstance(agent, str) or not agent for agent in assigned_agents):
+            raise TaskDependencyError(f"task {task_id} assigned agents must be non-empty names")
+        if len({agent.casefold() for agent in assigned_agents}) != len(assigned_agents):
+            raise TaskDependencyError(f"task {task_id} assigned agents must be unique")
+        candidates = node["lifecycle"]["candidate_agents"]
+        if candidates and any(agent not in candidates for agent in assigned_agents):
+            raise TaskDependencyError(f"task {task_id} assigned an agent outside its candidates")
         self._set_task_lifecycle(task_id, status=Task.running, active_agents=assigned_agents)
 
     def mark_task_success(self, task_id: str, feedback=None) -> None:
@@ -469,11 +532,13 @@ class RuntimeTaskDAGStore:
         task.reflect = deepcopy(content.get("reflect"))
         task.status = lifecycle.get("status", Task.unknown)
         task.candidate_list = list(lifecycle.get("candidate_agents", []) or [])
+        task._candidate_agents_explicit = bool(lifecycle.get("candidate_agents_explicit", False))
+        task._candidate_agent_count_exact = bool(lifecycle.get("candidate_agent_count_exact", False))
         active_agents = lifecycle.get("active_agents")
         if active_agents is None:
             active_agents = lifecycle.get("assigned_agents", [])
         task._agent = list(active_agents or [])
-        task.number = int(lifecycle.get("required_agent_count", 1) or 1)
+        task.number = lifecycle.get("required_agent_count")
         task.available = self._is_dependency_ready(node_id) and task.status == Task.unknown
         return task
 

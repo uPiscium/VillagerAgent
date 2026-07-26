@@ -243,7 +243,15 @@ class GlobalController:
                 continue
 
             task_instance = self.task_list[task_id]
-            required_agent_count = int(task_instance.number)
+            required_agent_count = task_instance.number
+            if (
+                isinstance(required_agent_count, bool)
+                or not isinstance(required_agent_count, int)
+                or required_agent_count <= 0
+            ):
+                raise ValueError(
+                    f"Task {task_instance.description} required agent count must be a positive integer"
+                )
             if len(agent_names) != required_agent_count or len(set(agent_names)) != len(agent_names):
                 self.logger.warning(
                     f"Task {task_instance.description} requires exactly {required_agent_count} unique agent(s)!"
@@ -764,6 +772,18 @@ class GlobalController:
         for task_id, task in enumerate(self.task_list):
             if not task.available or task.status != Task.unknown:
                 continue
+            if getattr(task, "_candidate_agents_explicit", False) and not task.candidate_list:
+                raise ValueError(
+                    f"Task {task.description} has an explicit empty candidate list"
+                )
+            if (
+                isinstance(task.number, bool)
+                or not isinstance(task.number, int)
+                or task.number <= 0
+            ):
+                raise ValueError(
+                    f"Task {task.description} required agent count must be a positive integer"
+                )
 
             eligible_agents = [
                 agent
