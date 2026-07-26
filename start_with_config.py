@@ -30,7 +30,11 @@ def _task_graph_snapshot(graph) -> dict:
     }
 
 
-def _runtime_result(env=None, tm=None, *, error: str | None = None, attempt_id: str | None = None, task_name: str | None = None) -> dict:
+class JudgedRuntimeValidationError(RuntimeError):
+    pass
+
+
+def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = None, attempt_id: str | None = None, task_name: str | None = None) -> dict:
     runtime_store = getattr(tm, "runtime_task_store", None) if tm is not None else None
     runtime_snapshot = runtime_store.snapshot() if runtime_store is not None else {}
     task_graph_snapshot = _task_graph_snapshot(tm.graph) if tm is not None and hasattr(tm, "graph") else {}
@@ -46,15 +50,53 @@ def _runtime_result(env=None, tm=None, *, error: str | None = None, attempt_id: 
         "action_log": env.get_action_log() if env is not None and hasattr(env, "get_action_log") else {},
         "runtime_task_dag_snapshot": runtime_snapshot,
         "task_graph_snapshot": task_graph_snapshot,
+        "controller": {
+            "shutdown_complete": bool(getattr(controller, "shutdown_complete", False)),
+            "state": getattr(controller, "controller_state", None),
+            "context": getattr(controller, "shutdown_context", None),
+            "active_assignments": dict(getattr(controller, "assignment", {})),
+        },
         "error": error,
     }
 
 
-def _runtime_checkpoint_result(env=None, tm=None, *, attempt_id: str | None = None, task_name: str | None = None) -> dict:
-    result = _runtime_result(None, tm, attempt_id=attempt_id, task_name=task_name)
+def _runtime_checkpoint_result(env=None, tm=None, controller=None, *, attempt_id: str | None = None, task_name: str | None = None) -> dict:
+    result = _runtime_result(None, tm, controller, attempt_id=attempt_id, task_name=task_name)
     if env is not None and hasattr(env, "get_action_log"):
         result["action_log"] = env.get_action_log()
     return result
+
+
+def validate_judged_runtime_result(result: dict) -> None:
+    score = result.get("score")
+    if not isinstance(score, dict) or not score:
+        raise JudgedRuntimeValidationError("judged runtime result has no score payload")
+    if score.get("status") != "success":
+        raise JudgedRuntimeValidationError(
+            f"judger reported terminal status {score.get('status')!r}"
+        )
+    if score.get("attempt_id") != result.get("attempt_id"):
+        raise JudgedRuntimeValidationError("judged score attempt does not match runtime attempt")
+    if score.get("task_name") != result.get("task_name"):
+        raise JudgedRuntimeValidationError("judged score task does not match runtime task")
+    snapshot = result.get("runtime_task_dag_snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("summary", {}).get("terminal_state") != "success":
+        raise JudgedRuntimeValidationError("runtime task DAG is not terminal success")
+    nodes = snapshot.get("nodes", [])
+    if not nodes or any(
+        node.get("lifecycle", {}).get("status") != "success"
+        or node.get("lifecycle", {}).get("active_agents")
+        for node in nodes
+    ):
+        raise JudgedRuntimeValidationError(
+            "runtime task DAG contains non-success or actively assigned tasks"
+        )
+    if result.get("controller", {}).get("shutdown_complete") is not True:
+        raise JudgedRuntimeValidationError("controller shutdown is incomplete")
+    if result.get("controller", {}).get("active_assignments"):
+        raise JudgedRuntimeValidationError("controller still has active assignments")
+    if result.get("error") is not None:
+        raise JudgedRuntimeValidationError("judged runtime result contains an error")
 
 
 def _write_runtime_result(path: str | None, payload: dict) -> None:
@@ -138,6 +180,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
     else:
         raise NotImplementedError
+    env.attempt_id = attempt_id
     if task_type == "meta" and runtime_result_path:
         env.meta_diagnostics_dir = os.path.dirname(runtime_result_path) or "."
 
@@ -190,6 +233,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             env.agent_register(agent_tool=agent_tool, agent_number=agent_num, name_list=name_list[:agent_num])
 
     runtime_tm = None
+    runtime_ctrl = None
     try:
         with env.run(fast_api=True):  # Use the FastAPI bridge; it avoids viewer-only Node dependencies such as canvas.
             # 启动DM
@@ -212,11 +256,11 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             runtime_tm = tm
             tm.runtime_checkpoint = lambda: _write_runtime_result(
                 runtime_result_path,
-                _runtime_checkpoint_result(env, tm, attempt_id=attempt_id, task_name=task_name),
+                _runtime_checkpoint_result(env, tm, runtime_ctrl, attempt_id=attempt_id, task_name=task_name),
             )
             _write_runtime_result(
                 runtime_result_path,
-                _runtime_checkpoint_result(env, tm, attempt_id=attempt_id, task_name=task_name),
+                _runtime_checkpoint_result(env, tm, runtime_ctrl, attempt_id=attempt_id, task_name=task_name),
             )
 
             print(f"TaskManager Time taken: {time.time() - start_time}")
@@ -274,6 +318,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
                                 minecraft_dual_dag_config=minecraft_dual_dag_config,
                                 event_sink=event_sink,
                                 emit_terminal_events=emit_controller_terminal_event)
+            runtime_ctrl = ctrl
 
             # response = ctrl.agent_list[0].llm.few_shot_generate_thoughts(system_prompt="", example_prompt="hi")
             # print(response)
@@ -299,18 +344,21 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             tm.init_task(description=task_goal, document=document)
             _write_runtime_result(
                 runtime_result_path,
-                _runtime_result(env, tm, attempt_id=attempt_id, task_name=task_name),
+                _runtime_result(env, tm, ctrl, attempt_id=attempt_id, task_name=task_name),
             )
 
             ctrl.run()
 
-            result = _runtime_result(env, tm, attempt_id=attempt_id, task_name=task_name)
+            result = _runtime_result(env, tm, ctrl, attempt_id=attempt_id, task_name=task_name)
+            if task_type == "meta":
+                validate_judged_runtime_result(result)
             _write_runtime_result(runtime_result_path, result)
             return result
     except Exception as exc:
         result = _runtime_result(
             env,
             runtime_tm,
+            runtime_ctrl,
             error=str(exc),
             attempt_id=attempt_id,
             task_name=task_name,

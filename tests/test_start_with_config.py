@@ -168,3 +168,46 @@ def test_runtime_result_binds_score_to_current_attempt():
 
     assert result["score"]["attempt_id"] == "attempt-a"
     assert result["score"]["task_name"] == "runtime-task-a"
+
+
+def test_judged_runtime_validator_accepts_consistent_success():
+    result = _judged_runtime_result()
+
+    start_with_config.validate_judged_runtime_result(result)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda result: result["runtime_task_dag_snapshot"]["nodes"][0]["lifecycle"].update(active_agents=["Alice"]), "actively assigned"),
+        (lambda result: result["controller"].update(shutdown_complete=False), "shutdown is incomplete"),
+        (lambda result: result["score"].update(attempt_id="stale"), "attempt does not match"),
+    ],
+)
+def test_judged_runtime_validator_rejects_cross_field_mismatch(mutation, message):
+    result = _judged_runtime_result()
+    mutation(result)
+
+    with pytest.raises(start_with_config.JudgedRuntimeValidationError, match=message):
+        start_with_config.validate_judged_runtime_result(result)
+
+
+def _judged_runtime_result():
+    return {
+        "attempt_id": "attempt-a",
+        "task_name": "runtime-task-a",
+        "score": {
+            "attempt_id": "attempt-a",
+            "task_name": "runtime-task-a",
+            "status": "success",
+            "score": 100,
+        },
+        "runtime_task_dag_snapshot": {
+            "summary": {"terminal_state": "success"},
+            "nodes": [{
+                "lifecycle": {"status": "success", "active_agents": []},
+            }],
+        },
+        "controller": {"shutdown_complete": True, "state": "shutdown"},
+        "error": None,
+    }

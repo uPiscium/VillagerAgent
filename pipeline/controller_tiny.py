@@ -61,6 +61,11 @@ class GlobalController:
     - silent (bool): Whether to suppress the log output. Default is False.
     - max_workers (int): The maximum number of workers in the thread pool. Default is 4.
     '''
+    STATE_RUNNING = "running"
+    STATE_JUDGER_TERMINAL_OBSERVED = "judger_terminal_observed"
+    STATE_DRAINING = "draining"
+    STATE_RECONCILING = "reconciling"
+    STATE_SHUTDOWN = "shutdown"
     def __init__(self, llm_config: dict, task_manager: TaskManager, data_manager: DataManager, env: VillagerBench,
                  silent: bool = False, max_workers=4, tm_llm_config: dict = None, dm_llm_config: dict = None,
                  base_agent_config: dict = None, all_tools=[], minecraft_dual_dag_config: dict | None = None,
@@ -140,7 +145,13 @@ class GlobalController:
         self.cancellation_grace_period = 5.0
         self._run_started = False
         self._terminal_shutdown_lock = threading.Lock()
-        self._judged_task_complete = False
+        self._judger_terminal_observed = False
+        self._judger_terminal_payload = None
+        self._judger_terminal_observed_at = None
+        self._judger_terminal_reconciled = False
+        self.controller_state = self.STATE_RUNNING
+        self.shutdown_complete = False
+        self.shutdown_context = None
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
         self.emit_terminal_events = emit_terminal_events
@@ -176,17 +187,41 @@ class GlobalController:
             self._record_failure(name, exc)
 
     def should_shutdown(self):
-        if self.shutdown_event.is_set():
+        return self.shutdown_event.is_set()
+
+    def observe_judger_terminal(self) -> bool:
+        if getattr(self, "_judger_terminal_observed", False):
             return True
         if not hasattr(self.env, "is_task_complete") or not self.env.is_task_complete():
             return False
         with self._terminal_shutdown_lock:
-            if not self.shutdown_event.is_set():
+            if not self._judger_terminal_observed:
+                payload = self.env.get_score()
+                self._validate_judger_payload_ownership(payload)
                 self.logger.info("judged task reached terminal score status")
-                self._judged_task_complete = True
-                self.env.stop()
-                self._request_shutdown()
+                self._judger_terminal_payload = dict(payload)
+                self._judger_terminal_observed = True
+                self._judger_terminal_observed_at = time.monotonic()
+                self.controller_state = self.STATE_JUDGER_TERMINAL_OBSERVED
         return True
+
+    def _validate_judger_payload_ownership(self, payload) -> None:
+        if not isinstance(payload, dict) or not payload:
+            raise ControllerShutdownError("judger terminal payload is missing or invalid")
+        expected_attempt_id = getattr(self.env, "attempt_id", None)
+        if expected_attempt_id is not None and payload.get("attempt_id") != expected_attempt_id:
+            raise ControllerShutdownError(
+                f"judger payload attempt mismatch: expected {expected_attempt_id!r}, "
+                f"got {payload.get('attempt_id')!r}"
+            )
+        expected_task_name = getattr(self.env, "task_name", None)
+        if expected_task_name is not None and payload.get("task_name") != expected_task_name:
+            raise ControllerShutdownError(
+                f"judger payload task mismatch: expected {expected_task_name!r}, "
+                f"got {payload.get('task_name')!r}"
+            )
+        if payload.get("status") not in ("success", "failure"):
+            raise ControllerShutdownError("judger terminal payload must contain success/failure status")
 
     def validate_assignments(self, result: [dict]):
         validated_assignments = []
@@ -248,6 +283,8 @@ class GlobalController:
 
     
     def execute_assignments(self, validated_assignments):
+        if getattr(self, "_judger_terminal_observed", False):
+            return
         for assignment in validated_assignments:
             task_instance = assignment["task_instance"]
             agent_instances = assignment["agent_instances"]
@@ -483,11 +520,152 @@ class GlobalController:
         group.post_processing_complete = True
         group.completed = True
 
+    def reconcile_judger_terminal(self) -> bool:
+        if not self._judger_terminal_observed:
+            return False
+        if self._judger_terminal_reconciled:
+            return True
+        self.controller_state = self.STATE_DRAINING
+        running_task_ids = self._running_runtime_task_ids()
+        if len(running_task_ids) != 1:
+            raise ControllerShutdownError(
+                f"judger terminal reconciliation requires exactly one running task; "
+                f"found {len(running_task_ids)}"
+            )
+        task_id = running_task_ids[0]
+        groups = self._execution_groups_snapshot()
+        matching_groups = [
+            group for group in groups
+            if group.task.id == task_id and not group.completed
+        ]
+        if len(matching_groups) > 1:
+            raise ControllerShutdownError(
+                f"judger terminal reconciliation found multiple execution groups for task {task_id}"
+            )
+
+        group = matching_groups[0] if matching_groups else None
+        now = time.monotonic()
+        observed_at = self._judger_terminal_observed_at or now
+        drain_grace = self.shutdown_grace_period
+        cancellation_grace = getattr(
+            self, "cancellation_grace_period", self.shutdown_grace_period
+        )
+        if group is not None:
+            if not group.submission_complete and now - observed_at < drain_grace:
+                return False
+            active_agents = [
+                agent_name for agent_name, future in group.futures.items()
+                if not future.done()
+            ]
+            if active_agents and now - observed_at < drain_grace:
+                return False
+            if active_agents:
+                for agent_name in active_agents:
+                    token = group.cancellation_tokens.get(agent_name)
+                    if token is not None:
+                        token.set()
+                        group.cancellation_requested.add(agent_name)
+                        group.cancellation_requested_at.setdefault(agent_name, now)
+                    group.futures[agent_name].cancel()
+                cancellation_started_at = min(
+                    group.cancellation_requested_at.values(),
+                    default=observed_at + drain_grace,
+                )
+                if now - cancellation_started_at < cancellation_grace:
+                    return False
+                active_agents = [
+                    agent_name for agent_name, future in group.futures.items()
+                    if not future.done()
+                ]
+                if active_agents:
+                    raise ControllerShutdownError(
+                        f"judger reached terminal status but task {task_id} remained active "
+                        f"for {', '.join(sorted(active_agents))}"
+                    )
+            if not group.submission_complete:
+                raise ControllerShutdownError(
+                    f"judger reached terminal status before task {task_id} submission completed"
+                )
+
+        self.controller_state = self.STATE_RECONCILING
+        payload = dict(self._judger_terminal_payload)
+        status = Task.success if payload["status"] == "success" else Task.failure
+        feedback = {
+            "terminal_source": "external_judger",
+            "judger_status": payload["status"],
+            "score": payload.get("score"),
+            "progress": payload.get("progress", payload.get("score")),
+            "attempt_id": payload.get("attempt_id"),
+            "task_name": payload.get("task_name"),
+            "agent_execution": {
+                "drained": True,
+                "result_available": bool(group and group.futures),
+            },
+        }
+        self.task_manager.mark_task_status(task_id, status, feedback)
+        if group is not None:
+            group.task.status = status
+            group.terminal_state_persisted = True
+            self._complete_reconciled_group(group)
+        else:
+            self._release_task_assignments(task_id)
+        self._remove_completed_groups()
+        self._judger_terminal_reconciled = True
+        self.controller_state = self.STATE_SHUTDOWN
+        self.env.stop()
+        if status == Task.failure:
+            self._record_failure(
+                "external_judger",
+                ControllerShutdownError("external judger reported task failure"),
+            )
+        else:
+            self._request_shutdown()
+        return True
+
+    def _running_runtime_task_ids(self) -> list[str]:
+        runtime_store = getattr(self.task_manager, "runtime_task_store", None)
+        if runtime_store is None:
+            raise ControllerShutdownError("runtime task DAG store is unavailable")
+        return [
+            node_id.removeprefix("runtime:task:")
+            for node_id, node in runtime_store.nodes.items()
+            if node.get("lifecycle", {}).get("status") == Task.running
+        ]
+
+    def _execution_groups_snapshot(self) -> list[TaskExecutionGroup]:
+        with self.task_list_lock:
+            with self.result_list_lock:
+                groups = [*self.task_queue, *self.result_queue]
+        unique_groups = []
+        seen = set()
+        for group in groups:
+            if id(group) not in seen:
+                unique_groups.append(group)
+                seen.add(id(group))
+        return unique_groups
+
+    def _release_task_assignments(self, task_id: str) -> None:
+        for agent_name, assigned_task_id in list(self.assignment.items()):
+            if assigned_task_id == task_id:
+                self.assignment.pop(agent_name)
+
+    def _complete_reconciled_group(self, group: TaskExecutionGroup) -> None:
+        self._release_task_assignments(group.task.id)
+        group.post_processing_complete = True
+        group.completed = True
+
+    def _remove_completed_groups(self) -> None:
+        with self.task_list_lock:
+            self.task_queue = [group for group in self.task_queue if not group.completed]
+            with self.result_list_lock:
+                self.result_queue = [group for group in self.result_queue if not group.completed]
+
     # worker
     def worker(self):
         while True:
             if self.should_shutdown():
                 break
+            self.observe_judger_terminal()
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
             if self.env.agents_ping()["status"] == False:
@@ -548,6 +726,11 @@ class GlobalController:
         while True:
             if self.should_shutdown():
                 break
+            if self.observe_judger_terminal():
+                if self.reconcile_judger_terminal():
+                    break
+                self.shutdown_event.wait(self.query_interval)
+                continue
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
             if self.env.agents_ping()["status"] == False:
@@ -575,6 +758,8 @@ class GlobalController:
         ]
 
     def assign_runnable_tasks(self):
+        if getattr(self, "_judger_terminal_observed", False):
+            return 0
         assigned_count = 0
         for task_id, task in enumerate(self.task_list):
             if not task.available or task.status != Task.unknown:
@@ -611,6 +796,9 @@ class GlobalController:
         while True:
             if self.should_shutdown():
                 break
+            if self.observe_judger_terminal():
+                self.shutdown_event.wait(self.query_interval)
+                continue
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
             if self.env.agents_ping()["status"] == False:
@@ -676,6 +864,8 @@ class GlobalController:
         self._run_started = True
         self.shutdown_event.clear()
         self._first_failure = None
+        self.controller_state = self.STATE_RUNNING
+        self.shutdown_complete = False
         self._controller_threads = [
             threading.Thread(
                 name=f"controller-{name}",
@@ -699,6 +889,7 @@ class GlobalController:
             self._record_failure("run", exc)
 
         self._request_shutdown()
+        self.controller_state = self.STATE_SHUTDOWN
         self.executor.shutdown(wait=False, cancel_futures=True)
         deadline = time.monotonic() + self.shutdown_grace_period
         executor_threads = list(getattr(self.executor, "_threads", ()))
@@ -726,6 +917,17 @@ class GlobalController:
             and not incomplete_submission_task_ids
             and not undrained_queues
         )
+        self.shutdown_complete = shutdown_complete
+        self.shutdown_context = {
+            "shutdown_complete": shutdown_complete,
+            "controller_state": self.controller_state,
+            "live_threads": alive_threads,
+            "undrained_queues": undrained_queues,
+            "interrupted_task_ids": interrupted_task_ids,
+            "active_task_ids": active_task_ids,
+            "active_agent_ids": active_agent_ids,
+            "incomplete_submission_task_ids": incomplete_submission_task_ids,
+        }
         if not shutdown_complete or interrupted_task_ids:
             message = "Controller shutdown incomplete"
             if alive_threads:
@@ -813,15 +1015,6 @@ class GlobalController:
                     for agent_name, future in group.futures.items()
                     if future.running()
                 ]
-                # The external judger is authoritative; do not overwrite its
-                # successful terminal result with an interrupted-task failure.
-                if self._judged_task_complete and not execution_may_still_be_active:
-                    for agent_name in agent_names:
-                        if self.assignment.get(agent_name) == group.task.id:
-                            self.assignment.pop(agent_name)
-                    group.post_processing_complete = True
-                    group.completed = True
-                    continue
                 feedback = {
                     "reason": "controller_shutdown",
                     "execution_may_still_be_active": execution_may_still_be_active,

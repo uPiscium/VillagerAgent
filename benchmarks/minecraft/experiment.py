@@ -453,12 +453,30 @@ def _run_minecraft_experiment_attempt(
         "runtime_process_exit_code": runtime_process.get("exit_code"),
         "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
         "runtime_process_killed": bool(runtime_process.get("killed", False)),
+        "controller_shutdown_complete": bool(
+            runtime_result.get("controller", {}).get("shutdown_complete", False)
+        ),
+        "controller_active_assignments": sanitize_public_value(
+            runtime_result.get("controller", {}).get("active_assignments", {})
+        ),
         "action_log_available": action_log_available,
         "events_available": normalized_events is not None,
         "event_count": len(normalized_events.events) if normalized_events is not None else None,
         "event_warnings": list(normalized_events.warnings) if normalized_events is not None else [],
         "event_artifact_error": event_artifact_error,
     }
+    if execute and launch_config.get("task_type") == "meta" and score.get("status") == "success":
+        try:
+            validate_judged_artifact_consistency(
+                summary=summary,
+                runtime_snapshot=runtime_task_dag_snapshot,
+                score=score,
+            )
+        except ValueError as exc:
+            summary["error"] = str(exc)
+            summary["error_type"] = "JudgedArtifactConsistencyError"
+            error = str(exc)
+            error_type = "JudgedArtifactConsistencyError"
     metrics = build_minecraft_metrics(
         summary=summary,
         action_log=action_log,
@@ -763,6 +781,44 @@ def _score_ownership_error(score: dict, *, attempt_id: str, task_name: str) -> s
             f"score belongs to task {score_task_name!r}, expected {task_name!r}"
         )
     return None
+
+
+def validate_judged_artifact_consistency(
+    *,
+    summary: dict,
+    runtime_snapshot: dict,
+    score: dict,
+) -> None:
+    errors = []
+    if summary.get("error") is not None:
+        errors.append("summary.error must be null")
+    if summary.get("timed_out") is not False:
+        errors.append("summary.timed_out must be false")
+    if summary.get("score_available") is not True:
+        errors.append("summary.score_available must be true")
+    if summary.get("score_ownership_verified") is not True:
+        errors.append("score ownership must be verified")
+    if score.get("attempt_id") != summary.get("attempt_id"):
+        errors.append("score attempt_id must match summary attempt_id")
+    if runtime_snapshot.get("summary", {}).get("terminal_state") != "success":
+        errors.append("runtime task DAG terminal_state must be success")
+    nodes = runtime_snapshot.get("nodes", [])
+    if not nodes:
+        errors.append("runtime task DAG must contain at least one task")
+    for node in nodes:
+        lifecycle = node.get("lifecycle", {})
+        if lifecycle.get("status") != Task.success:
+            errors.append("all runtime tasks must have success status")
+            break
+        if lifecycle.get("active_agents"):
+            errors.append("all runtime task active_agents must be empty")
+            break
+    if summary.get("controller_shutdown_complete") is not True:
+        errors.append("controller shutdown must be complete")
+    if summary.get("controller_active_assignments"):
+        errors.append("controller active assignments must be empty")
+    if errors:
+        raise ValueError("inconsistent judged artifact: " + "; ".join(errors))
 
 
 def _relativize_output_paths(value, *, output_dir: Path):

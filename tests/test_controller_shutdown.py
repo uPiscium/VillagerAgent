@@ -63,34 +63,156 @@ def test_normal_completion_stops_all_threads_executor_and_checkpoints():
     assert [event["event_type"] for event in sink.events] == ["run_completed"]
 
 
-def test_judged_completion_does_not_reclassify_finished_group_as_failure():
-    controller, checkpoints, sink = _controller()
+def test_should_shutdown_is_a_side_effect_free_query():
+    controller, _, _ = _controller()
+    controller.env = SimpleNamespace(
+        is_task_complete=lambda: True,
+        stop=lambda: (_ for _ in ()).throw(AssertionError("must not stop environment")),
+    )
+
+    assert controller.should_shutdown() is False
+    assert controller._judger_terminal_observed is False
+
+
+def test_judged_completion_persists_canonical_success_before_shutdown():
+    controller, _, sink = _controller()
     task = Task("Judged task", {})
-    task.status = Task.running
+    task.candidate_list = ["Alice"]
+    task.number = 1
+    manager = TaskManager(silent=True, event_sink=sink)
+    manager.set_task_list_from_decomposition([task])
+    projected_task = manager.query_runnable_subtasks(["Alice"])[0]
+    manager.mark_task_running(projected_task, ["Alice"])
+    sink.events.clear()
+    snapshots = []
+    manager.runtime_checkpoint = lambda: snapshots.append(manager.runtime_task_store.snapshot())
+    controller.task_manager = manager
     agent = SimpleNamespace(name="Alice")
     future = controller.executor.submit(lambda: ("done", "detail"))
     future.result(timeout=1)
     group = TaskExecutionGroup(
-        task=task,
+        task=projected_task,
         agents=[agent],
         futures={"Alice": future},
         started_at=time.time(),
         submission_complete=True,
     )
     controller.result_queue.append(group)
-    controller.assignment["Alice"] = task.id
-    controller._judged_task_complete = True
-    controller.execute_tasks = controller._request_shutdown
+    controller.assignment["Alice"] = projected_task.id
+    stopped = []
+    controller.env = SimpleNamespace(
+        attempt_id="attempt-a",
+        task_name="runtime-task-a",
+        is_task_complete=lambda: True,
+        get_score=lambda: {
+            "attempt_id": "attempt-a",
+            "task_name": "runtime-task-a",
+            "status": "success",
+            "score": 100,
+            "progress": 100,
+        },
+        stop=lambda: stopped.append(True),
+        agents_ping=lambda: {"status": True},
+    )
+    controller.query_interval = 0
+    controller.execute_tasks = controller.shutdown_event.wait
     controller.worker = controller.shutdown_event.wait
-    controller.process_completed_tasks = controller.shutdown_event.wait
 
     controller.run()
 
     assert group.completed is True
+    assert group.terminal_state_persisted is True
     assert controller.assignment == {}
-    assert controller.task_manager.status_updates == []
-    assert checkpoints == ["checkpoint"]
-    assert [event["event_type"] for event in sink.events] == ["run_completed"]
+    final_snapshot = snapshots[-1]
+    assert final_snapshot["summary"]["terminal_state"] == "success"
+    assert final_snapshot["nodes"][0]["lifecycle"]["status"] == Task.success
+    assert final_snapshot["nodes"][0]["lifecycle"]["active_agents"] == []
+    assert final_snapshot["nodes"][0]["content"]["reflect"]["terminal_source"] == "external_judger"
+    assert controller.shutdown_complete is True
+    assert stopped == [True]
+    assert [event["event_type"] for event in sink.events] == [
+        "task_status_changed",
+        "run_completed",
+    ]
+
+
+def test_judger_failure_persists_canonical_failure_once():
+    controller, manager, sink, _ = _judged_reconciliation_controller(status="failure")
+
+    assert controller.observe_judger_terminal() is True
+    assert controller.reconcile_judger_terminal() is True
+    assert controller.reconcile_judger_terminal() is True
+
+    snapshot = manager.runtime_task_store.snapshot()
+    assert snapshot["summary"]["terminal_state"] == "failure"
+    assert snapshot["nodes"][0]["lifecycle"]["status"] == Task.failure
+    status_events = [event for event in sink.events if event["event_type"] == "task_status_changed"]
+    assert len(status_events) == 1
+    assert controller.shutdown_event.is_set() is True
+    assert controller._first_failure[2]["thread"] == "external_judger"
+
+
+def test_judger_payload_attempt_mismatch_is_rejected():
+    controller, manager, _, _ = _judged_reconciliation_controller()
+    controller.env.get_score = lambda: {
+        "attempt_id": "stale-attempt",
+        "task_name": "runtime-task-a",
+        "status": "success",
+        "score": 100,
+    }
+
+    with pytest.raises(ControllerShutdownError, match="attempt mismatch"):
+        controller.observe_judger_terminal()
+
+    assert manager.runtime_task_store.snapshot()["summary"]["terminal_state"] == "running"
+
+
+@pytest.mark.parametrize("task_count", [0, 2])
+def test_judger_terminal_requires_exactly_one_running_task(task_count):
+    controller, _, _, _ = _judged_reconciliation_controller(task_count=task_count)
+    controller.observe_judger_terminal()
+
+    with pytest.raises(ControllerShutdownError, match=f"found {task_count}"):
+        controller.reconcile_judger_terminal()
+
+
+def test_judger_success_does_not_publish_while_future_can_mutate_environment():
+    release = threading.Event()
+    running = threading.Event()
+
+    def active_step():
+        running.set()
+        release.wait()
+        return "done", "detail"
+
+    controller, manager, _, task = _judged_reconciliation_controller()
+    future = controller.executor.submit(active_step)
+    assert running.wait(1)
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+        started_at=time.time(),
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller.shutdown_grace_period = 0
+    controller.cancellation_grace_period = 0
+    controller.observe_judger_terminal()
+
+    try:
+        with pytest.raises(ControllerShutdownError, match="remained active"):
+            controller.reconcile_judger_terminal()
+    finally:
+        release.set()
+        future.result(timeout=1)
+        controller.executor.shutdown(wait=True)
+
+    snapshot = manager.runtime_task_store.snapshot()
+    assert snapshot["nodes"][0]["lifecycle"]["status"] == Task.running
+    assert snapshot["nodes"][0]["lifecycle"]["active_agents"] == ["Alice"]
+    assert controller.shutdown_event.is_set() is False
 
 
 def test_non_cooperative_controller_thread_has_bounded_incomplete_shutdown():
@@ -473,6 +595,37 @@ def test_non_cooperative_timeout_run_checkpoints_running_lifecycle():
     assert sink.events[-1]["event_type"] == "run_failed"
 
 
+def _judged_reconciliation_controller(status="success", task_count=1):
+    controller, _, sink = _controller()
+    manager = TaskManager(silent=True, event_sink=sink)
+    tasks = []
+    for index in range(task_count):
+        task = Task(f"Judged task {index}", {})
+        task.candidate_list = ["Alice"]
+        task.number = 1
+        tasks.append(task)
+    manager.set_task_list_from_decomposition(tasks)
+    projected_tasks = list(manager.graph.vertex)
+    for task in projected_tasks:
+        manager.mark_task_running(task, ["Alice"])
+    sink.events.clear()
+    controller.task_manager = manager
+    controller.env = SimpleNamespace(
+        attempt_id="attempt-a",
+        task_name="runtime-task-a",
+        is_task_complete=lambda: True,
+        get_score=lambda: {
+            "attempt_id": "attempt-a",
+            "task_name": "runtime-task-a",
+            "status": status,
+            "score": 100 if status == "success" else 0,
+            "progress": 100 if status == "success" else 0,
+        },
+        stop=lambda: None,
+    )
+    return controller, manager, sink, projected_tasks[0] if projected_tasks else None
+
+
 def _controller():
     controller = object.__new__(GlobalController)
     controller.logger = logging.getLogger("test-controller-shutdown")
@@ -482,7 +635,13 @@ def _controller():
     controller._controller_threads = []
     controller._run_started = False
     controller._terminal_shutdown_lock = threading.Lock()
-    controller._judged_task_complete = False
+    controller._judger_terminal_observed = False
+    controller._judger_terminal_payload = None
+    controller._judger_terminal_observed_at = None
+    controller._judger_terminal_reconciled = False
+    controller.controller_state = GlobalController.STATE_RUNNING
+    controller.shutdown_complete = False
+    controller.shutdown_context = None
     controller.shutdown_grace_period = 0.2
     controller.executor = ThreadPoolExecutor(max_workers=1)
     controller.executor.submit(lambda: None).result(timeout=2)

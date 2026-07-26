@@ -955,17 +955,19 @@ def handle(this):
                     else:
                         efficiency = max_action_time / action_time
                     # 给出结束信号和写入文件
-                    atomic_write_json(run_result_dir / "score.json", {
-                            "attempt_id": config.get("attempt_id"),
-                            "task_name": task_name,
-                            "status": "failure",
-                            "complexity_score": complexity_score,
-                            "efficiency": efficiency,
-                            "balance": balance,
-                            "use_time": calculate_action_time(),
-                            "end_reason": "max iteration out",
-                            "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        })
+                    failure_payload = {
+                        "attempt_id": config.get("attempt_id"),
+                        "task_name": task_name,
+                        "status": "failure",
+                        "complexity_score": complexity_score,
+                        "efficiency": efficiency,
+                        "balance": balance,
+                        "use_time": calculate_action_time(),
+                        "end_reason": "max iteration out",
+                        "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time)),
+                    }
+                    atomic_write_json(run_result_dir / "score.json", failure_payload)
+                    atomic_write_json(runtime_paths.score, failure_payload)
                     atomic_write_json(run_result_dir / "config.json", config)
                     atomic_write_json(runtime_paths.load_status, {"status": "end"})
                 if now_iter >= max_iter: 

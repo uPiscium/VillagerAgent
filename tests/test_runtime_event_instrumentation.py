@@ -82,22 +82,22 @@ def test_sink_exception_does_not_change_assignment_result() -> None:
     assert list(controller.assignment) == ["Alice"]
 
 
-def test_controller_stops_environment_at_judged_terminal_status() -> None:
+def test_controller_shutdown_query_does_not_stop_judged_environment() -> None:
     stopped = []
     controller = object.__new__(GlobalController)
     controller.shutdown_event = threading.Event()
     controller._terminal_shutdown_lock = threading.Lock()
-    controller._judged_task_complete = False
+    controller._judger_terminal_observed = False
     controller.logger = logging.getLogger("terminal-status-test")
     controller.env = SimpleNamespace(
         is_task_complete=lambda: True,
         stop=lambda: stopped.append(True),
     )
 
-    assert controller.should_shutdown() is True
-    assert controller.shutdown_event.is_set()
-    assert controller._judged_task_complete is True
-    assert stopped == [True]
+    assert controller.should_shutdown() is False
+    assert not controller.shutdown_event.is_set()
+    assert controller._judger_terminal_observed is False
+    assert stopped == []
 
 
 def test_experiment_emits_run_lifecycle_without_extra_runtime_work(tmp_path: Path) -> None:
