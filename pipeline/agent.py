@@ -137,17 +137,20 @@ class BaseAgent:
         with open(os.path.join(root, f"{self.name}_reflect.json"), "w") as f:
             json.dump(self.reflect_info, f, indent=4)
 
+    def supports_cooperative_cancellation(self) -> bool:
+        return (
+            not BaseAgent._virtual_debug
+            and self.RL_mode == ""
+            and isinstance(self.llm, VLLMLanguageModel)
+        )
+
     def step(self, task:Task, cancellation_token=None) -> (str, dict):
         '''
         take an action and return the feedback and detail
         cancellation_token is supported only by the local VLLM path.
         return: final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
         '''
-        local_model_step = (
-            not BaseAgent._virtual_debug
-            and self.RL_mode == ""
-            and isinstance(self.llm, VLLMLanguageModel)
-        )
+        local_model_step = self.supports_cooperative_cancellation()
         if cancellation_token is not None and not local_model_step:
             raise ValueError("cancellation_token is only supported for local VLLM agent steps")
 
@@ -555,6 +558,8 @@ class BaseAgent:
                 "model_attempts": model_attempts,
                 "successful_actions": successful_actions,
             }
+            if reason == "cancelled":
+                failure["cancellation_acknowledged"] = True
             if last_failure is not None:
                 failure["last_failure"] = last_failure
             feedback = {
@@ -690,6 +695,9 @@ class BaseAgent:
                     fail("action_budget_exhausted", "Local agent action budget exhausted.")
         finally:
             self.IDLE = True
+
+        if is_cancelled() and detail.get("failure", {}).get("reason") != "cancelled":
+            fail("cancelled", "Local agent execution was cancelled.")
 
         status = self.env.agent_status(self.name)
         self.data_manager.update_database(AgentFeedback(task, detail, status).to_json())

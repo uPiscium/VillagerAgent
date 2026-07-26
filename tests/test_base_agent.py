@@ -229,7 +229,9 @@ def test_local_step_cancellation_prevents_another_tool_action():
     assert llm.calls == 1
     assert feedback["status"] is False
     assert detail["failure"]["reason"] == "cancelled"
+    assert detail["failure"]["cancellation_acknowledged"] is True
     assert detail["failure"]["successful_actions"] == 1
+    assert [action["action"]["tool"] for action in detail["action_list"]] == ["inspect"]
 
 
 def test_local_step_acknowledges_cancellation_at_action_budget_boundary():
