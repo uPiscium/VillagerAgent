@@ -663,6 +663,7 @@ def _execute_real_runtime(
         runtime_result_path=str(runtime_result_path),
         task_scenario=config.get("task_scenario"),
         runtime_event_path=str(runtime_event_path) if runtime_event_path is not None else None,
+        emit_controller_terminal_event=False,
     )
 
 

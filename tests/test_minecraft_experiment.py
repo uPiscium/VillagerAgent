@@ -244,6 +244,7 @@ def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monke
     assert result == {"score": {}}
     assert captured["args"][14] == config["evaluation_arg"]
     assert captured["kwargs"]["task_scenario"] == "move"
+    assert captured["kwargs"]["emit_controller_terminal_event"] is False
 
 
 def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, monkeypatch):
