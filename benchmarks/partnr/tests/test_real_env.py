@@ -199,10 +199,83 @@ def test_official_timeout_preserves_missing_episode_accounting(tmp_path, monkeyp
 
     result = run_official_gate(runtime, mode="step-zero")
 
-    assert result["status"] == "timed_out"
+    assert result["subprocess_status"] == "timed_out"
+    assert result["status"] == "failed"
     assert result["returncode"] is None
     assert result["stdout"] == "partial"
     assert result["official_metrics"]["missing_episode_ids"] == ["0"]
+
+
+def test_returncode_zero_with_missing_records_fails_require_ready(tmp_path, monkeypatch):
+    runtime = _write_fixture_runtime(tmp_path)
+    monkeypatch.setattr(
+        real_smoke,
+        "inspect_real_preflight",
+        lambda _runtime: {"ready": True, "missing": []},
+    )
+    monkeypatch.setattr(
+        real_smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    output = tmp_path / "gate.json"
+
+    returncode = real_smoke.main([
+        "--mode", "bounded",
+        "--source-root", str(runtime.source_root),
+        "--dataset-path", str(runtime.dataset_path),
+        "--scene-root", str(runtime.scene_root),
+        "--runtime-output", str(runtime.output_dir),
+        "--episode-limit", "4",
+        "--require-ready",
+        "--output", str(output),
+    ])
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert returncode == 2
+    assert payload["subprocess_status"] == "completed"
+    assert payload["status"] == "failed"
+    assert payload["official_metrics"]["missing_episode_ids"] == ["0", "1", "2", "3"]
+
+
+@pytest.mark.parametrize(
+    ("success_by_episode", "expected_status"),
+    [
+        ({"0": True, "1": False, "2": True, "3": True}, "failed"),
+        ({"0": True, "1": True, "2": True, "3": True}, "completed"),
+    ],
+)
+def test_gate_validates_every_expected_episode(
+    tmp_path, monkeypatch, success_by_episode, expected_status
+):
+    runtime = _write_fixture_runtime(tmp_path)
+    stats = runtime.output_dir / "bounded_heuristic/run/stats"
+    stats.mkdir(parents=True)
+    for episode_id, success in success_by_episode.items():
+        (stats / f"{episode_id}.json").write_text(
+            json.dumps({"success": success, "stats": "{}"}), encoding="utf-8"
+        )
+    monkeypatch.setattr(
+        real_smoke,
+        "inspect_real_preflight",
+        lambda _runtime: {"ready": True, "missing": []},
+    )
+    monkeypatch.setattr(
+        real_smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    result = run_official_gate(runtime, mode="bounded")
+
+    assert result["subprocess_status"] == "completed"
+    assert result["status"] == expected_status
+    assert result["official_metrics"]["exact_episode_accounting"] is True
+    assert result["official_metrics"]["failed_episode_ids"] == (
+        [] if expected_status == "completed" else ["1"]
+    )
+    assert result["performance_claim"] is False
+    assert result["baseline_classification"] == "official_oracle_heuristic"
 
 
 def test_runtime_rejects_unbounded_limits():

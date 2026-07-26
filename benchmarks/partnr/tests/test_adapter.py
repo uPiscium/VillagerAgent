@@ -1,7 +1,9 @@
 import json
 
+import pytest
+
 from benchmarks.partnr.adapter import PARTNRAdapter, PARTNRConfig
-from benchmarks.partnr.fixture_env import fixture_partnr_env_factory
+from benchmarks.partnr.fixture_env import FixturePARTNREnvironment, fixture_partnr_env_factory
 from benchmarks.partnr.smoke import run_fixture_smoke
 
 
@@ -97,6 +99,41 @@ def test_tool_failure_feedback_and_recovery_are_recorded():
     assert adapter.final_metrics()["recovery_after_failure_rate"] == 1.0
 
 
+def test_nonterminating_environment_stops_at_step_budget():
+    class NonterminatingEnvironment(FixturePARTNREnvironment):
+        def step(self, **kwargs):
+            observations, _done, info = super().step(**kwargs)
+            return observations, False, info
+
+    adapter = PARTNRAdapter(
+        config=PARTNRConfig(
+            instruction="Move the apple into the basket.",
+            scene_id="fixture_scene",
+            max_steps=2,
+        ),
+        env_factory=NonterminatingEnvironment,
+    )
+    adapter.reset(episode_id="budget", seed=47668090)
+    navigate = next(
+        action for action in adapter.get_legal_actions("agent_0")
+        if action.action_type == "Navigate"
+    )
+
+    adapter.execute_action("agent_0", navigate)
+    adapter.execute_action("agent_0", navigate)
+
+    assert adapter.is_terminal() is True
+    assert adapter.get_legal_actions("agent_0") == ()
+    assert adapter.env.steps == 2
+    with pytest.raises(RuntimeError, match="budget is exhausted"):
+        adapter.execute_action("agent_0", navigate)
+    assert adapter.env.steps == 2
+    metrics = adapter.final_metrics()
+    assert metrics["task_success"] is False
+    assert metrics["environment_terminated"] is False
+    assert metrics["budget_exhausted"] is True
+
+
 def test_action_candidate_dag_records_tool_requirements():
     adapter = _adapter()
 
@@ -120,6 +157,8 @@ def test_dependency_free_fixture_smoke_completes_without_performance_claim():
     payload = run_fixture_smoke()
 
     assert payload["metrics"]["task_success"] is True
+    assert payload["metrics"]["environment_terminated"] is True
+    assert payload["metrics"]["budget_exhausted"] is False
     assert payload["metrics"]["task_percent_complete"] == 1.0
     assert payload["metrics"]["failed_action_count"] == 1
     assert payload["metrics"]["recovered_failure_count"] == 1

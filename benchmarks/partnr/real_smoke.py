@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import gzip
 import json
 import os
@@ -49,14 +50,21 @@ def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, A
             check=False,
         )
         returncode = completed.returncode
-        status = "completed" if returncode == 0 else "failed"
+        subprocess_status = "completed" if returncode == 0 else "failed"
         stdout = completed.stdout
         stderr = completed.stderr
     except subprocess.TimeoutExpired as exc:
         returncode = None
-        status = "timed_out"
+        subprocess_status = "timed_out"
         stdout = _subprocess_text(exc.stdout)
         stderr = _subprocess_text(exc.stderr)
+    official_metrics = _collect_official_metrics(runtime, mode)
+    gate_completed = (
+        subprocess_status == "completed"
+        and bool(official_metrics["expected_episode_ids"])
+        and official_metrics["exact_episode_accounting"]
+        and not official_metrics["failed_episode_ids"]
+    )
     result = {
         "schema_version": 1,
         "benchmark": "partnr",
@@ -68,11 +76,12 @@ def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, A
         "command": command,
         "timeout_seconds": runtime.wall_timeout_seconds,
         "returncode": returncode,
-        "status": status,
+        "subprocess_status": subprocess_status,
+        "status": "completed" if gate_completed else "failed",
         "stdout": stdout[-20000:],
         "stderr": stderr[-20000:],
     }
-    result["official_metrics"] = _collect_official_metrics(runtime, mode)
+    result["official_metrics"] = official_metrics
     return result
 
 
@@ -101,12 +110,21 @@ def _collect_official_metrics(runtime: PARTNRRuntimeConfig, mode: str) -> dict[s
     completed_ids = [record["episode_id"] for record in records]
     successful_ids = [record["episode_id"] for record in records if record["success"]]
     failed_ids = [record["episode_id"] for record in records if not record["success"]]
+    expected_counts = Counter(expected_ids)
+    completed_counts = Counter(completed_ids)
     return {
         "expected_episode_ids": expected_ids,
         "completed_episode_ids": completed_ids,
         "successful_episode_ids": successful_ids,
         "failed_episode_ids": failed_ids,
         "missing_episode_ids": [episode_id for episode_id in expected_ids if episode_id not in completed_ids],
+        "unexpected_episode_ids": [
+            episode_id for episode_id in completed_ids if episode_id not in expected_counts
+        ],
+        "duplicate_episode_ids": sorted(
+            episode_id for episode_id, count in completed_counts.items() if count > 1
+        ),
+        "exact_episode_accounting": completed_counts == expected_counts,
         "record_count": len(records),
         "records": records,
     }
