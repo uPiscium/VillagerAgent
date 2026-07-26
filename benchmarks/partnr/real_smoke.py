@@ -24,12 +24,18 @@ from benchmarks.partnr.real_env import (
 
 
 def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, Any]:
+    if mode == "step-zero":
+        attempt_prefix = "step-zero-"
+    elif mode == "bounded":
+        attempt_prefix = "bounded-"
+    else:
+        raise ValueError("PARTNR official gate mode must be 'step-zero' or 'bounded'.")
     preflight = inspect_real_preflight(runtime)
     if not preflight["ready"]:
         raise RuntimeError("PARTNR real preflight failed: " + ", ".join(preflight["missing"]))
     attempts_dir = runtime.output_dir / "attempts"
     attempts_dir.mkdir(parents=True, exist_ok=True)
-    attempt_output = Path(tempfile.mkdtemp(prefix=f"{mode}-", dir=attempts_dir))
+    attempt_output = Path(tempfile.mkdtemp(prefix=attempt_prefix, dir=attempts_dir))
     attempt_runtime = replace(runtime, output_dir=attempt_output)
     episode_limit = 1 if mode == "step-zero" else runtime.episode_limit
     subset = attempt_output / "inputs" / f"val_mini_first_{episode_limit}.json.gz"

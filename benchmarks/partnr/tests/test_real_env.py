@@ -206,6 +206,26 @@ def test_official_timeout_preserves_missing_episode_accounting(tmp_path, monkeyp
     assert result["official_metrics"]["missing_episode_ids"] == ["0"]
 
 
+@pytest.mark.parametrize(
+    "mode",
+    ("", "step_zero", "../bounded", "bounded/../../outside", "/tmp/bounded"),
+)
+def test_official_gate_rejects_invalid_mode_before_filesystem_access(
+    tmp_path, monkeypatch, mode
+):
+    runtime = _write_fixture_runtime(tmp_path)
+
+    def unexpected_preflight(_runtime):
+        raise AssertionError("preflight must not run for an invalid mode")
+
+    monkeypatch.setattr(real_smoke, "inspect_real_preflight", unexpected_preflight)
+
+    with pytest.raises(ValueError, match="must be 'step-zero' or 'bounded'"):
+        run_official_gate(runtime, mode=mode)
+
+    assert not runtime.output_dir.exists()
+
+
 def test_returncode_zero_with_missing_records_fails_require_ready(tmp_path, monkeypatch):
     runtime = _write_fixture_runtime(tmp_path)
     stale_stats = runtime.output_dir / "bounded_heuristic/old/stats"
