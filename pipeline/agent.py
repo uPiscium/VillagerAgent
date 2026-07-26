@@ -18,6 +18,8 @@ import numpy as np
 import threading
 import torch
 import platform
+import math
+from numbers import Integral, Real
 from model.utils import extract_info
 
 class AgentFeedback:
@@ -44,8 +46,15 @@ class BaseAgent:
     to_json: return the json format of the agent
     '''
     _virtual_debug = False
+    MAX_LOCAL_INTER_ACTION_DELAY = 5.0
+    LOCAL_MODEL_CONFIG_KEYS = (
+        "local_model_max_attempts",
+        "local_model_max_actions",
+        "local_model_inter_action_delay",
+    )
     def __init__(self, llm:OpenAILanguageModel , env:VillagerBench, data_manager:DataManager, name:str, logger:logging.Logger = None, silent = False, 
-    RL_mode = "", rl_env = None, rl_model = None, all_tools = [], **kwargs):
+    RL_mode = "", rl_env = None, rl_model = None, all_tools = [], local_model_max_attempts = 10,
+    local_model_max_actions = 5, local_model_inter_action_delay = 0.0, **kwargs):
         self.env = env
         self.name = name
         self.data_manager = data_manager
@@ -55,6 +64,35 @@ class BaseAgent:
         self.RL_mode = RL_mode
         self.logger = logger
         self.all_tools = all_tools
+        if (
+            isinstance(local_model_max_attempts, bool)
+            or not isinstance(local_model_max_attempts, Integral)
+            or local_model_max_attempts <= 0
+        ):
+            raise ValueError("local_model_max_attempts must be a positive integer")
+        if (
+            isinstance(local_model_max_actions, bool)
+            or not isinstance(local_model_max_actions, Integral)
+            or local_model_max_actions <= 0
+        ):
+            raise ValueError("local_model_max_actions must be a positive integer")
+        if isinstance(local_model_inter_action_delay, bool) or not isinstance(
+            local_model_inter_action_delay, Real
+        ):
+            raise ValueError("local_model_inter_action_delay must be a finite non-negative number")
+        try:
+            local_model_inter_action_delay = float(local_model_inter_action_delay)
+        except (OverflowError, TypeError, ValueError) as error:
+            raise ValueError(
+                "local_model_inter_action_delay must be a finite non-negative number"
+            ) from error
+        if not math.isfinite(local_model_inter_action_delay) or local_model_inter_action_delay < 0:
+            raise ValueError("local_model_inter_action_delay must be a finite non-negative number")
+        self.local_model_max_attempts = local_model_max_attempts
+        self.local_model_max_actions = local_model_max_actions
+        self.local_model_inter_action_delay = min(
+            local_model_inter_action_delay, self.MAX_LOCAL_INTER_ACTION_DELAY
+        )
         if not env.running:
             BaseAgent._virtual_debug = True
 
@@ -99,11 +137,20 @@ class BaseAgent:
         with open(os.path.join(root, f"{self.name}_reflect.json"), "w") as f:
             json.dump(self.reflect_info, f, indent=4)
 
-    def step(self, task:Task) -> (str, dict):
+    def step(self, task:Task, cancellation_token=None) -> (str, dict):
         '''
         take an action and return the feedback and detail
+        cancellation_token is supported only by the local VLLM path.
         return: final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
         '''
+        local_model_step = (
+            not BaseAgent._virtual_debug
+            and self.RL_mode == ""
+            and isinstance(self.llm, VLLMLanguageModel)
+        )
+        if cancellation_token is not None and not local_model_step:
+            raise ValueError("cancellation_token is only supported for local VLLM agent steps")
+
         if BaseAgent._virtual_debug:
             return self.virtual_step(task)
 
@@ -111,7 +158,7 @@ class BaseAgent:
             return self.rl_step(task)
         else:
             if isinstance(self.llm, VLLMLanguageModel):
-                return self.local_step(task)
+                return self.local_step(task, cancellation_token=cancellation_token)
             else:
                 return self.normal_step(task)
         
@@ -431,7 +478,7 @@ class BaseAgent:
         # self.data_manager.save()
         return feedback, detail
     
-    def local_step(self, task:Task) -> (str, dict):
+    def local_step(self, task:Task, cancellation_token=None) -> (str, dict):
         self.logger.warning("=" * 20 + " LOCAL Step " + "=" * 20)
         self.logger.warning(f"agent {self.name}")
         self.logger.warning("=" * 20 + " LOCAL Step " + "=" * 20)
@@ -477,87 +524,174 @@ class BaseAgent:
         self.logger.info(f"{self.history_action_list}")
         self.logger.info(f"other agents: {self.other_agents()}")
         self.logger.info(f"{self.name} status:\n {self.data_manager.query_history(self.name)}")
-        max_retry = 3
-
         instruction = f"Your name is {self.name}.\n{task_str}"
         system_prompt = "You are Minecraft BaseAgent. You need to complete the task by following the environment feedback."
 
         prompts = [instruction]    
 
         action_list = []
-
-        max_steps = 5
-        self.IDLE = False
-        while max_steps > 0:
-            # try:
-            response = self.llm.few_shot_generate_thoughts(system_prompt, prompts, temperature=0.2, cache_enabled=False, max_tokens=8000, json_check=False)
-        
-            raw_response = response
-
-            response = response.split("Action: ")[-1].strip()
-            from ast import literal_eval
-            def parse_json_3(json_str):
-                try:
-                    return literal_eval(json_str)
-                except (ValueError, SyntaxError) as e:
-                    print(f"解析错误: {e}")
-                    return None
-            # print(response)
-            response = parse_json_3(response)
-            if response is None:
-                self.logger.error(f"Error: {raw_response}")
-                continue
-
-            func_name = response["tool"]
-            tool_input = response["tool_input"]
-            print(response)
-            # print(func_name)
-            # print(tool_input)
-            final_answer = None
-            if func_name == 'stop':
-                max_steps = 0
-                final_answer = tool_input['final_answer']
-                break
-            
-            target_tool = None
-            for tool in self.all_tools:
-                if tool.name == func_name:
-                    target_tool = tool
-                    break
-            if target_tool is None:
-                continue
-            feedback = target_tool(tool_input)
-            time.sleep(100)
-
-            # except KeyboardInterrupt:
-            #     self.logger.info("KeyboardInterrupt")
-            #     raise KeyboardInterrupt
-            # except ConnectionError:
-            #     self.logger.error("ConnectionError")
-            #     raise ConnectionError
-            # except ConnectionRefusedError:
-            #     self.logger.error("ConnectionRefusedError")
-            #     raise ConnectionRefusedError
-            # except Exception as e:
-            #     self.logger.error(f"Error: {e}")
-            #     continue
-
-            prompts.append(raw_response)
-            user = f"Feedback: {feedback.get('message')}\nStatus: {feedback.get('status')}\nNew Events: {feedback.get('new_events')}"
-            
-            action_list.append({"action": response, "feedback": feedback.get('message')})
-
-            prompts.append(user)
-            print(feedback)
-            final_answer = user
-                
-            max_steps -= 1
-
-
-        self.IDLE = True
-        status = self.env.agent_status(self.name)
-
+        feedback = {"message": "", "status": False, "new_events": []}
+        final_answer = ""
         detail = {"input": instruction, "action_list": action_list, "final_answer": final_answer}
+        model_attempts = 0
+        successful_actions = 0
+        last_failure = None
+
+        def is_cancelled():
+            if cancellation_token is None:
+                return False
+            if callable(cancellation_token):
+                return bool(cancellation_token())
+            is_set = getattr(cancellation_token, "is_set", None)
+            if not callable(is_set):
+                raise TypeError("cancellation_token must be callable or expose is_set()")
+            return bool(is_set())
+
+        def fail(reason, message):
+            nonlocal feedback, final_answer, detail
+            failure = {
+                "reason": reason,
+                "message": message,
+                "model_attempts": model_attempts,
+                "successful_actions": successful_actions,
+            }
+            if last_failure is not None:
+                failure["last_failure"] = last_failure
+            feedback = {
+                "message": message,
+                "status": False,
+                "new_events": [],
+                "error": failure,
+            }
+            final_answer = message
+            detail = {
+                "input": instruction,
+                "action_list": action_list,
+                "final_answer": final_answer,
+                "failure": failure,
+            }
+
+        self.IDLE = False
+        try:
+            while (
+                model_attempts < self.local_model_max_attempts
+                and successful_actions < self.local_model_max_actions
+            ):
+                if is_cancelled():
+                    fail("cancelled", "Local agent execution was cancelled.")
+                    break
+
+                model_attempts += 1
+                try:
+                    raw_response = self.llm.few_shot_generate_thoughts(
+                        system_prompt,
+                        prompts,
+                        temperature=0.2,
+                        cache_enabled=False,
+                        max_tokens=8000,
+                        json_check=False,
+                    )
+                except Exception as error:
+                    last_failure = {"reason": "model_exception", "message": str(error)}
+                    self.logger.error(f"Local model error: {error}")
+                    continue
+
+                if is_cancelled():
+                    fail("cancelled", "Local agent execution was cancelled.")
+                    break
+
+                from ast import literal_eval
+                try:
+                    response = literal_eval(raw_response.split("Action: ")[-1].strip())
+                    if not isinstance(response, dict):
+                        raise ValueError("action must be a dictionary")
+                    func_name = response["tool"]
+                    tool_input = response["tool_input"]
+                    if not isinstance(func_name, str) or not isinstance(tool_input, dict):
+                        raise ValueError("tool must be a string and tool_input must be a dictionary")
+                except (AttributeError, KeyError, SyntaxError, TypeError, ValueError) as error:
+                    last_failure = {"reason": "malformed_model_output", "message": str(error)}
+                    self.logger.error(f"Malformed local model output: {raw_response}")
+                    continue
+
+                if func_name == "stop":
+                    if "final_answer" not in tool_input:
+                        last_failure = {
+                            "reason": "malformed_model_output",
+                            "message": "stop tool_input is missing final_answer",
+                        }
+                        continue
+                    final_answer = str(tool_input["final_answer"])
+                    feedback = {"message": final_answer, "status": True, "new_events": []}
+                    detail["final_answer"] = final_answer
+                    break
+
+                target_tool = next((tool for tool in self.all_tools if tool.name == func_name), None)
+                if target_tool is None:
+                    last_failure = {
+                        "reason": "unknown_tool",
+                        "message": f"Unknown tool: {func_name}",
+                    }
+                    continue
+
+                if is_cancelled():
+                    fail("cancelled", "Local agent execution was cancelled.")
+                    break
+
+                try:
+                    tool_feedback = target_tool(tool_input)
+                except Exception as error:
+                    last_failure = {"reason": "tool_exception", "message": str(error)}
+                    fail("tool_exception", f"Tool {func_name} failed: {error}")
+                    break
+
+                required_feedback = {"message", "status"}
+                if not isinstance(tool_feedback, dict) or not required_feedback.issubset(tool_feedback):
+                    missing = (
+                        sorted(required_feedback - set(tool_feedback))
+                        if isinstance(tool_feedback, dict)
+                        else sorted(required_feedback)
+                    )
+                    last_failure = {
+                        "reason": "invalid_tool_feedback",
+                        "message": f"Tool {func_name} feedback is missing fields: {', '.join(missing)}",
+                    }
+                    fail("invalid_tool_feedback", last_failure["message"])
+                    break
+
+                feedback = dict(tool_feedback)
+                feedback.setdefault("new_events", [])
+                successful_actions += 1
+                prompts.append(raw_response)
+                user = f"Feedback: {feedback['message']}\nStatus: {feedback['status']}\nNew Events: {feedback['new_events']}"
+                action_list.append({"action": response, "feedback": feedback["message"]})
+                prompts.append(user)
+                final_answer = user
+                detail["final_answer"] = final_answer
+
+                if is_cancelled():
+                    fail("cancelled", "Local agent execution was cancelled.")
+                    break
+
+                if (
+                    self.local_model_inter_action_delay > 0
+                    and model_attempts < self.local_model_max_attempts
+                    and successful_actions < self.local_model_max_actions
+                ):
+                    wait = getattr(cancellation_token, "wait", None)
+                    if callable(wait):
+                        wait(self.local_model_inter_action_delay)
+                    else:
+                        time.sleep(self.local_model_inter_action_delay)
+            else:
+                if model_attempts >= self.local_model_max_attempts:
+                    fail("model_attempt_budget_exhausted", "Local model attempt budget exhausted.")
+                else:
+                    fail("action_budget_exhausted", "Local agent action budget exhausted.")
+        finally:
+            self.IDLE = True
+
+        status = self.env.agent_status(self.name)
         self.data_manager.update_database(AgentFeedback(task, detail, status).to_json())
 
         # self.data_manager.save()
