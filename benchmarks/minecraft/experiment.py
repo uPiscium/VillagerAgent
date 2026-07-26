@@ -1008,7 +1008,12 @@ def _task_from_config(config: dict, task_config: dict) -> Task:
     task.candidate_list = task_config.get("candidate_agents") or _agent_names(agent_num)
     task._agent = task_config.get("assigned_agents", [])
     task.number = int(task_config.get("number", max(1, min(agent_num, 1))))
-    task._pre_idxs = [int(index) for index in task_config.get("required_subtasks", task_config.get("required subtasks", []))]
+    dependency_key = next(
+        (key for key in ("required_subtasks", "required subtasks") if key in task_config),
+        None,
+    )
+    task._pre_idxs = list(task_config.get(dependency_key, [])) if dependency_key else []
+    task._pre_idxs_explicit = dependency_key is not None
     return task
 
 

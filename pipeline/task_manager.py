@@ -10,13 +10,26 @@ from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_even
 from model.openai_models import OpenAILanguageModel
 from pipeline.utils import *
 from typing import Union
-import random
 import json
 import time
 import logging
+from functools import wraps
 
 TASK_MANAGER_WAIT_TIME = 1
 PARTIAL_GRAPH_TASK_NUM = 5
+
+
+def _reset_status_after_task_management(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        self.status = TaskManager.running
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self.status = TaskManager.idle
+
+    return wrapped
+
 
 class TaskManager:
     '''
@@ -146,17 +159,9 @@ class TaskManager:
         Generate the graph of the task list. Transfer the task list to a graph
         - task_list: list of Task
         '''
-        graph = Graph()
-
-        for task in task_list:
-            graph.add_node(task)
-        for t_id, task in enumerate(task_list):
-            for idx in task._pre_idxs:
-                if idx > 0 and idx < len(task_list):
-                    graph.add_edge(task_list[idx-1], task)
-            if len(task._pre_idxs) == 0 and t_id > 0:
-                graph.add_edge(task_list[t_id-1], task)
-        return graph
+        store = RuntimeTaskDAGStore()
+        store.load_tasks_from_decomposition(task_list)
+        return store.to_task_graph_projection()
 
     def set_task_list_from_decomposition(self, task_list: list[Task]) -> None:
         self.runtime_task_store.load_tasks_from_decomposition(task_list)
@@ -220,11 +225,11 @@ class TaskManager:
     '''
         Public API
     '''
+    @_reset_status_after_task_management
     def init_task(self, description:str, document:dict = {}):
         # task append
         # query state
         # query experience
-        self.status = TaskManager.running
         if isinstance(self.llm, OpenAILanguageModel):
             # print(self.llm.api_base)
             pass
@@ -283,7 +288,8 @@ class TaskManager:
             else:
                 subtask.candidate_list = subtask_data["candidate list"]
                 subtask.number = int(subtask_data["minimum required agents"])
-            subtask._pre_idxs = [int(idx) for idx in subtask_data["required subtasks"]]
+            subtask._pre_idxs = list(subtask_data["required subtasks"])
+            subtask._pre_idxs_explicit = True
             subtask_list.append(subtask)
 
         self.set_task_list_from_decomposition(subtask_list)
@@ -293,9 +299,6 @@ class TaskManager:
         self.graph.write_graph_to_md("img/" + time_str + ".md")
         # input("press any key to continue")
         self.graph.write_graph_to_json("logs/")
-
-        self.status = TaskManager.idle
-
 
     def query_subtask_list(self) -> [Task]:
         '''
@@ -364,31 +367,19 @@ class TaskManager:
     
     def fill_agents(self, result:[dict], agents:list):
         self.logger.debug(f"fill agents:")
+        agent_names = list(dict.fromkeys(agent.name for agent in agents))
         for res in result:
-            description = str(res["description"]) + str(res["milestones"])
-            for agent in agents:
-                if agent not in agents:
-                    agents.append(agent)
-                    if agent.name.lower() in description.lower() \
-                        and agent.name not in res["assigned agents"]:
-                        res["assigned agents"].append(agent.name)
-        # for subtask node assigned with multiple agents, split the agents with the same task
-        new_result = []
-        for res in result:
-            for agent in res["assigned agents"]:
-                new_res = res.copy()
-                new_res["assigned agents"] = [agent]
-                new_res["id"] = len(new_result) + 1
-                self.logger.debug(f"new_res: {new_res}")
-                new_result.append(new_res)
-        
-        # replace unvalid agent with random agent in the agent list
-        for res in new_result:
-            for idx, agent in enumerate(res["assigned agents"]):
-                if agent not in [agent.name for agent in agents]:
-                    res["assigned agents"][idx] = random.choice(agents).name
-        self.logger.debug(f"fill agents: {new_result}")
-        return new_result
+            assigned_agents = []
+            for agent_name in res["assigned agents"]:
+                if agent_name not in agent_names:
+                    raise ValueError(
+                        f'Unknown assigned agent {agent_name!r} for task {res["description"]!r}'
+                    )
+                if agent_name not in assigned_agents:
+                    assigned_agents.append(agent_name)
+            res["assigned agents"] = assigned_agents
+        self.logger.debug(f"fill agents: {result}")
+        return result
 
     def fill_keys_omit(self, result:[dict], keys:list):
         for res in result:
@@ -490,7 +481,8 @@ class TaskManager:
                 subtask.milestones = subtask_data["milestones"]
                 subtask.candidate_list = subtask_data["candidate list"]
                 subtask.number = int(subtask_data["minimum required agents"])
-                subtask._pre_idxs = [int(idx) for idx in subtask_data["required subtasks"]]
+                subtask._pre_idxs = list(subtask_data["required subtasks"])
+                subtask._pre_idxs_explicit = True
                 subtask_list.append(subtask)
             self.runtime_task_store.replace_task_with_subgraph(origin_task_id, subtask_list)
 
@@ -558,12 +550,12 @@ class TaskManager:
                 self.task_trace_description.pop(idx)
 
 
+    @_reset_status_after_task_management
     def update_task(self, task:Task):
         # task append
         # query state
         # query experience
 
-        self.status = TaskManager.running
         if isinstance(self.llm, OpenAILanguageModel):
             pass
             # print(self.llm.api_base)
@@ -613,10 +605,8 @@ class TaskManager:
             subtask.milestones = subtask_data["milestones"]
             subtask.candidate_list = subtask_data["assigned agents"]
             subtask.number = len(subtask_data["assigned agents"])
-            _pre_idxs = [int(idx) for idx in subtask_data["required subtasks"]]
-            for idx in _pre_idxs:
-                if idx > 0 and idx < len(subtask_list):
-                    subtask._pre_idxs.append(idx)
+            subtask._pre_idxs = list(subtask_data["required subtasks"])
+            subtask._pre_idxs_explicit = True
             subtask_list.append(subtask)
 
         self.set_task_list_from_decomposition(subtask_list)
@@ -626,5 +616,3 @@ class TaskManager:
         self.graph.write_graph_to_md("img/" + time_str + ".md")
         # input("press any key to continue")
         self.graph.write_graph_to_json("logs/")
-
-        self.status = TaskManager.idle

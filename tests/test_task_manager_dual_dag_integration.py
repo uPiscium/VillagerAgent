@@ -1,3 +1,10 @@
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+
+import pipeline.task_manager as task_manager_module
+from pipeline.dual_dag_task_store import TaskDependencyError
 from pipeline.task_manager import TaskManager
 from type_define.graph import Graph, GraphState, Task
 
@@ -114,3 +121,115 @@ def test_task_manager_replan_edits_store_first_and_preserves_history(monkeypatch
     assert node["lifecycle"]["status"] == Task.unknown
     assert manager.graph.vertex[0].id == task.id
     assert manager.graph.vertex[0].description == "Replanned A"
+
+
+def test_initial_decomposition_preserves_complete_multi_agent_assignment(monkeypatch):
+    result = [_decomposition_task("A", ["Alice", "Bob"], [])]
+    manager = _decomposition_manager(monkeypatch, result)
+
+    manager.init_task("parent", {})
+
+    node = manager.runtime_task_store.snapshot()["nodes"][0]
+    assert len(manager.graph.vertex) == 1
+    assert node["lifecycle"]["candidate_agents"] == ["Alice", "Bob"]
+    assert node["lifecycle"]["required_agent_count"] == 2
+    assert manager.graph.vertex[0].candidate_list == ["Alice", "Bob"]
+    assert manager.graph.vertex[0].number == 2
+
+
+def test_initial_decomposition_recovers_idle_status_after_dependency_error(monkeypatch):
+    result = [
+        _decomposition_task("A", ["Alice"], [2]),
+        _decomposition_task("B", ["Bob"], [1]),
+    ]
+    manager = _decomposition_manager(monkeypatch, result)
+
+    with pytest.raises(TaskDependencyError, match="cycle"):
+        manager.init_task("parent", {})
+
+    assert manager.status == TaskManager.idle
+
+
+def test_fill_agents_deduplicates_in_order_and_rejects_unknown_names():
+    manager = TaskManager(silent=True)
+    agents = [SimpleNamespace(name="Alice"), SimpleNamespace(name="Bob")]
+    result = [_decomposition_task("A", ["Bob", "Alice", "Bob"], [])]
+
+    assert manager.fill_agents(result, agents)[0]["assigned agents"] == ["Bob", "Alice"]
+
+    with pytest.raises(ValueError, match="Unknown assigned agent 'Ghost'.*task 'B'"):
+        manager.fill_agents([_decomposition_task("B", ["Ghost"], [])], agents)
+
+
+def test_redecomposition_preserves_chains_branches_parallel_roots_and_projections(monkeypatch):
+    result = [
+        _decomposition_task("A", ["Alice"], []),
+        _decomposition_task("B", ["Bob"], [1]),
+        _decomposition_task("C", ["Alice"], [2]),
+        _decomposition_task("D", ["Bob"], [1]),
+        _decomposition_task("E", ["Alice"], []),
+    ]
+    manager = _decomposition_manager(monkeypatch, result)
+    manager.task_description = "parent"
+    manager.task_document = {}
+
+    manager.update_task(Task("failed", {}))
+
+    expected_edges = [("A", "B"), ("B", "C"), ("A", "D")]
+    store_edges = [
+        (start.description, end.description)
+        for start, end in manager.runtime_task_store.to_task_graph_projection().edge
+    ]
+    compatibility_edges = [(start.description, end.description) for start, end in manager.graph.edge]
+    assert store_edges == expected_edges
+    assert compatibility_edges == expected_edges
+    assert [task.description for task in manager.graph.get_entry_node()] == ["A", "E"]
+
+
+@pytest.mark.parametrize(
+    ("required_subtasks", "message"),
+    [
+        ([[2], [1]], "cycle"),
+        ([[], [3]], "only 2 tasks exist"),
+        ([[], [2]], "self-loop"),
+    ],
+)
+def test_redecomposition_fails_explicitly_for_invalid_dependencies(
+    monkeypatch, required_subtasks, message
+):
+    result = [
+        _decomposition_task("A", ["Alice"], required_subtasks[0]),
+        _decomposition_task("B", ["Bob"], required_subtasks[1]),
+    ]
+    manager = _decomposition_manager(monkeypatch, result)
+    manager.task_description = "parent"
+    manager.task_document = {}
+
+    with pytest.raises(TaskDependencyError, match=message):
+        manager.update_task(Task("failed", {}))
+    assert manager.status == TaskManager.idle
+
+
+def _decomposition_task(description, assigned_agents, required_subtasks):
+    return {
+        "description": description,
+        "milestones": [],
+        "assigned agents": assigned_agents,
+        "required subtasks": required_subtasks,
+        "retrieval paths": [],
+    }
+
+
+def _decomposition_manager(monkeypatch, result):
+    manager = TaskManager(silent=True)
+    manager.agent_list = [SimpleNamespace(name="Alice"), SimpleNamespace(name="Bob")]
+    manager.dm = SimpleNamespace(
+        query_env_with_task=lambda *_args, **_kwargs: "environment",
+        query_history=lambda *_args, **_kwargs: [],
+    )
+    manager.llm = SimpleNamespace(few_shot_generate_thoughts=lambda *_args, **_kwargs: "response")
+    manager.update_history = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(task_manager_module, "extract_info", lambda *_args, **_kwargs: deepcopy(result))
+    monkeypatch.setattr(Graph, "write_graph_to_md", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(Graph, "write_graph_to_json", lambda *_args, **_kwargs: None)
+    return manager
