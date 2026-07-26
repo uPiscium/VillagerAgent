@@ -87,6 +87,7 @@ def test_controller_stops_environment_at_judged_terminal_status() -> None:
     controller = object.__new__(GlobalController)
     controller.shutdown_event = threading.Event()
     controller._terminal_shutdown_lock = threading.Lock()
+    controller._judged_task_complete = False
     controller.logger = logging.getLogger("terminal-status-test")
     controller.env = SimpleNamespace(
         is_task_complete=lambda: True,
@@ -95,6 +96,7 @@ def test_controller_stops_environment_at_judged_terminal_status() -> None:
 
     assert controller.should_shutdown() is True
     assert controller.shutdown_event.is_set()
+    assert controller._judged_task_complete is True
     assert stopped == [True]
 
 

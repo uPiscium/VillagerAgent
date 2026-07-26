@@ -63,6 +63,36 @@ def test_normal_completion_stops_all_threads_executor_and_checkpoints():
     assert [event["event_type"] for event in sink.events] == ["run_completed"]
 
 
+def test_judged_completion_does_not_reclassify_finished_group_as_failure():
+    controller, checkpoints, sink = _controller()
+    task = Task("Judged task", {})
+    task.status = Task.running
+    agent = SimpleNamespace(name="Alice")
+    future = controller.executor.submit(lambda: ("done", "detail"))
+    future.result(timeout=1)
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[agent],
+        futures={"Alice": future},
+        started_at=time.time(),
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller._judged_task_complete = True
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    controller.run()
+
+    assert group.completed is True
+    assert controller.assignment == {}
+    assert controller.task_manager.status_updates == []
+    assert checkpoints == ["checkpoint"]
+    assert [event["event_type"] for event in sink.events] == ["run_completed"]
+
+
 def test_non_cooperative_controller_thread_has_bounded_incomplete_shutdown():
     controller, _, sink = _controller()
     controller.shutdown_grace_period = 0.05
@@ -451,6 +481,8 @@ def _controller():
     controller._first_failure = None
     controller._controller_threads = []
     controller._run_started = False
+    controller._terminal_shutdown_lock = threading.Lock()
+    controller._judged_task_complete = False
     controller.shutdown_grace_period = 0.2
     controller.executor = ThreadPoolExecutor(max_workers=1)
     controller.executor.submit(lambda: None).result(timeout=2)
