@@ -137,6 +137,19 @@ def test_initial_decomposition_preserves_complete_multi_agent_assignment(monkeyp
     assert manager.graph.vertex[0].number == 2
 
 
+def test_initial_decomposition_recovers_idle_status_after_dependency_error(monkeypatch):
+    result = [
+        _decomposition_task("A", ["Alice"], [2]),
+        _decomposition_task("B", ["Bob"], [1]),
+    ]
+    manager = _decomposition_manager(monkeypatch, result)
+
+    with pytest.raises(TaskDependencyError, match="cycle"):
+        manager.init_task("parent", {})
+
+    assert manager.status == TaskManager.idle
+
+
 def test_fill_agents_deduplicates_in_order_and_rejects_unknown_names():
     manager = TaskManager(silent=True)
     agents = [SimpleNamespace(name="Alice"), SimpleNamespace(name="Bob")]
@@ -194,6 +207,7 @@ def test_redecomposition_fails_explicitly_for_invalid_dependencies(
 
     with pytest.raises(TaskDependencyError, match=message):
         manager.update_task(Task("failed", {}))
+    assert manager.status == TaskManager.idle
 
 
 def _decomposition_task(description, assigned_agents, required_subtasks):

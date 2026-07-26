@@ -238,6 +238,17 @@ def test_store_rejects_out_of_range_predecessor_index():
         store.load_tasks_from_decomposition([task])
 
 
+@pytest.mark.parametrize("invalid_index", [True, 1.0, 1.5, "1", None])
+def test_store_rejects_non_integer_predecessor_types(invalid_index):
+    task_a = Task("A", {})
+    task_b = Task("B", {})
+    task_b._pre_idxs = [invalid_index]
+    store = RuntimeTaskDAGStore()
+
+    with pytest.raises(TaskDependencyError, match="non-integer predecessor index"):
+        store.load_tasks_from_decomposition([task_a, task_b])
+
+
 @pytest.mark.parametrize("invalid_index", [0, -1])
 def test_store_rejects_non_positive_predecessor_index(invalid_index):
     task = Task("A", {})
@@ -421,6 +432,22 @@ def test_store_rejects_cyclic_edit_and_rolls_back():
     with pytest.raises(TaskDependencyError, match="cycle"):
         store.replace_task_with_subgraph(tasks[0].id, [cyclic_a, cyclic_b])
     assert store.snapshot() == before
+
+
+@pytest.mark.parametrize("invalid_dependencies", [[[], [3]], [[2], [1]]])
+def test_store_invalid_load_rolls_back_snapshot_and_projection(invalid_dependencies):
+    store, _ = _store_with_chain(3)
+    before_snapshot = store.snapshot()
+    before_projection = _edge_descriptions(store)
+    invalid_tasks = [Task("Invalid A", {}), Task("Invalid B", {})]
+    for task, predecessors in zip(invalid_tasks, invalid_dependencies):
+        task._pre_idxs = predecessors
+
+    with pytest.raises(TaskDependencyError):
+        store.load_tasks_from_decomposition(invalid_tasks)
+
+    assert store.snapshot() == before_snapshot
+    assert _edge_descriptions(store) == before_projection
 
 
 def _store_with_chain(count):

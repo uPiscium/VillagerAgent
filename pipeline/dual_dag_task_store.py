@@ -26,34 +26,34 @@ class RuntimeTaskDAGStore:
         self.mutation_history: list[dict] = []
 
     def load_tasks_from_decomposition(self, tasks: list[Task]) -> None:
-        self.nodes = {}
-        self.edges = []
-        self._task_order = []
-        self.mutation_history = []
-        for task in tasks:
-            self.upsert_task(task)
-        for task_index, task in enumerate(tasks):
-            target_id = self.task_node_id(task)
-            for predecessor_index in self._normalized_predecessor_indexes(task, task_index, len(tasks)):
-                self.add_task_dependency(self.task_node_id(tasks[predecessor_index - 1]), target_id)
-            if (
-                not getattr(task, "_pre_idxs", [])
-                and task_index > 0
-                and not getattr(task, "_pre_idxs_explicit", False)
-            ):
-                self.add_task_dependency(self.task_node_id(tasks[task_index - 1]), target_id)
-        self._validate_acyclic()
+        with self._edit_transaction():
+            self.nodes = {}
+            self.edges = []
+            self._task_order = []
+            self.mutation_history = []
+            for task in tasks:
+                self.upsert_task(task)
+            for task_index, task in enumerate(tasks):
+                target_id = self.task_node_id(task)
+                for predecessor_index in self._normalized_predecessor_indexes(task, task_index, len(tasks)):
+                    self.add_task_dependency(self.task_node_id(tasks[predecessor_index - 1]), target_id)
+                if (
+                    not getattr(task, "_pre_idxs", [])
+                    and task_index > 0
+                    and not getattr(task, "_pre_idxs_explicit", False)
+                ):
+                    self.add_task_dependency(self.task_node_id(tasks[task_index - 1]), target_id)
 
     def load_tasks_from_graph(self, graph: Graph) -> None:
-        self.nodes = {}
-        self.edges = []
-        self._task_order = []
-        self.mutation_history = []
-        for task in graph.vertex:
-            self.upsert_task(task)
-        for predecessor, task in graph.edge:
-            self.add_task_dependency(self.task_node_id(predecessor), self.task_node_id(task))
-        self._validate_acyclic()
+        with self._edit_transaction():
+            self.nodes = {}
+            self.edges = []
+            self._task_order = []
+            self.mutation_history = []
+            for task in graph.vertex:
+                self.upsert_task(task)
+            for predecessor, task in graph.edge:
+                self.add_task_dependency(self.task_node_id(predecessor), self.task_node_id(task))
 
     def upsert_task(self, task: Task) -> str:
         node_id = self.task_node_id(task)
@@ -376,12 +376,11 @@ class RuntimeTaskDAGStore:
         indexes = []
         seen = set()
         for predecessor_index in getattr(task, "_pre_idxs", []) or []:
-            try:
-                normalized = int(predecessor_index)
-            except (TypeError, ValueError) as exc:
+            if isinstance(predecessor_index, bool) or not isinstance(predecessor_index, int):
                 raise TaskDependencyError(
                     f'task "{task.description}" references non-integer predecessor index {predecessor_index!r}'
-                ) from exc
+                )
+            normalized = predecessor_index
             if normalized <= 0:
                 raise TaskDependencyError(
                     f'task "{task.description}" references predecessor index {normalized}, but indexes are 1-based'

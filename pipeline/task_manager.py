@@ -13,9 +13,23 @@ from typing import Union
 import json
 import time
 import logging
+from functools import wraps
 
 TASK_MANAGER_WAIT_TIME = 1
 PARTIAL_GRAPH_TASK_NUM = 5
+
+
+def _reset_status_after_task_management(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        self.status = TaskManager.running
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self.status = TaskManager.idle
+
+    return wrapped
+
 
 class TaskManager:
     '''
@@ -209,11 +223,11 @@ class TaskManager:
     '''
         Public API
     '''
+    @_reset_status_after_task_management
     def init_task(self, description:str, document:dict = {}):
         # task append
         # query state
         # query experience
-        self.status = TaskManager.running
         if isinstance(self.llm, OpenAILanguageModel):
             # print(self.llm.api_base)
             pass
@@ -283,9 +297,6 @@ class TaskManager:
         self.graph.write_graph_to_md("img/" + time_str + ".md")
         # input("press any key to continue")
         self.graph.write_graph_to_json("logs/")
-
-        self.status = TaskManager.idle
-
 
     def query_subtask_list(self) -> [Task]:
         '''
@@ -537,12 +548,12 @@ class TaskManager:
                 self.task_trace_description.pop(idx)
 
 
+    @_reset_status_after_task_management
     def update_task(self, task:Task):
         # task append
         # query state
         # query experience
 
-        self.status = TaskManager.running
         if isinstance(self.llm, OpenAILanguageModel):
             pass
             # print(self.llm.api_base)
@@ -603,5 +614,3 @@ class TaskManager:
         self.graph.write_graph_to_md("img/" + time_str + ".md")
         # input("press any key to continue")
         self.graph.write_graph_to_json("logs/")
-
-        self.status = TaskManager.idle

@@ -13,12 +13,30 @@ from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
     _execute_real_runtime,
     _execute_real_runtime_bounded,
+    _task_graph_from_config,
     _terminate_runtime_process,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
+
+
+@pytest.mark.parametrize("dependency_key", ["required_subtasks", "required subtasks"])
+def test_minecraft_config_preserves_explicit_empty_dependencies_as_parallel(dependency_key):
+    config = {
+        "agent_num": 2,
+        "smoke_tasks": [
+            {"id": "a", "description": "A", dependency_key: []},
+            {"id": "b", "description": "B", dependency_key: []},
+        ],
+    }
+
+    tasks, graph, store = _task_graph_from_config(config)
+
+    assert all(task._pre_idxs_explicit for task in tasks)
+    assert graph.edge == []
+    assert store.to_task_graph_projection().edge == []
 
 
 def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
