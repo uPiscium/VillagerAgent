@@ -9,10 +9,16 @@ from functools import wraps
 import re
 import platform
 
+try:
+    from env.runtime_paths import RuntimePaths, read_json_artifact
+except ImportError:
+    from runtime_paths import RuntimePaths, read_json_artifact
+
 system_type = platform.system().lower()
 # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 os.environ["REQ_TIMEOUT"] = "1800000"
 app = Flask(__name__)
+runtime_paths = RuntimePaths.from_environment()
 # Pickable = False
 
 parser = argparse.ArgumentParser()
@@ -339,9 +345,9 @@ def find():
         if hint:
             msg += f"the sign nearby said: {hint}"
         
-        if os.path.exists(".cache/env.cache"):
-            with open(".cache/env.cache", "r", encoding='utf-8') as f:
-                cache = json.load(f)
+        cache_result = read_json_artifact(runtime_paths.env_cache)
+        if cache_result.state == "valid" and isinstance(cache_result.value, list):
+            cache = cache_result.value
             # 找到距离小于5的cache
             for c in cache:
                 pos = c["center"]
@@ -685,9 +691,9 @@ def environment():
             # bot.chat(event["description"])
             msg += f"{event['description']}\n"
     
-    if os.path.exists(".cache/env.cache"):
-        with open(".cache/env.cache", "r", encoding='utf-8') as f:
-            cache = json.load(f)
+    cache_result = read_json_artifact(runtime_paths.env_cache)
+    if cache_result.state == "valid" and isinstance(cache_result.value, list):
+        cache = cache_result.value
         # 找到距离小于5的cache
         for c in cache:
             pos = c["center"]
@@ -1610,9 +1616,8 @@ def handleViewer(*args):
 def handle(this):
     # bot.chat("time")
     info_bot.update_time()
-    with open(".cache/load_status.cache", "r", encoding='utf-8') as f:
-        status_data = json.load(f)
-    if status_data["status"] == "loaded" and info_bot.bot_init:
+    status_result = read_json_artifact(runtime_paths.load_status)
+    if status_result.state == "valid" and status_result.value.get("status") == "loaded" and info_bot.bot_init:
         info_bot.follow()
         info_bot.update_blocks()
         info_bot.bot_init = False

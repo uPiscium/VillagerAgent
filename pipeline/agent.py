@@ -20,7 +20,9 @@ import torch
 import platform
 import math
 from numbers import Integral, Real
+from pathlib import Path
 from model.utils import extract_info
+from env.runtime_paths import RuntimePaths, atomic_write_json
 
 class AgentFeedback:
     def __init__(self, task:Task, detail, status):
@@ -54,7 +56,8 @@ class BaseAgent:
     )
     def __init__(self, llm:OpenAILanguageModel , env:VillagerBench, data_manager:DataManager, name:str, logger:logging.Logger = None, silent = False, 
     RL_mode = "", rl_env = None, rl_model = None, all_tools = [], local_model_max_attempts = 10,
-    local_model_max_actions = 5, local_model_inter_action_delay = 0.0, **kwargs):
+    local_model_max_actions = 5, local_model_inter_action_delay = 0.0,
+    run_id: str | None = None, reflection_output_dir: str | os.PathLike | None = None, **kwargs):
         self.env = env
         self.name = name
         self.data_manager = data_manager
@@ -64,6 +67,13 @@ class BaseAgent:
         self.RL_mode = RL_mode
         self.logger = logger
         self.all_tools = all_tools
+        self.run_id = run_id or getattr(env, "task_name", "test")
+        runtime_paths = getattr(env, "runtime_paths", RuntimePaths.legacy())
+        self.reflection_output_dir = (
+            Path(reflection_output_dir)
+            if reflection_output_dir is not None
+            else runtime_paths.run_result_dir(self.run_id)
+        )
         if (
             isinstance(local_model_max_attempts, bool)
             or not isinstance(local_model_max_attempts, Integral)
@@ -128,14 +138,10 @@ class BaseAgent:
 
         self.reflect_info["prompt"].append(prompt)
         self.reflect_info["response"].append(response)
-        with open(".cache/meta_setting.json", "r") as f:
-            config = json.load(f)
-            task_name = config["task_name"]
-        if not os.path.exists("result/" + task_name):
-            os.mkdir(os.path.join("result/", task_name))
-        root = os.path.join("result/", task_name)
-        with open(os.path.join(root, f"{self.name}_reflect.json"), "w") as f:
-            json.dump(self.reflect_info, f, indent=4)
+        atomic_write_json(
+            self.reflection_output_dir / f"{self.name}_reflect.json",
+            self.reflect_info,
+        )
 
     def supports_cooperative_cancellation(self) -> bool:
         return (

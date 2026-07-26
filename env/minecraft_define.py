@@ -3,6 +3,13 @@ import time
 import json
 import os
 
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+
+runtime_paths = RuntimePaths.from_environment()
+
 class MinecraftLoader():
     def __init__(self, data:[dict], interval:float=0.1):
         self.data = data
@@ -475,11 +482,8 @@ class AtomTask:
         }
     
     def update_local_cache(self):
-        if os.path.exists(".cache/env.cache"):
-            with open(".cache/env.cache", "r") as f:
-                cache = json.load(f)
-        else:
-            cache = []
+        cache_result = read_json_artifact(runtime_paths.env_cache)
+        cache = cache_result.value if cache_result.state == "valid" else []
         
         # 以center为key
         for i, item in enumerate(cache):
@@ -489,8 +493,7 @@ class AtomTask:
         else:
             cache.append(self.export_cache())
 
-        with open(".cache/env.cache", "w") as f:
-            json.dump(cache, f, indent=4)
+        atomic_write_json(runtime_paths.env_cache, cache)
 
     def load_json(self, json_data):
         self.init = json_data["init"]
@@ -754,14 +757,13 @@ class AtomTask:
        
         if flag:
             # 写入 data/score.json
-            with open("data/score.json", "r") as f:
-                score_dict = json.load(f)
-                if str(self) not in score_dict.keys():
-                    score_dict[str(self)] = {"score": 1, "type":self.type, "task_description":self.task_description, 
+            score_result = read_json_artifact(runtime_paths.score)
+            score_dict = score_result.value if score_result.state == "valid" else {}
+            if str(self) not in score_dict.keys():
+                score_dict[str(self)] = {"score": 1, "type":self.type, "task_description":self.task_description,
                     "repeat_num":self.condition_repeat_num, "condition_num":len(self.condition), "activate_duration":self.activate_duration,
                     "current_time":time.time()}
-            with open("data/score.json", "w") as f:
-                json.dump(score_dict, f, indent=4)
+            atomic_write_json(runtime_paths.score, score_dict)
 
             self.done = True
         else:
@@ -777,14 +779,13 @@ class AtomTask:
             score = (done_condition / total_condition)
             self.current_score = max(self.current_score, score)
             # 写入 data/score.json
-            with open("data/score.json", "r") as f:
-                score_dict = json.load(f)
-                if str(self) not in score_dict.keys():
-                    score_dict[str(self)] = {"score":self.current_score, "type":self.type, "task_description":self.task_description, 
+            score_result = read_json_artifact(runtime_paths.score)
+            score_dict = score_result.value if score_result.state == "valid" else {}
+            if str(self) not in score_dict.keys():
+                score_dict[str(self)] = {"score":self.current_score, "type":self.type, "task_description":self.task_description,
                     "repeat_num":self.condition_repeat_num, "condition_num":len(self.condition), "activate_duration":self.activate_duration,
                     "current_time":time.time()}
-            with open("data/score.json", "w") as f:
-                json.dump(score_dict, f, indent=4)
+            atomic_write_json(runtime_paths.score, score_dict)
 
         self.update_local_cache()
 
@@ -841,12 +842,10 @@ class StateTree:
             if all(agent.room is not None for agent in self.agents):
                 break
 
-        with open("data/score.json", "w") as f:
-            start_time = time.localtime()
-            json.dump({"start_time": start_time}, f)
+        start_time = time.localtime()
+        atomic_write_json(runtime_paths.score, {"start_time": start_time})
 
-        with open(".cache/task.cache", "w") as f:
-            json.dump(task_json_list, f, indent=4)
+        atomic_write_json(runtime_paths.task_cache, task_json_list)
 
     
     def load_atom_task_from_json(self,  file_path:str="data/escape_atom.json"):
@@ -925,9 +924,9 @@ class StateTree:
             agent.load(self.bot)
     
     def update(self):
-        with open("data/score.json", "r") as f:
-            if "max_time" in json.load(f).keys():
-                return True
+        score_result = read_json_artifact(runtime_paths.score)
+        if score_result.state == "valid" and "max_time" in score_result.value:
+            return True
         
         all_done = True
         for task in self.task_list:
@@ -936,21 +935,19 @@ class StateTree:
                 break
 
         if all_done:
-            with open("data/score.json", "r") as f:
-                score_dict = json.load(f)
-                score_dict["max_time"] = self.max_time
-                score_dict["end_time"] = time.localtime()
-            with open("data/score.json", "w") as f:
-                json.dump(score_dict, f, indent=4)
+            score_result = read_json_artifact(runtime_paths.score)
+            score_dict = score_result.value if score_result.state == "valid" else {}
+            score_dict["max_time"] = self.max_time
+            score_dict["end_time"] = time.localtime()
+            atomic_write_json(runtime_paths.score, score_dict)
             return True
 
         if time.time() - self.start_time > self.max_time:
-            with open("data/score.json", "r") as f:
-                score_dict = json.load(f)
-                score_dict["max_time"] = self.max_time
-                score_dict["end_time"] = time.localtime()
-            with open("data/score.json", "w") as f:
-                json.dump(score_dict, f, indent=4)
+            score_result = read_json_artifact(runtime_paths.score)
+            score_dict = score_result.value if score_result.state == "valid" else {}
+            score_dict["max_time"] = self.max_time
+            score_dict["end_time"] = time.localtime()
+            atomic_write_json(runtime_paths.score, score_dict)
             return True
     
         for task in self.task_list:

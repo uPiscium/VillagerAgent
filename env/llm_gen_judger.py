@@ -5,6 +5,11 @@ from utils import *
 import argparse
 import random
 
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json
+
 # python env/llm_gen_judger.py --host 127.0.0.1 --port 25565 --agent_num 2 --agent_names Alice,Bob --task_name gen_1_2p
 system_type = platform.system().lower()
 
@@ -19,6 +24,10 @@ args = parser.parse_args()
 agent_num = args.agent_num
 agent_names = args.agent_names.split(",")
 task_name = args.task_name
+runtime_paths = RuntimePaths.from_environment()
+runtime_paths.ensure_directories()
+run_result_dir = runtime_paths.run_result_dir(task_name)
+run_result_dir.mkdir(parents=True, exist_ok=True)
 
 mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
@@ -49,19 +58,14 @@ bot.loadPlugin(minecraftHawkEye)
 
 # with open("qwen3-235b-a22b_gen_3p_config.json", "r") as f:
     # config = json.load(f)[0]
-with open(".cache/meta_setting.json", "r") as f:
+with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
     config = json.load(f)
 blueprint = config["blueprint"]
 
 ### reset the environments
-with open("data/score.json", "w") as f:
-    json.dump({}, f, indent=4) 
-
-with open(".cache/env.cache", "w") as f:
-    json.dump([], f, indent=4)
-
-with open(".cache/load_status.cache", "w") as f:
-    json.dump({"status": "loading"}, f, indent=4)
+atomic_write_json(runtime_paths.score, {})
+atomic_write_json(runtime_paths.env_cache, [])
+atomic_write_json(runtime_paths.load_status, {"status": "loading"})
 
 if not os.path.exists("result"):
     os.makedirs("result")
@@ -235,8 +239,7 @@ def handleViewer(*args):
     
     reset()
 
-    with open(".cache/load_status.cache", "w") as f:
-       json.dump({"status": "loaded"}, f, indent=4)
+    atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
 
     global start_time, last_time
     start_time = time.time()
@@ -246,8 +249,8 @@ def handleViewer(*args):
 @On(bot, "time")
 def handleTime(*args):
     global start_time, max_time, last_time, max_iter
-    result_root = os.path.join("result", config["task_name"])
-    tm_path = os.path.join(result_root, "TM_history.json")
+    result_root = runtime_paths.run_result_dir(config["task_name"])
+    tm_path = result_root / "TM_history.json"
     if start_time is not None:
         now_time = time.time()
 
@@ -262,7 +265,5 @@ def handleTime(*args):
                     TM_log = json.load(f)
 
                 if len(TM_log["response"]) >= max_iter:
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
-                    with open(os.path.join(result_root, "config.json"), "w", encoding='utf-8') as f:
-                        json.dump(config, f, indent=4)
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
+                    atomic_write_json(result_root / "config.json", config)

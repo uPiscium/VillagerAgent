@@ -85,6 +85,15 @@ class GlobalController:
             for key in BaseAgent.LOCAL_MODEL_CONFIG_KEYS
             if key in base_agent_config
         }
+        runtime_paths = getattr(env, "runtime_paths", None)
+        base_agent_output_config = (
+            {
+                "run_id": env.task_name,
+                "reflection_output_dir": runtime_paths.run_result_dir(env.task_name),
+            }
+            if runtime_paths is not None
+            else {}
+        )
         self.agent_list = [
             BaseAgent(
                 base_llm,
@@ -93,6 +102,7 @@ class GlobalController:
                 name=a.name,
                 silent=False,
                 all_tools=all_tools,
+                **base_agent_output_config,
                 **base_agent_runtime_config,
             )
             for a in env.agent_pool

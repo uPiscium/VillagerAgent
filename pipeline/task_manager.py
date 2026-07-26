@@ -14,6 +14,9 @@ import json
 import time
 import logging
 from functools import wraps
+from pathlib import Path
+
+from env.runtime_paths import RuntimePaths, atomic_write_json
 
 TASK_MANAGER_WAIT_TIME = 1
 PARTIAL_GRAPH_TASK_NUM = 5
@@ -46,7 +49,7 @@ class TaskManager:
     update_task: str = "update"
     merge_task: str = "merge"
 
-    def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False, event_sink=None):
+    def __init__(self, silent:bool = False, method:str = "update", cache_enabled:bool = False, event_sink=None, history_output_dir: str | os.PathLike | None = None):
         if method not in ("update", "merge"):
             raise ValueError(
                 f"Unsupported task manager method {method!r}; expected one of: update, merge"
@@ -68,6 +71,7 @@ class TaskManager:
         self.task_description = None
         self.runtime_checkpoint = None
         self.event_sink = event_sink or NoOpRuntimeEventSink()
+        self.history_output_dir = Path(history_output_dir) if history_output_dir is not None else RuntimePaths.legacy().run_result_dir("test")
 
         self.task_trace = []
         self.task_trace_description = []
@@ -213,14 +217,7 @@ class TaskManager:
 
         self.history["prompt"].append(prompt)
         self.history["response"].append(response)
-        with open(".cache/meta_setting.json", "r") as f:
-            config = json.load(f)
-            task_name = config["task_name"]
-        if not os.path.exists("result/" + task_name):
-            os.mkdir(os.path.join("result/", task_name))
-        root = os.path.join("result/", task_name)
-        with open(os.path.join(root, "TM_history.json"), "w") as f:
-            json.dump(self.history, f, indent=4)
+        atomic_write_json(self.history_output_dir / "TM_history.json", self.history)
 
     '''
         Public API
