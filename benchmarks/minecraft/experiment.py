@@ -21,6 +21,8 @@ from benchmarks.experiment_provenance import (
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.minecraft.events import build_normalized_events
+from benchmarks.minecraft.run_lock import MinecraftTargetLock, minecraft_target_lock_key
+from env.runtime_paths import RuntimePaths
 from env.minecraft_dual_dag import (
     build_minecraft_dual_dag_artifact,
     build_minecraft_runtime_decision_support,
@@ -100,7 +102,10 @@ def run_minecraft_experiment(
             )
             _write_minimal_failure_artifacts(attempt_state)
             _sanitize_runtime_checkpoint(
-                attempt_state["output_dir"] / ".runtime" / "runtime_result.json",
+                attempt_state.get(
+                    "runtime_result_path",
+                    attempt_state["output_dir"] / ".runtime" / "runtime_result.json",
+                ),
                 secret_values=attempt_state.get("secret_values", ()),
             )
             finalize_run_directory(
@@ -143,6 +148,27 @@ def _run_minecraft_experiment_attempt(
         producer="benchmarks.minecraft.experiment",
         overwrite=overwrite,
     )
+    runtime_root = output_dir / ".runtime" / "attempts" / attempt_id
+    runtime_paths = RuntimePaths.isolated(runtime_root)
+    if execute:
+        runtime_paths.ensure_directories()
+    runtime_result_path = runtime_root / "runtime_result.json"
+    child_runtime_event_path = runtime_root / "runtime_events.jsonl"
+    runtime_event_path = (
+        child_runtime_event_path
+        if execute
+        else event_sink.path if isinstance(event_sink, JsonlRuntimeEventRecorder) else None
+    )
+    lock_root = Path(
+        os.environ.get(
+            "VILLAGER_MINECRAFT_LOCK_ROOT",
+            str(DEFAULT_OUTPUT_ROOT / ".locks"),
+        )
+    )
+    lock_key = minecraft_target_lock_key(
+        host=str(launch_config["host"]),
+        port=int(launch_config["port"]),
+    )
     attempt_state.update({
         "output_dir": output_dir,
         "attempt_id": attempt_id,
@@ -151,10 +177,12 @@ def _run_minecraft_experiment_attempt(
         "run_name": selected_run_name,
         "event_sink": event_sink,
         "terminal_event_emitted": False,
+        "runtime_result_path": runtime_result_path,
     })
     runtime_launch_config = dict(launch_config)
     if execute:
         runtime_launch_config["task_name"] = f"{launch_config['task_name']}_{attempt_id[:12]}"
+        runtime_launch_config["attempt_id"] = attempt_id
     safe_emit_runtime_event(event_sink, "run_started", source="benchmarks.minecraft.experiment", payload={"mode": "execute" if execute else "dry_run"})
     runtime_llm_config = {}
     requested_policy = task_selection_policy or launch_config.get("task_selection_policy")
@@ -209,6 +237,16 @@ def _run_minecraft_experiment_attempt(
         runtime_llm_config=runtime_llm_config,
         attempt_id=attempt_id,
     )
+    effective_settings["runtime"] = {
+        "root": f".runtime/attempts/{attempt_id}",
+        "result": f".runtime/attempts/{attempt_id}/runtime_result.json",
+        "events": f".runtime/attempts/{attempt_id}/runtime_events.jsonl",
+        "score": f".runtime/attempts/{attempt_id}/data/score.json",
+        "load_status": f".runtime/attempts/{attempt_id}/cache/load_status.cache",
+        "server_lock_key": lock_key,
+        "server_lock_acquired": False,
+        "world_id": str(launch_config.get("world_id", "")),
+    }
     update_provenance_settings(output_dir, effective_settings)
     update_provenance_assets(
         output_dir,
@@ -222,24 +260,39 @@ def _run_minecraft_experiment_attempt(
     action_log: dict = _fixture_action_log(launch_config)
     action_log_available = "smoke_action_log" in launch_config
     score: dict = {}
+    score_ownership_verified = False
     runtime_result: dict = {}
     error = None
     error_type = ""
     timed_out = False
     runtime_process = {}
-    runtime_result_path = output_dir / ".runtime" / "runtime_result.json"
-    runtime_event_path = event_sink.path if isinstance(event_sink, JsonlRuntimeEventRecorder) else None
+    server_lock_acquired = False
+    server_lock_released = False
+    server_lock_stale_owner_detected = False
 
     if execute:
         _remove_runtime_result(runtime_result_path)
+        target_lock = MinecraftTargetLock(
+            lock_root=lock_root,
+            host=str(launch_config["host"]),
+            port=int(launch_config["port"]),
+            world_id=str(launch_config.get("world_id", "")),
+            attempt_id=attempt_id,
+            timeout_seconds=float(launch_config.get("server_lock_timeout_seconds", 0.0)),
+        )
         try:
-            runtime_result = _execute_real_runtime_bounded(
-                runtime_launch_config,
-                dual_dag_config=dual_dag_config,
-                timeout_seconds=execute_timeout_seconds,
-                runtime_result_path=runtime_result_path,
-                runtime_event_path=runtime_event_path,
-            ) or {}
+            with target_lock:
+                server_lock_acquired = True
+                server_lock_stale_owner_detected = target_lock.stale_owner_detected
+                runtime_result = _execute_real_runtime_bounded(
+                    runtime_launch_config,
+                    dual_dag_config=dual_dag_config,
+                    timeout_seconds=execute_timeout_seconds,
+                    runtime_result_path=runtime_result_path,
+                    runtime_event_path=runtime_event_path,
+                    runtime_root=runtime_root,
+                    attempt_id=attempt_id,
+                ) or {}
         except MinecraftExecuteTimeoutError as exc:
             error = str(exc)
             error_type = "timeout"
@@ -252,12 +305,36 @@ def _run_minecraft_experiment_attempt(
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
             error_type = exc.__class__.__name__
+        finally:
+            server_lock_released = not target_lock.acquired
         persisted_runtime_result = _read_json(runtime_result_path, default={})
         runtime_result = runtime_result or persisted_runtime_result
         runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
         action_log_available = isinstance(runtime_result.get("action_log"), dict)
         action_log = runtime_result.get("action_log") if action_log_available else {}
         score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
+        if score:
+            ownership_error = _score_ownership_error(
+                score,
+                attempt_id=attempt_id,
+                task_name=runtime_launch_config["task_name"],
+            )
+            if ownership_error:
+                error = ownership_error
+                error_type = "ScoreOwnershipError"
+                score = {}
+            else:
+                score_ownership_verified = (
+                    score.get("attempt_id") == attempt_id
+                    and score.get("task_name") == runtime_launch_config["task_name"]
+                )
+
+    effective_settings["runtime"].update({
+        "server_lock_acquired": server_lock_acquired,
+        "server_lock_released": server_lock_released,
+        "server_lock_stale_owner_detected": server_lock_stale_owner_detected,
+    })
+    update_provenance_settings(output_dir, effective_settings)
 
     meta_judger_diagnostics = (
         _read_json(runtime_result_path.parent / "meta_judger_diagnostics.json", default={})
@@ -322,6 +399,16 @@ def _run_minecraft_experiment_attempt(
         "output_dir": str(output_dir),
         "task_name": launch_config.get("task_name", ""),
         "runtime_task_name": runtime_launch_config.get("task_name", ""),
+        "world_id": str(launch_config.get("world_id", "")),
+        "runtime_root": f".runtime/attempts/{attempt_id}",
+        "runtime_result_path": f".runtime/attempts/{attempt_id}/runtime_result.json",
+        "runtime_event_path": f".runtime/attempts/{attempt_id}/runtime_events.jsonl",
+        "score_path": f".runtime/attempts/{attempt_id}/data/score.json",
+        "load_status_path": f".runtime/attempts/{attempt_id}/cache/load_status.cache",
+        "server_lock_key": lock_key,
+        "server_lock_acquired": server_lock_acquired,
+        "server_lock_released": server_lock_released,
+        "server_lock_stale_owner_detected": server_lock_stale_owner_detected,
         "task_type": launch_config.get("task_type", ""),
         "task_idx": launch_config.get("task_idx"),
         "dual_dag_runtime_enabled": True,
@@ -355,6 +442,7 @@ def _run_minecraft_experiment_attempt(
         "final_score": sanitize_public_value(score),
         "progress": _progress_from_score(score),
         "score_available": bool(score),
+        "score_ownership_verified": score_ownership_verified,
         "meta_judger_diagnostics_available": bool(meta_judger_diagnostics),
         "load_status": _last_load_status(meta_judger_diagnostics),
         "error": error,
@@ -400,7 +488,10 @@ def _run_minecraft_experiment_attempt(
     if meta_judger_diagnostics:
         _write_json(
             output_dir / "meta_judger_diagnostics.json",
-            sanitize_artifact_value(meta_judger_diagnostics, secret_values=secret_values),
+            sanitize_artifact_value(
+                _relativize_output_paths(meta_judger_diagnostics, output_dir=output_dir),
+                secret_values=secret_values,
+            ),
         )
     if execute and not retain_runtime_result:
         _remove_runtime_result(runtime_result_path)
@@ -660,12 +751,45 @@ def _last_load_status(diagnostics: dict) -> str | None:
     return last.get("status") if isinstance(last, dict) else None
 
 
+def _score_ownership_error(score: dict, *, attempt_id: str, task_name: str) -> str | None:
+    score_attempt_id = score.get("attempt_id")
+    if score_attempt_id is not None and score_attempt_id != attempt_id:
+        return (
+            f"score belongs to attempt {score_attempt_id!r}, expected {attempt_id!r}"
+        )
+    score_task_name = score.get("task_name")
+    if score_task_name is not None and score_task_name != task_name:
+        return (
+            f"score belongs to task {score_task_name!r}, expected {task_name!r}"
+        )
+    return None
+
+
+def _relativize_output_paths(value, *, output_dir: Path):
+    absolute_output = str(output_dir.resolve())
+    if isinstance(value, dict):
+        return {
+            key: _relativize_output_paths(item, output_dir=output_dir)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _relativize_output_paths(item, output_dir=output_dir)
+            for item in value
+        ]
+    if isinstance(value, str):
+        return value.replace(absolute_output, ".")
+    return value
+
+
 def _execute_real_runtime(
     launch_config: dict,
     *,
     dual_dag_config: dict,
     runtime_result_path: Path,
     runtime_event_path: Path | None = None,
+    runtime_root: Path | None = None,
+    attempt_id: str | None = None,
 ) -> dict:
     from start_with_config import run
     from model.ollama_config import make_ollama_llm_config
@@ -673,6 +797,8 @@ def _execute_real_runtime(
     llm_config = make_ollama_llm_config()
     config = dict(launch_config)
     document = config.get("evaluation_arg", {}) if config.get("task_type") == "meta" else {}
+    runtime_root = runtime_root or runtime_result_path.parent
+    attempt_id = attempt_id or config.get("attempt_id")
     return run(
         llm_config["api_model"],
         llm_config["api_base"],
@@ -694,6 +820,8 @@ def _execute_real_runtime(
         task_scenario=config.get("task_scenario"),
         runtime_event_path=str(runtime_event_path) if runtime_event_path is not None else None,
         emit_controller_terminal_event=False,
+        runtime_paths=RuntimePaths.isolated(runtime_root),
+        attempt_id=attempt_id,
     )
 
 
@@ -704,12 +832,22 @@ def _execute_real_runtime_bounded(
     timeout_seconds: float | None,
     runtime_result_path: Path,
     runtime_event_path: Path | None = None,
+    runtime_root: Path | None = None,
+    attempt_id: str | None = None,
 ) -> dict:
     context = multiprocessing.get_context()
     status_queue = context.Queue()
     process = context.Process(
         target=_runtime_process_entry,
-        args=(launch_config, dual_dag_config, str(runtime_result_path), str(runtime_event_path) if runtime_event_path is not None else None, status_queue),
+        args=(
+            launch_config,
+            dual_dag_config,
+            str(runtime_result_path),
+            str(runtime_event_path) if runtime_event_path is not None else None,
+            str(runtime_root) if runtime_root is not None else None,
+            attempt_id,
+            status_queue,
+        ),
     )
     process_started = False
     process_group_id = None
@@ -769,6 +907,8 @@ def _runtime_process_entry(
     dual_dag_config: dict,
     runtime_result_path: str,
     runtime_event_path: str | None,
+    runtime_root: str | None,
+    attempt_id: str | None,
     status_queue,
 ) -> None:
     if hasattr(os, "setsid"):
@@ -779,6 +919,8 @@ def _runtime_process_entry(
             dual_dag_config=dual_dag_config,
             runtime_result_path=Path(runtime_result_path),
             runtime_event_path=Path(runtime_event_path) if runtime_event_path is not None else None,
+            runtime_root=Path(runtime_root) if runtime_root is not None else None,
+            attempt_id=attempt_id,
         ) or {}
         result_path = Path(runtime_result_path)
         if result or not result_path.exists():

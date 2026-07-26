@@ -666,6 +666,8 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     output_dir = tmp_path / "result" / "execute_timeout"
     assert summary["error_type"] == "timeout"
     assert summary["timed_out"] is True
+    assert summary["server_lock_acquired"] is True
+    assert summary["server_lock_released"] is True
     assert summary["runtime_process_isolated"] is True
     assert summary["runtime_process_terminated"] is True
     assert "timed out after 0.01 seconds" in summary["error"]
@@ -686,7 +688,8 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
         diagnostics_path = Path(kwargs["runtime_result_path"]).parent / "meta_judger_diagnostics.json"
         diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
         diagnostics_path.write_text(json.dumps({
-            "command": ["python", "env/meta_judger.py"],
+            "command": ["python", "env/meta_judger.py", "--runtime-root", str(kwargs["runtime_root"])],
+            "stdout_path": str(Path(kwargs["runtime_root"]) / "meta_judger.stdout.log"),
             "load_status_history": [{"status": "loading"}, {"status": "loaded"}],
             "exit_code": None,
             "timeout_reason": None,
@@ -709,6 +712,8 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
     assert summary["score_available"] is True
     diagnostics = json.loads((output_dir / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
     assert diagnostics["load_status_history"][-1]["status"] == "loaded"
+    assert str(tmp_path) not in json.dumps(diagnostics)
+    assert diagnostics["stdout_path"].startswith("./.runtime/attempts/")
 
 
 def test_minecraft_execute_timeout_stops_child_activity(tmp_path, monkeypatch):
@@ -925,7 +930,7 @@ def test_minecraft_execute_uses_unique_per_run_result_paths_and_cleans_up(tmp_pa
 
     def runtime_result(*args, **kwargs):
         runtime_result_path = Path(kwargs["runtime_result_path"])
-        (runtime_result_path.parent.parent / "child_runtime_path.txt").write_text(
+        (Path(kwargs["runtime_root"]) / "child_runtime_path.txt").write_text(
             str(runtime_result_path),
             encoding="utf-8",
         )
@@ -947,15 +952,20 @@ def test_minecraft_execute_uses_unique_per_run_result_paths_and_cleans_up(tmp_pa
     )
 
     expected_paths = [
-        tmp_path / "result" / "run_a" / ".runtime" / "runtime_result.json",
-        tmp_path / "result" / "run_b" / ".runtime" / "runtime_result.json",
+        Path(first["output_dir"]) / first["runtime_result_path"],
+        Path(second["output_dir"]) / second["runtime_result_path"],
     ]
     assert [
-        Path(first["output_dir"]).joinpath("child_runtime_path.txt").read_text(encoding="utf-8"),
-        Path(second["output_dir"]).joinpath("child_runtime_path.txt").read_text(encoding="utf-8"),
+        (Path(first["output_dir"]) / first["runtime_root"] / "child_runtime_path.txt").read_text(encoding="utf-8"),
+        (Path(second["output_dir"]) / second["runtime_root"] / "child_runtime_path.txt").read_text(encoding="utf-8"),
     ] == [str(path) for path in expected_paths]
     assert first["runtime_result_retained"] is False
     assert second["runtime_result_retained"] is False
+    assert first["runtime_root"] != second["runtime_root"]
+    assert first["score_path"] != second["score_path"]
+    assert first["load_status_path"] != second["load_status_path"]
+    assert first["server_lock_acquired"] is True
+    assert first["server_lock_released"] is True
     assert all(not path.exists() for path in expected_paths)
     assert (tmp_path / "result" / "run_a" / "runtime_dual_dag_snapshot.json").exists()
     assert (tmp_path / "result" / "run_b" / "runtime_dual_dag_snapshot.json").exists()
@@ -996,6 +1006,37 @@ def test_minecraft_execute_ignores_stale_global_runtime_result(tmp_path, monkeyp
     assert stale_path.exists()
 
 
+def test_minecraft_execute_rejects_score_owned_by_another_attempt(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def mismatched_score(*_args, **kwargs):
+        return {
+            "score": {
+                "attempt_id": "another-attempt",
+                "task_name": "another-task",
+                "score": 100,
+            },
+            "action_log": {},
+        }
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        mismatched_score,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="mismatched_score",
+        execute=True,
+    )
+
+    assert summary["score_available"] is False
+    assert summary["score_ownership_verified"] is False
+    assert summary["error_type"] == "ScoreOwnershipError"
+    assert "another-attempt" in summary["error"]
+
+
 def test_minecraft_execute_ignores_partial_tmp_result(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
 
@@ -1019,7 +1060,9 @@ def test_minecraft_execute_ignores_partial_tmp_result(tmp_path, monkeypatch):
 
     assert summary["snapshot_source"] == "config_fixture"
     assert summary["error_type"] == "RuntimeError"
-    assert not (tmp_path / "result" / "partial_tmp" / ".runtime").exists()
+    runtime_root = Path(summary["output_dir"]) / summary["runtime_root"]
+    assert runtime_root.exists()
+    assert not (runtime_root / "runtime_result.json").exists()
 
 
 def test_minecraft_execute_can_retain_internal_result_explicitly(tmp_path, monkeypatch):
@@ -1044,7 +1087,7 @@ def test_minecraft_execute_can_retain_internal_result_explicitly(tmp_path, monke
         retain_runtime_result=True,
     )
 
-    runtime_result_path = tmp_path / "result" / "retained" / ".runtime" / "runtime_result.json"
+    runtime_result_path = Path(summary["output_dir"]) / summary["runtime_result_path"]
     assert summary["runtime_result_retained"] is True
     assert runtime_result_path.exists()
     assert not runtime_result_path.with_suffix(".json.tmp").exists()

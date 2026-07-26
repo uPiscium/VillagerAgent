@@ -890,6 +890,9 @@ def handle(this):
                 # time.sleep(10)
                 # 至少得等到所有的action都执行完了，有记录了再结束吧
                 score_payload = {
+                    "attempt_id": config.get("attempt_id"),
+                    "task_name": task_name,
+                    "status": "success",
                     "score": score,
                     "use_time": calculate_action_time(),
                     "end_reason": "task completed",
@@ -953,6 +956,9 @@ def handle(this):
                         efficiency = max_action_time / action_time
                     # 给出结束信号和写入文件
                     atomic_write_json(run_result_dir / "score.json", {
+                            "attempt_id": config.get("attempt_id"),
+                            "task_name": task_name,
+                            "status": "failure",
                             "complexity_score": complexity_score,
                             "efficiency": efficiency,
                             "balance": balance,

@@ -121,7 +121,7 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
     )
     def runtime_result(*args, **kwargs):
         runtime_result_path = kwargs["runtime_result_path"]
-        runtime_result_path.parent.parent.joinpath("child_runtime_path.txt").write_text(
+        kwargs["runtime_root"].joinpath("child_runtime_path.txt").write_text(
             str(runtime_result_path),
             encoding="utf-8",
         )
@@ -129,7 +129,7 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
 
-    run_minecraft_matrix(
+    summary = run_minecraft_matrix(
         config_path=config_path,
         output_dir=tmp_path / "matrix",
         run_names=["first_run", "second_run"],
@@ -137,12 +137,19 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
     )
 
     expected_paths = [
-        tmp_path / "matrix" / "runs" / "first_run" / ".runtime" / "runtime_result.json",
-        tmp_path / "matrix" / "runs" / "second_run" / ".runtime" / "runtime_result.json",
+        tmp_path / "matrix" / "runs" / run["run_name"] / run["runtime_result_path"]
+        for run in summary["runs"]
     ]
     assert [
-        path.parent.parent.joinpath("child_runtime_path.txt").read_text(encoding="utf-8")
-        for path in expected_paths
+        (
+            tmp_path
+            / "matrix"
+            / "runs"
+            / run["run_name"]
+            / run["runtime_root"]
+            / "child_runtime_path.txt"
+        ).read_text(encoding="utf-8")
+        for run in summary["runs"]
     ] == [str(path) for path in expected_paths]
 
 
