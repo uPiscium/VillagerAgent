@@ -208,6 +208,12 @@ def test_official_timeout_preserves_missing_episode_accounting(tmp_path, monkeyp
 
 def test_returncode_zero_with_missing_records_fails_require_ready(tmp_path, monkeypatch):
     runtime = _write_fixture_runtime(tmp_path)
+    stale_stats = runtime.output_dir / "bounded_heuristic/old/stats"
+    stale_stats.mkdir(parents=True)
+    for episode_id in ("0", "1", "2", "3"):
+        (stale_stats / f"{episode_id}.json").write_text(
+            json.dumps({"success": True, "stats": "{}"}), encoding="utf-8"
+        )
     monkeypatch.setattr(
         real_smoke,
         "inspect_real_preflight",
@@ -249,21 +255,30 @@ def test_gate_validates_every_expected_episode(
     tmp_path, monkeypatch, success_by_episode, expected_status
 ):
     runtime = _write_fixture_runtime(tmp_path)
-    stats = runtime.output_dir / "bounded_heuristic/run/stats"
-    stats.mkdir(parents=True)
-    for episode_id, success in success_by_episode.items():
-        (stats / f"{episode_id}.json").write_text(
-            json.dumps({"success": success, "stats": "{}"}), encoding="utf-8"
-        )
     monkeypatch.setattr(
         real_smoke,
         "inspect_real_preflight",
         lambda _runtime: {"ready": True, "missing": []},
     )
+
+    def run(command, **_kwargs):
+        output = Path(next(
+            argument.removeprefix("evaluation.output_dir=")
+            for argument in command
+            if argument.startswith("evaluation.output_dir=")
+        ))
+        stats = output / "run/stats"
+        stats.mkdir(parents=True)
+        for episode_id, success in success_by_episode.items():
+            (stats / f"{episode_id}.json").write_text(
+                json.dumps({"success": success, "stats": "{}"}), encoding="utf-8"
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
     monkeypatch.setattr(
         real_smoke.subprocess,
         "run",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+        run,
     )
 
     result = run_official_gate(runtime, mode="bounded")
@@ -276,6 +291,47 @@ def test_gate_validates_every_expected_episode(
     )
     assert result["performance_claim"] is False
     assert result["baseline_classification"] == "official_oracle_heuristic"
+
+
+def test_stale_duplicates_do_not_poison_fresh_valid_gate(tmp_path, monkeypatch):
+    runtime = _write_fixture_runtime(tmp_path)
+    stale = runtime.output_dir / "bounded_heuristic"
+    for relative in ("old/stats/0.json", "duplicate/stats/0.json", "old/stats/extra.json"):
+        path = stale / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"success": True, "stats": "{}"}), encoding="utf-8")
+    monkeypatch.setattr(
+        real_smoke,
+        "inspect_real_preflight",
+        lambda _runtime: {"ready": True, "missing": []},
+    )
+
+    def run(command, **_kwargs):
+        output = Path(next(
+            argument.removeprefix("evaluation.output_dir=")
+            for argument in command
+            if argument.startswith("evaluation.output_dir=")
+        ))
+        stats = output / "run/stats"
+        stats.mkdir(parents=True)
+        for episode_id in ("0", "1", "2", "3"):
+            (stats / f"{episode_id}.json").write_text(
+                json.dumps({"success": True, "stats": "{}"}), encoding="utf-8"
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(real_smoke.subprocess, "run", run)
+
+    result = run_official_gate(runtime, mode="bounded")
+
+    assert result["status"] == "completed"
+    assert result["official_metrics"]["completed_episode_ids"] == ["0", "1", "2", "3"]
+    assert result["official_metrics"]["unexpected_episode_ids"] == []
+    assert result["official_metrics"]["duplicate_episode_ids"] == []
+    assert [record["path"] for record in result["official_metrics"]["records"]] == [
+        f"bounded_heuristic/run/stats/{episode_id}.json"
+        for episode_id in ("0", "1", "2", "3")
+    ]
 
 
 def test_runtime_rejects_unbounded_limits():

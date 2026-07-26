@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from dataclasses import replace
 import gzip
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +27,19 @@ def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, A
     preflight = inspect_real_preflight(runtime)
     if not preflight["ready"]:
         raise RuntimeError("PARTNR real preflight failed: " + ", ".join(preflight["missing"]))
+    attempts_dir = runtime.output_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+    attempt_output = Path(tempfile.mkdtemp(prefix=f"{mode}-", dir=attempts_dir))
+    attempt_runtime = replace(runtime, output_dir=attempt_output)
     episode_limit = 1 if mode == "step-zero" else runtime.episode_limit
-    subset = runtime.output_dir / "inputs" / f"val_mini_first_{episode_limit}.json.gz"
+    subset = attempt_output / "inputs" / f"val_mini_first_{episode_limit}.json.gz"
     subset_audit = write_bounded_dataset(
         runtime.dataset_path, subset, episode_limit=episode_limit
     )
     command = (
-        build_step_zero_command(runtime, subset.resolve())
+        build_step_zero_command(attempt_runtime, subset.resolve())
         if mode == "step-zero"
-        else build_bounded_smoke_command(runtime, subset.resolve())
+        else build_bounded_smoke_command(attempt_runtime, subset.resolve())
     )
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
@@ -58,7 +64,7 @@ def run_official_gate(runtime: PARTNRRuntimeConfig, *, mode: str) -> dict[str, A
         subprocess_status = "timed_out"
         stdout = _subprocess_text(exc.stdout)
         stderr = _subprocess_text(exc.stderr)
-    official_metrics = _collect_official_metrics(runtime, mode)
+    official_metrics = _collect_official_metrics(attempt_runtime, mode)
     gate_completed = (
         subprocess_status == "completed"
         and bool(official_metrics["expected_episode_ids"])
