@@ -155,3 +155,16 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
     setting = json.loads((tmp_path / ".cache" / "meta_setting.json").read_text(encoding="utf-8"))
     assert setting["task_scenario"] == "move"
     assert setting["evaluation_arg"] == evaluation_arg
+
+
+def test_runtime_result_binds_score_to_current_attempt():
+    environment = type("Environment", (), {"get_score": lambda self: {"score": 100}, "get_action_log": lambda self: {}})()
+
+    result = start_with_config._runtime_result(
+        environment,
+        attempt_id="attempt-a",
+        task_name="runtime-task-a",
+    )
+
+    assert result["score"]["attempt_id"] == "attempt-a"
+    assert result["score"]["task_name"] == "runtime-task-a"
