@@ -8,6 +8,9 @@ import time
 import os
 from env.utils import init_logger
 import logging
+from pathlib import Path
+
+from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 
 
 LOAD_WAIT_SECONDS = 160
@@ -37,12 +40,15 @@ class VillagerBench:
     - task_name: str, the name of the task
     - _virtual_debug: bool, whether the environment is in virtual debug mode
     '''
-    def __init__(self, env_type, task_id: int, dig_needed: bool, host: str = "0.0.0.0", port: int = 25565, max_task_num: int = 1, task_name: str = "test", _virtual_debug: bool = False):
+    def __init__(self, env_type, task_id: int, dig_needed: bool, host: str = "0.0.0.0", port: int = 25565, max_task_num: int = 1, task_name: str = "test", _virtual_debug: bool = False, runtime_paths: RuntimePaths | None = None):
         self.env_type = env_type
         self.task_id = task_id
         self.host = host
         self.port = port
         self.task_name = task_name
+        self.runtime_paths = runtime_paths or RuntimePaths.legacy()
+        self.runtime_paths.ensure_directories()
+        self._invalid_status_reads = 0
         self.agent_pool = []
         self.log = {}
         self.reset_token()
@@ -56,37 +62,28 @@ class VillagerBench:
         self.base_port = 5000
         self.op_path = ""
         self.meta_diagnostics_dir = None
-        if not os.path.exists("data"):
-            os.mkdir("data")
-
-        if not os.path.exists("data/history"):
-            os.mkdir("data/history")
-
-        with open("data/score.json", "w") as f:
-            json.dump({}, f, indent=4)
-        
-        with open("data/action_log.json", "w") as f:
-            json.dump({}, f, indent=4)
-
-        with open("data/llm_inference.json", "w") as f:
-            json.dump({"time":0}, f, indent=4)
-
-        with open(".cache/state.json", "w") as f:
-            json.dump({"state": "idle"}, f)
+        atomic_write_json(self.runtime_paths.score, {})
+        atomic_write_json(self.runtime_paths.action_log, {})
+        atomic_write_json(self.runtime_paths.llm_inference, {"time": 0})
+        atomic_write_json(self.runtime_paths.state, {"state": "idle"})
         
         # 删除之前的log
-        if os.path.exists("logs"):
-            for file in os.listdir("logs"):
-                file_path = os.path.join("logs", file)
+        if self.runtime_paths.logs_dir.exists():
+            for file_path in self.runtime_paths.logs_dir.iterdir():
+                if not file_path.is_file():
+                    continue
                 for _ in range(3):  # 尝试3次
                     try:
-                        os.remove(file_path)
+                        file_path.unlink()
                         break  # 成功删除，跳出循环
                     except Exception as e:
                         print(f"删除失败：{e}")
                         time.sleep(1)  # 等待1秒再次尝试
                 else:
                     print(f"无法删除文件 {file_path}，可能仍然被锁定。")
+
+    def _paths(self) -> RuntimePaths:
+        return getattr(self, "runtime_paths", RuntimePaths.legacy())
           
     @contextmanager
     def run(self, server_debug: bool = False, fast_api=False):
@@ -105,15 +102,14 @@ class VillagerBench:
             raise
         finally:
             self.stop()
-            if os.path.exists(".cache/state.json"):
-                with open(".cache/state.json") as f:
-                    state = json.load(f)
+            paths = self._paths()
+            state_result = read_json_artifact(paths.state)
+            if state_result.state == "valid" and isinstance(state_result.value, dict):
+                state = state_result.value
                 state["state"] = "idle"
-                with open(".cache/state.json", "w") as f:
-                    json.dump(state, f)
-            if os.path.exists(".cache/env.cache"):
-                with open(".cache/env.cache", "w") as f:
-                    json.dump([], f)
+                atomic_write_json(paths.state, state)
+            if paths.env_cache.exists():
+                atomic_write_json(paths.env_cache, [])
 
     def stop(self):
         if self.running:
@@ -164,18 +160,16 @@ class VillagerBench:
         return time.time() - self.launch_time
     
     def get_token_info(self):
-        if os.path.exists("data/tokens.json"):
-            with open("data/tokens.json") as f:
-                token_info = json.load(f)
-            return token_info
+        token_result = read_json_artifact(self._paths().tokens)
+        if token_result.state == "valid":
+            return token_result.value
         else:
             return {"message": "token info not found", "status": False}
     
     def get_action_log(self):
-        if os.path.exists("data/action_log.json"):
-            with open("data/action_log.json") as f:
-                action_log = json.load(f)
-            return action_log
+        action_result = read_json_artifact(self._paths().action_log)
+        if action_result.state == "valid":
+            return action_result.value
         else:
             return {"message": "action log not found", "status": False}
         
@@ -197,8 +191,7 @@ class VillagerBench:
         tokens["successful_requests"] = 0
         tokens["total_cost"] = 0
         tokens["action_cost"] = 0
-        with open("data/tokens.json", "w") as f:
-            json.dump(tokens, f, indent=4)
+        atomic_write_json(self._paths().tokens, tokens)
 
     def get_all_agent_description(self) -> dict:
         agent_dict = {}
@@ -274,14 +267,27 @@ class VillagerBench:
             name_list = [names.get_first_name() for i in range(agent_number)]
 
         for i in range(agent_number):
-            agent = Agent(name_list[i], tools=agent_tool, local_port=self.base_port + len(self.agent_pool), model=self.langchain_model)
+            agent = Agent(
+                name_list[i],
+                tools=agent_tool,
+                local_port=self.base_port + len(self.agent_pool),
+                model=self.langchain_model,
+                runtime_paths=self.runtime_paths,
+            )
+            agent.reflection_output_dir = self.runtime_paths.run_result_dir(self.task_name)
             if len(agent_tool) != 0:
                 agent.tool = agent_tool
             self.agent_pool.append(agent)
             self.log[agent.name] = []
 
     def launch(self, debug: bool = False, fast_api=False):
-        Agent.launch(host=self.host, port=self.port, debug=debug, fast=fast_api)
+        Agent.launch(
+            host=self.host,
+            port=self.port,
+            debug=debug,
+            fast=fast_api,
+            runtime_paths=self.runtime_paths,
+        )
         self.running = True
         self.reset()
 
@@ -289,40 +295,45 @@ class VillagerBench:
         if self._virtual_debug:
             return
         self.logger.info("resetting...")
-        if os.path.exists(".cache/load_status.cache"):
-            with open(".cache/load_status.cache", "w") as f:
-                json.dump({"status": "loading"}, f, indent=4)
+        paths = self._paths()
+        if paths.load_status.exists():
+            atomic_write_json(paths.load_status, {"status": "loading"})
         self.logger.info("waiting for server to start...")
         agent_names = [agent.name for agent in self.agent_pool]
         agent_names_str = ",".join(agent_names)
         if not self.running:
             raise RuntimeError("Environment is not running; call '.launch()' before '.reset()'")
-        
-        elif self.env_type == env_type.construction:
+        judger_env = paths.subprocess_environment()
+
+        if self.env_type == env_type.construction:
             if self.dig_needed:
-                subprocess.Popen(["python", "env/build_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--dig_needed","true", "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(["python", "env/build_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--dig_needed","true", "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=judger_env)
                 self.logger.debug(f"python env/build_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --dig_needed true --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
             else:
-                subprocess.Popen(["python", "env/build_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(["python", "env/build_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=judger_env)
                 self.logger.debug(f"python env/build_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
         elif self.env_type == env_type.farming:
-            subprocess.Popen(["python", "env/farm_craft_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["python", "env/farm_craft_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=judger_env)
             self.logger.debug(f"python env/farm_craft_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
         elif self.env_type == env_type.puzzle:
-            subprocess.Popen(["python", "env/escape_room_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--max_task_num", str(self.max_task_num), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["python", "env/escape_room_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--max_task_num", str(self.max_task_num), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=judger_env)
             self.logger.debug(f"python env/escape_room_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --max_task_num {self.max_task_num} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
         elif self.env_type == env_type.auto:
-            subprocess.Popen(["python", "env/auto_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name, "--op_path", self.op_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["python", "env/auto_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name, "--op_path", self.op_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=judger_env)
             self.logger.debug(f"python env/auto_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name} --op_path {self.op_path}")
         elif self.env_type == env_type.meta:
-            command = ["python", "env/meta_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name]
-            os.makedirs("data", exist_ok=True)
-            diagnostics_dir = getattr(self, "meta_diagnostics_dir", None) or "data"
-            os.makedirs(diagnostics_dir, exist_ok=True)
-            stdout_path = os.path.join(diagnostics_dir, "meta_judger.stdout.log")
-            stderr_path = os.path.join(diagnostics_dir, "meta_judger.stderr.log")
+            command = ["python", "env/meta_judger.py", "--idx", str(self.task_id), "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name, "--runtime-root", str(paths.root.resolve()), "--runtime-layout", paths.layout]
+            diagnostics_dir = Path(getattr(self, "meta_diagnostics_dir", None) or paths.data_dir)
+            diagnostics_dir.mkdir(parents=True, exist_ok=True)
+            stdout_path = str(diagnostics_dir / "meta_judger.stdout.log")
+            stderr_path = str(diagnostics_dir / "meta_judger.stderr.log")
             with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
-                judger_process = subprocess.Popen(command, stdout=stdout, stderr=stderr)
+                judger_process = subprocess.Popen(
+                    command,
+                    stdout=stdout,
+                    stderr=stderr,
+                    env=paths.subprocess_environment(),
+                )
             diagnostics = {
                 "command": command,
                 "pid": judger_process.pid,
@@ -335,7 +346,7 @@ class VillagerBench:
             self._write_meta_judger_diagnostics(diagnostics)
             self.logger.debug(f"python env/meta_judger.py --idx {self.task_id} --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
         elif self.env_type == env_type.gen:
-            subprocess.Popen(["python", "env/llm_gen_judger.py", "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["python", "env/llm_gen_judger.py", "--host", self.host, "--port" , str(self.port), "--agent_num", str(len(self.agent_pool)), "--agent_names", agent_names_str, "--task_name", self.task_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=judger_env)
             self.logger.debug(f"python env/llm_gen_judger.py --host {self.host} --port {self.port} --agent_num {len(self.agent_pool)} --agent_names {agent_names_str} --task_name {self.task_name}")
         elif self.env_type == env_type.none:
             self.logger.info("no env type specified, only agent will be launched")
@@ -350,7 +361,8 @@ class VillagerBench:
             try:
                 if max_wait_num % 30 == 0 and max_wait_num != 120:
                     self.logger.info(f"waiting for server to start, guess the server is starting this task for the first time, please wait")
-                if not os.path.exists(".cache/load_status.cache"):
+                status_result = read_json_artifact(paths.load_status)
+                if status_result.state == "absent":
                     if self.env_type == env_type.meta:
                         diagnostics["load_status_history"].append({"status": "missing", "time": time.time()})
                         diagnostics["exit_code"] = judger_process.poll()
@@ -358,13 +370,20 @@ class VillagerBench:
                         if diagnostics["exit_code"] is not None:
                             raise RuntimeError(f"meta judger exited before loading with code {diagnostics['exit_code']}")
                     continue
-                with open(".cache/load_status.cache", "r") as f:
-                    status_data = json.load(f)
+                if status_result.state == "invalid":
+                    self._invalid_status_reads = getattr(self, "_invalid_status_reads", 0) + 1
+                    if self._invalid_status_reads >= 3:
+                        raise RuntimeError(
+                            f"load status remained invalid: {status_result.error}"
+                        )
+                    continue
+                self._invalid_status_reads = 0
+                status_data = status_result.value
                 if self.env_type == env_type.meta:
                     phase = None
-                    phase_path = ".cache/meta_judger_phase.cache"
-                    if os.path.exists(phase_path):
-                        with open(phase_path, "r", encoding="utf-8") as f:
+                    phase_path = paths.meta_judger_phase
+                    if phase_path.exists():
+                        with phase_path.open("r", encoding="utf-8") as f:
                             phase = f.read().strip() or None
                     diagnostics["load_status_history"].append({
                         "status": status_data.get("status"),
@@ -392,10 +411,8 @@ class VillagerBench:
             raise Exception("server failed to start")
 
     def _write_meta_judger_diagnostics(self, diagnostics):
-        diagnostics_dir = getattr(self, "meta_diagnostics_dir", None) or "data"
-        os.makedirs(diagnostics_dir, exist_ok=True)
-        with open(os.path.join(diagnostics_dir, "meta_judger_diagnostics.json"), "w", encoding="utf-8") as f:
-            json.dump(diagnostics, f, indent=4)
+        diagnostics_dir = Path(getattr(self, "meta_diagnostics_dir", None) or self._paths().data_dir)
+        atomic_write_json(diagnostics_dir / "meta_judger_diagnostics.json", diagnostics)
     
     def get_msg(self, agent_name: str):
         '''
@@ -467,30 +484,28 @@ class VillagerBench:
             return metadata
 
     def get_score(self):
-        if self.env_type == env_type.construction:
-            with open(f"data/score.json") as f:
-                score = json.load(f)
-            return score
-        if self.env_type == env_type.farming:
-            with open(f"data/score.json") as f:
-                score = json.load(f)
-            return score
-        if self.env_type == env_type.puzzle:
-            with open(f"data/score.json") as f:
-                score = json.load(f)
-            return score
-        if self.env_type == env_type.meta:
-            with open("data/score.json") as f:
-                return json.load(f)
+        if self.env_type in (env_type.construction, env_type.farming, env_type.puzzle, env_type.meta):
+            paths = self._paths()
+            score_result = read_json_artifact(paths.score)
+            if score_result.state != "valid":
+                raise RuntimeError(
+                    f"score artifact is {score_result.state}: {score_result.error or paths.score}"
+                )
+            return score_result.value
 
     def is_task_complete(self):
-        if self.env_type != env_type.meta or not os.path.exists(".cache/load_status.cache"):
+        if self.env_type != env_type.meta:
             return False
-        try:
-            with open(".cache/load_status.cache", "r", encoding="utf-8") as f:
-                return json.load(f).get("status") == "end"
-        except (OSError, json.JSONDecodeError):
+        status_result = read_json_artifact(self._paths().load_status)
+        if status_result.state == "absent":
             return False
+        if status_result.state == "invalid":
+            self._invalid_status_reads = getattr(self, "_invalid_status_reads", 0) + 1
+            if self._invalid_status_reads >= 3:
+                raise RuntimeError(f"load status remained invalid: {status_result.error}")
+            return False
+        self._invalid_status_reads = 0
+        return isinstance(status_result.value, dict) and status_result.value.get("status") == "end"
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import os
 import random
 import platform
 from model.ollama_config import load_agent_api_key_list
+from env.runtime_paths import RuntimePaths, atomic_write_json
 
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
@@ -180,16 +181,15 @@ def timeit(func):
         result = func(*args, **kwargs_in)
         end_time = time.time()
         
-        # 确保data目录存在
-        if not os.path.exists("data"):
-            os.makedirs("data")
+        runtime_paths = RuntimePaths.from_environment()
+        runtime_paths.ensure_directories()
         max_try = 3
         while max_try > 0:
             try:
                 # action log
-                action_log_path = "data/action_log.json"
-                if os.path.exists(action_log_path):
-                    with open(action_log_path, "r", encoding='utf-8') as f:
+                action_log_path = runtime_paths.action_log
+                if action_log_path.exists():
+                    with action_log_path.open("r", encoding='utf-8') as f:
                         action_log = json.load(f)
                 else:
                     action_log = {}
@@ -209,8 +209,7 @@ def timeit(func):
                 })
                 
                 # 写入文件
-                with open(action_log_path, "w", encoding='utf-8') as f:
-                    json.dump(action_log, f, indent=4)
+                atomic_write_json(action_log_path, action_log)
                 break
             except Exception as e:
                 print(e)
@@ -293,13 +292,15 @@ class Agent():
             url_prefix = {}
         return url_prefix
 
-    def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model=""):
+    def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model="", runtime_paths: RuntimePaths | None = None):
         self.name = name
         self.prefix = prefix
         self.context = context
         self.prompt = prompt
         self.local_port = local_port
         self.model = Agent.model if model == "" else model
+        self.runtime_paths = runtime_paths or RuntimePaths.legacy()
+        self.reflection_output_dir = self.runtime_paths.run_result_dir("test")
         self.action_history = []
         self.basic_tools = [
             Agent.scanNearbyEntities, Agent.navigateTo, Agent.attackTarget,
@@ -380,8 +381,10 @@ class Agent():
             return {'message': 'Exception', 'status': False}
 
     @staticmethod
-    def launch(host="10.21.31.18", port=25565, world="world", verbose=False, ignore_name=[], debug=False, fast=False):
+    def launch(host="10.21.31.18", port=25565, world="world", verbose=False, ignore_name=[], debug=False, fast=False, runtime_paths: RuntimePaths | None = None):
         Agent.port = port
+        runtime_paths = runtime_paths or RuntimePaths.legacy()
+        process_env = runtime_paths.subprocess_environment(env)
         if verbose:
             print("launch ...")
         for key, value in Agent.name2port.items():
@@ -391,7 +394,7 @@ class Agent():
                 try:
                     Agent.agent_process[key] = subprocess.Popen(
                         ["python", "env/minecraft_server_fast.py", "-H", host, "-P", str(port), "-LP", str(value), "-U", key, "-W",
-                    world, "-D", str(debug)], shell=False, env=env)
+                    world, "-D", str(debug)], shell=False, env=process_env)
                     print(f"python env/minecraft_server_fast.py -H \"{host}\" -P {port} -LP {value} -U \"{key}\" -W \"{world}\" -D {debug}")
                 except Exception as e:
                     print(f"An error occurred: {e}")
@@ -400,7 +403,7 @@ class Agent():
             else:
                 Agent.agent_process[key] = subprocess.Popen(
                     ["python", "env/minecraft_server.py", "-H", host, "-P", str(port), "-LP", str(value), "-U", key, "-W",
-                 world, "-D", str(debug)], shell=False, env=env)
+                 world, "-D", str(debug)], shell=False, env=process_env)
                 print(f"python env/minecraft_server.py -H \"{host}\" -P {port} -LP {value} -U \"{key}\" -W \"{world}\" -D {debug}")
                 time.sleep(2)
         if verbose:
@@ -1030,14 +1033,10 @@ class Agent():
 
     def update_history(self, response):
         self.action_history.append(response)
-        with open(".cache/meta_setting.json", "r", encoding='utf-8') as f:
-            config = json.load(f)
-            task_name = config["task_name"]
-        if not os.path.exists("result/" + task_name):
-            os.mkdir(os.path.join("result/", task_name))
-        root = os.path.join("result/", task_name)
-        with open(os.path.join(root, f"{self.name}_history.json"), "w", encoding='utf-8') as f:
-            json.dump(self.action_history, f, indent=4)
+        atomic_write_json(
+            self.reflection_output_dir / f"{self.name}_history.json",
+            self.action_history,
+        )
 
     def step(self, instruction: str, actions=[], observations=[], player_name_list=[], max_try_turn=2, max_iterations=1, tools=[], recommended_actions=[]):
         # return the (action, observation), details.

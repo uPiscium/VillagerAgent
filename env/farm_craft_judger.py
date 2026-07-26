@@ -13,6 +13,11 @@ import json
 import os
 import argparse
 
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json
+
 cooked_rabbit = ["rabbit in chest", "rabbit in pasture"]
 baked_potato = ["potato in chest", "potato in farm"]
 carrot = ["carrot in chest", "carrot in farm"]
@@ -33,10 +38,11 @@ if __name__ == '__main__':
     parser.add_argument("--agent_names", type=str, default="", help="the name of the agents in A,B,C format")
     parser.add_argument("--task_name", type=str, default="test", help="the name of the task")
     args = parser.parse_args()
+    runtime_paths = RuntimePaths.from_environment()
+    runtime_paths.ensure_directories()
 
     agent_names = args.agent_names.split(",")
-    with open(".cache/load_status.cache", "w") as f:
-        json.dump({"status": "loading"}, f, indent=4)
+    atomic_write_json(runtime_paths.load_status, {"status": "loading"})
 
     if not os.path.exists("result"):
         os.makedirs("result")
@@ -44,6 +50,8 @@ if __name__ == '__main__':
     mineflayer = require('mineflayer')
     agent_num = args.agent_num
     task_name = args.task_name
+    run_result_dir = runtime_paths.run_result_dir(task_name)
+    run_result_dir.mkdir(parents=True, exist_ok=True)
 
     x_b, y_b, z_b = 41, -60, 122
     min_x, min_y, min_z = -11, 0, 0
@@ -325,8 +333,7 @@ if __name__ == '__main__':
             start_time = time.time()
             last_time = start_time
 
-            with open(".cache/load_status.cache", "w") as f:
-                json.dump({"status": "loaded"}, f, indent=4)
+            atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
 
         t = threading.Thread(target=init, args=())
         t.start()
@@ -336,9 +343,9 @@ if __name__ == '__main__':
     def handleTime(*args):
         def calculate_balance():
             # 计算每个agent的时间
-            if not os.path.exists('data/action_log.json'):
+            if not runtime_paths.action_log.exists():
                 return
-            with open('data/action_log.json', 'r') as f:
+            with runtime_paths.action_log.open('r', encoding="utf-8") as f:
                 data = json.load(f)
             agent_time = []
             for action_name, actions in data.items():
@@ -357,9 +364,9 @@ if __name__ == '__main__':
             return 1 - np.std(time_array)
 
         def calculate_action_time():
-            if not os.path.exists('data/action_log.json'):
+            if not runtime_paths.action_log.exists():
                 return 0
-            with open('data/action_log.json', 'r') as f:
+            with runtime_paths.action_log.open('r', encoding="utf-8") as f:
                 data = json.load(f)
             time_list = []
             for name, actions in data.items():
@@ -405,18 +412,14 @@ if __name__ == '__main__':
             now_time = time.time()
 
             if now_time - last_time > 1:
-                with open(".cache/heart_beat.cache", "w") as f:
-                    json.dump({"time": now_time}, f, indent=4)
+                atomic_write_json(runtime_paths.heartbeat, {"time": now_time})
                 if score == 100:
                     efficiency = max_action_time / calculate_action_time()
                     # 给出结束信号和写入文件
-                    if not os.path.exists(os.path.join("result", task_name)):
-                        os.mkdir(os.path.join("result", task_name))
                     # else:
                     #     shutil.rmtree(os.path.join("result", task_name))
                     #     os.mkdir(os.path.join("result", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "score": score,
                             "cooperation": cooperation,
                             "efficiency": efficiency,
@@ -424,19 +427,15 @@ if __name__ == '__main__':
                             "use_time": calculate_action_time(),
                             "end_reason": "complete task",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
                 if calculate_action_time() > max_action_time:
                     efficiency = 1
-                    if not os.path.exists(os.path.join("result", task_name)):
-                        os.mkdir(os.path.join("result", task_name))
                     # else:
                     #     shutil.rmtree(os.path.join("result", task_name))
                     #     os.mkdir(os.path.join("result", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "score": score,
                             "cooperation": cooperation,
                             "efficiency": efficiency,
@@ -444,9 +443,8 @@ if __name__ == '__main__':
                             "use_time": calculate_action_time(),
                             "end_reason": "action time out",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
                 if now_time - start_time > max_time:
                     action_time = calculate_action_time()
@@ -454,13 +452,10 @@ if __name__ == '__main__':
                         efficiency = 1
                     else:
                         efficiency = max_action_time / action_time
-                    if not os.path.exists(os.path.join("result", task_name)):
-                        os.mkdir(os.path.join("result", task_name))
                     # else:
                     #     shutil.rmtree(os.path.join("result", task_name))
                     #     os.mkdir(os.path.join("result", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "score": score,
                             "cooperation": cooperation,
                             "efficiency": efficiency,
@@ -468,9 +463,8 @@ if __name__ == '__main__':
                             "use_time": calculate_action_time(),
                             "end_reason": "max time out",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
                 
 

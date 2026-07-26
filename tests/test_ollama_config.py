@@ -131,15 +131,17 @@ def test_start_with_config_run_uses_ollama_defaults_without_api_key_list(monkeyp
             captured["get_score_called"] = True
 
     class FakeDataManager:
-        def __init__(self, silent=False):
+        def __init__(self, silent=False, history_output_dir=None):
             captured["data_manager_silent"] = silent
+            captured["data_manager_history_output_dir"] = history_output_dir
 
         def update_database_init(self, init_state):
             captured["init_state"] = init_state
 
     class FakeTaskManager:
-        def __init__(self, silent=False, cache_enabled=True):
+        def __init__(self, silent=False, cache_enabled=True, history_output_dir=None):
             captured["task_manager"] = {"silent": silent, "cache_enabled": cache_enabled}
+            captured["task_manager_history_output_dir"] = history_output_dir
 
         def init_task(self, description, document):
             captured["init_task"] = {"description": description, "document": document}

@@ -10,6 +10,11 @@ import argparse
 from minecraft_define import *
 from env_api import *
 
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--idx', type=int, default=0, help='the index of the escape test to be judged')
 parser.add_argument('--max_task_num', type=int, default=1, help='how many tasks in the test')
@@ -26,6 +31,10 @@ agent_num = args.agent_num
 max_task_num = args.max_task_num
 agent_names = args.agent_names.split(",")
 task_name = args.task_name
+runtime_paths = RuntimePaths.from_environment()
+runtime_paths.ensure_directories()
+run_result_dir = runtime_paths.run_result_dir(task_name)
+run_result_dir.mkdir(parents=True, exist_ok=True)
 
 mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
@@ -52,14 +61,9 @@ bot.loadPlugin(pvp)
 bot.loadPlugin(minecraftHawkEye)
 
 ### reset the environments
-with open("data/score.json", "w") as f:
-    json.dump({}, f, indent=4)
-
-with open(".cache/env.cache", "w") as f:
-    json.dump([], f, indent=4)
-
-with open(".cache/load_status.cache", "w") as f:
-    json.dump({"status": "loading"}, f, indent=4)
+atomic_write_json(runtime_paths.score, {})
+atomic_write_json(runtime_paths.env_cache, [])
+atomic_write_json(runtime_paths.load_status, {"status": "loading"})
 
 if not os.path.exists("result"):
     os.makedirs("result")
@@ -118,8 +122,7 @@ def handleViewer(*args):
     max_time = len(state_tree.task_list) * 40 + 240
     if max_time > 720:
             max_time = 720
-    with open(".cache/load_status.cache", "w") as f:
-        json.dump({"status": "loaded"}, f, indent=4)
+    atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
     for i in range(-3, 4):
         for j in range(-3, 4):
             if (i + j) % 2 == 0:
@@ -140,9 +143,9 @@ def handleViewer(*args):
     def handle(this):
         def calculate_balance():
             # 计算每个agent的时间
-            if not os.path.exists('data/action_log.json'):
+            if not runtime_paths.action_log.exists():
                 return 0
-            with open('data/action_log.json', 'r') as f:
+            with runtime_paths.action_log.open('r', encoding="utf-8") as f:
                 data = json.load(f)
             agent_time = []
             for name, actions in data.items():
@@ -161,9 +164,9 @@ def handleViewer(*args):
             return 1 - np.std(time_array)
 
         def calculate_action_time():
-            if not os.path.exists('data/action_log.json'):
+            if not runtime_paths.action_log.exists():
                 return 0
-            with open('data/action_log.json', 'r') as f:
+            with runtime_paths.action_log.open('r', encoding="utf-8") as f:
                 data = json.load(f)
             time_list = []
             for name, actions in data.items():
@@ -206,10 +209,7 @@ def handleViewer(*args):
                     else:
                         efficiency = max_action_time / calculate_action_time()
                     # 给出结束信号和写入文件
-                    if not os.path.exists("result/" + task_name):
-                        os.mkdir(os.path.join("result", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "complete_score": score,
                             "complexity_score": complexity_score,
                             "efficiency": efficiency,
@@ -217,26 +217,21 @@ def handleViewer(*args):
                             "use_time": calculate_action_time(),
                             "end_reason": "complete task",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
                 if calculate_action_time() > max_action_time:
                     efficiency = 1
                     # 给出结束信号和写入文件
-                    if not os.path.exists("result/" + task_name):
-                        os.mkdir(os.path.join("result/", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "complexity_score": complexity_score,
                             "efficiency": efficiency,
                             "balance": balance,
                             "use_time": calculate_action_time(),
                             "end_reason": "action_time out",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
                 if now_time - start_time > max_time:
                     action_time = calculate_action_time()
@@ -245,18 +240,14 @@ def handleViewer(*args):
                     else:
                         efficiency = max_action_time / action_time
                     # 给出结束信号和写入文件
-                    if not os.path.exists("result/" + task_name):
-                        os.mkdir(os.path.join("result", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "complexity_score": complexity_score,
                             "efficiency": efficiency,
                             "balance": balance,
                             "use_time": calculate_action_time(),
                             "end_reason": "max time out",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
                 last_time = now_time

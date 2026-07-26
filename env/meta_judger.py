@@ -7,6 +7,11 @@ from utils import *
 import json
 import os
 import math
+
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json, atomic_write_text
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json, atomic_write_text
 import argparse
 from minecraft_define import *
 from env_api import *
@@ -25,6 +30,8 @@ parser.add_argument('--host', type=str, default="10.21.31.18", help='the host of
 parser.add_argument("--port", type=int, default=25565, help="the port of the server")
 parser.add_argument("--agent_names", type=str, default="", help="the name of the agents in A,B,C format")
 parser.add_argument("--task_name", type=str, default="test", help="the name of the task")
+parser.add_argument("--runtime-root", type=str, default=None)
+parser.add_argument("--runtime-layout", choices=("legacy", "isolated"), default="legacy")
 
 args = parser.parse_args()
 select_idx = args.idx
@@ -32,6 +39,14 @@ agent_num = args.agent_num
 max_task_num = args.max_task_num
 agent_names = args.agent_names.split(",")
 task_name = args.task_name
+runtime_paths = (
+    RuntimePaths(args.runtime_root, layout=args.runtime_layout)
+    if args.runtime_root
+    else RuntimePaths.from_environment()
+)
+runtime_paths.ensure_directories()
+run_result_dir = runtime_paths.run_result_dir(task_name)
+run_result_dir.mkdir(parents=True, exist_ok=True)
 
 mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
@@ -68,22 +83,13 @@ bot.loadPlugin(pvp)
 bot.loadPlugin(minecraftHawkEye)
 
 ### reset the environments
-with open("data/score.json", "w") as f:
-    json.dump({}, f, indent=4) 
-
-with open(".cache/env.cache", "w") as f:
-    json.dump([], f, indent=4)
-
-with open(".cache/load_status.cache", "w") as f:
-    json.dump({"status": "loading"}, f, indent=4)
+atomic_write_json(runtime_paths.score, {})
+atomic_write_json(runtime_paths.env_cache, [])
+atomic_write_json(runtime_paths.load_status, {"status": "loading"})
 
 
 def write_load_phase(phase):
-    path = ".cache/meta_judger_phase.cache"
-    temporary_path = path + ".tmp"
-    with open(temporary_path, "w", encoding="utf-8") as f:
-        f.write(phase)
-    os.replace(temporary_path, path)
+    atomic_write_text(runtime_paths.meta_judger_phase, phase)
 
 
 write_load_phase("waiting_for_spawn")
@@ -280,7 +286,7 @@ def handleViewer(*args):
     # bot.chat(f"/tp {agent_name} {orx - 10} {ory + 4} {orz - 10} 0 0") #tp走防止在生成的地形里窒息
     time.sleep(.2)
 
-    with open(".cache/meta_setting.json", "r") as f:
+    with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
         config = json.load(f)
     arg_dict = config["evaluation_arg"]
     write_load_phase("sampling_random_positions")
@@ -707,8 +713,7 @@ def handleViewer(*args):
         bot.chat("/tellraw @a {\"text\":\"INVALID SCENARIO!\", \"color\":\"red\"}")
 
     write_load_phase("loaded")
-    with open(".cache/load_status.cache", "w") as f:
-        json.dump({"status": "loaded"}, f, indent=4)
+    atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
     
     global start_time
     start_time = time.time()
@@ -718,9 +723,9 @@ def handleViewer(*args):
 def handle(this):
     def calculate_balance():
         # 计算每个agent的时间
-        if not os.path.exists('data/action_log.json'):
+        if not runtime_paths.action_log.exists():
             return 0
-        with open('data/action_log.json', 'r') as f:
+        with runtime_paths.action_log.open('r', encoding="utf-8") as f:
             data = json.load(f)
         agent_time = []
         for name, actions in data.items():
@@ -739,9 +744,9 @@ def handle(this):
         return 1 - np.std(time_array)
 
     def calculate_action_time():
-        if not os.path.exists('data/action_log.json'):
+        if not runtime_paths.action_log.exists():
             return 0
-        with open('data/action_log.json', 'r') as f:
+        with runtime_paths.action_log.open('r', encoding="utf-8") as f:
             data = json.load(f)
         time_list = []
         for name, actions in data.items():
@@ -788,7 +793,7 @@ def handle(this):
     if start_time is not None:
         global complexity_score, efficiency, balance, info_count, environment_set_time
         now_time = time.time()
-        with open(".cache/meta_setting.json", "r") as f:
+        with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
             config = json.load(f)
         arg_dict = config["evaluation_arg"]
 
@@ -884,22 +889,16 @@ def handle(this):
             if score == 100:# and os.path.exists("result/" + task_name + "/Alice_history.json"):
                 # time.sleep(10)
                 # 至少得等到所有的action都执行完了，有记录了再结束吧
-                if not os.path.exists("result/" + task_name):
-                    os.mkdir(os.path.join("result/", task_name))
                 score_payload = {
                     "score": score,
                     "use_time": calculate_action_time(),
                     "end_reason": "task completed",
                     "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
                 }
-                with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                    json.dump(score_payload, f, indent=4)
-                with open("data/score.json", "w") as f:
-                    json.dump(score_payload, f, indent=4)
-                with open(os.path.join(os.path.join("result", task_name), "config.json"), "w") as f:
-                    json.dump(config, f, indent=4)
-                with open(".cache/load_status.cache", "w") as f:
-                    json.dump({"status": "end"}, f, indent=4)
+                atomic_write_json(run_result_dir / "score.json", score_payload)
+                atomic_write_json(runtime_paths.score, score_payload)
+                atomic_write_json(run_result_dir / "config.json", config)
+                atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
             # check failed action number
             # failed_action = 0
@@ -936,7 +935,7 @@ def handle(this):
             #         json.dump({"status": "end"}, f, indent=4)
             
             # max_iter作为超时退出条件
-            action_log_root = os.path.join(os.path.join("result", task_name), "Alice_history.json")
+            action_log_root = run_result_dir / "Alice_history.json"
 
             if os.path.exists(action_log_root):
                 with open(action_log_root, "r", encoding='utf-8') as f:
@@ -953,21 +952,16 @@ def handle(this):
                     else:
                         efficiency = max_action_time / action_time
                     # 给出结束信号和写入文件
-                    if not os.path.exists("result/" + task_name):
-                        os.mkdir(os.path.join("result", task_name))
-                    with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                        json.dump({
+                    atomic_write_json(run_result_dir / "score.json", {
                             "complexity_score": complexity_score,
                             "efficiency": efficiency,
                             "balance": balance,
                             "use_time": calculate_action_time(),
                             "end_reason": "max iteration out",
                             "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                        }, f, indent=4)
-                    with open(os.path.join(os.path.join("result", task_name), "config.json"), "w") as f:
-                        json.dump(config, f, indent=4)
-                    with open(".cache/load_status.cache", "w") as f:
-                        json.dump({"status": "end"}, f, indent=4)
+                        })
+                    atomic_write_json(run_result_dir / "config.json", config)
+                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
                 if now_iter >= max_iter: 
                     max_iter_flag += 1
 
@@ -999,7 +993,7 @@ def handle(this):
 @On(bot, 'messagestr')
 def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
     global score, info_count
-    with open(".cache/meta_setting.json", "r") as f:
+    with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
         config = json.load(f)
     arg_dict = config["evaluation_arg"]
 
@@ -1257,7 +1251,7 @@ def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
 @On(bot, "entityHurt")
 def handleAttack(_, entity):
     global environment_set_time, score
-    with open(".cache/meta_setting.json", "r") as f:
+    with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
         config = json.load(f)
     arg_dict = config["evaluation_arg"]
     if arg_dict["action"] == "attack":

@@ -14,6 +14,9 @@ from type_define.graph import Task, Graph
 from pipeline.utils import *
 import logging
 import random
+from pathlib import Path
+
+from env.runtime_paths import RuntimePaths, atomic_write_json
 
 class DataManager:
     '''
@@ -24,11 +27,12 @@ class DataManager:
         silent: bool, whether to print log
         model_name: str, the name of the language model
     '''
-    def __init__(self, use_cache=False, silent=False, model_name="gpt-4-1106-preview"):
+    def __init__(self, use_cache=False, silent=False, model_name="gpt-4-1106-preview", history_output_dir=None):
         self._experience_path = "data/experience.json"
         self._history_path = "data/history.json"
         self._env_path = "data/env.json"
         self._agent_path = "data/agent.json"
+        self.history_output_dir = Path(history_output_dir) if history_output_dir is not None else RuntimePaths.legacy().run_result_dir("test")
         self._cache = {}
         self._history_data = {}
         self._env_data = {
@@ -325,14 +329,7 @@ class DataManager:
 
         self.history_log["prompt"].append(prompt)
         self.history_log["response"].append(response)
-        with open(".cache/meta_setting.json", "r") as f:
-            config = json.load(f)
-            task_name = config["task_name"]
-        if not os.path.exists("result/" + task_name):
-            os.mkdir(os.path.join("result/", task_name))
-        root = os.path.join("result/", task_name)
-        with open(os.path.join(root, "DM_history.json"), "w") as f:
-            json.dump(self.history_log, f, indent=4)
+        atomic_write_json(self.history_output_dir / "DM_history.json", self.history_log)
 
     def update_database(self, new_info: dict):
         self._logger.info("Start updating database...")
@@ -456,14 +453,7 @@ class DataManager:
 
         self.query_log["prompt"].append(prompt)
         self.query_log["response"].append(response)
-        with open(".cache/meta_setting.json", "r") as f:
-            config = json.load(f)
-            task_name = config["task_name"]
-        if not os.path.exists("result/" + task_name):
-            os.mkdir(os.path.join("result/", task_name))
-        root = os.path.join("result/", task_name)
-        with open(os.path.join(root, "DM_query.json"), "w") as f:
-            json.dump(self.query_log, f, indent=4)
+        atomic_write_json(self.history_output_dir / "DM_query.json", self.query_log)
 
     @timed_cache(max_age=120)
     def query_env_with_task(self, task: str, agent_query = False) -> str:

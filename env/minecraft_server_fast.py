@@ -15,9 +15,15 @@ from env_api import *
 import uvicorn
 import platform
 
+try:
+    from env.runtime_paths import RuntimePaths, read_json_artifact
+except ImportError:
+    from runtime_paths import RuntimePaths, read_json_artifact
+
 # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
 os.environ["REQ_TIMEOUT"] = "1800000"
 app = FastAPI()
+runtime_paths = RuntimePaths.from_environment()
 msg_list = []  # 用于存储消息队列，每次获取后清除当前的消息队列
 # python minecraft_server_fast.py -U Tom
 parser = argparse.ArgumentParser()
@@ -323,9 +329,9 @@ async def environment(request: Request):
     if hint:
         msg += f"the sign nearby said: {hint}"
     
-    if os.path.exists(".cache/env.cache"):
-        with open(".cache/env.cache", "r") as f:
-            cache = json.load(f)
+    cache_result = read_json_artifact(runtime_paths.env_cache)
+    if cache_result.state == "valid" and isinstance(cache_result.value, list):
+        cache = cache_result.value
         # 找到距离小于5的cache
         for c in cache:
             pos = c["center"]
@@ -344,9 +350,9 @@ async def environment_info(request: Request):
     hint = readNearestSign(bot, Vec3, mcData, max_distance=5)
     msg["blocks"] = blocks
     msg["sign"] = str(hint)
-    if os.path.exists(".cache/env.cache"):
-        with open(".cache/env.cache", "r") as f:
-            cache = json.load(f)
+    cache_result = read_json_artifact(runtime_paths.env_cache)
+    if cache_result.state == "valid" and isinstance(cache_result.value, list):
+        cache = cache_result.value
         # 找到距离小于5的cache
         for c in cache:
             pos = c["center"]

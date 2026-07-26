@@ -5,6 +5,11 @@ import json
 import os
 import argparse
 
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--idx', type=int, default=0, help='the index of the building to be judged')
 parser.add_argument('--mc_version', type=str, default="1.19.2", help='the version of minecraft')
@@ -21,9 +26,12 @@ agent_num = args.agent_num
 dig_needed = args.dig_needed
 agent_names = args.agent_names.split(",")
 task_name = args.task_name
+runtime_paths = RuntimePaths.from_environment()
+runtime_paths.ensure_directories()
+run_result_dir = runtime_paths.run_result_dir(task_name)
+run_result_dir.mkdir(parents=True, exist_ok=True)
 
-with open(".cache/load_status.cache", "w") as f:
-    json.dump({"status": "loading"}, f, indent=4)
+atomic_write_json(runtime_paths.load_status, {"status": "loading"})
 
 if not os.path.exists("result"):
     os.makedirs("result")
@@ -47,8 +55,7 @@ bot = mineflayer.createBot({
 last_time = time.time()
 start_time = None
 task_data = None
-with open("data/score.json", "w") as f:
-    json.dump([], f, indent=4)
+atomic_write_json(runtime_paths.score, [])
 
 complexity = 0
 max_action_time = 0
@@ -70,9 +77,9 @@ if not os.path.exists('data/blueprint_description_all.json'):
 
 def calculate_balance():
     # 计算每个agent的时间
-    if not os.path.exists('data/action_log.json'):
+    if not runtime_paths.action_log.exists():
         return
-    with open('data/action_log.json', 'r') as f:
+    with runtime_paths.action_log.open('r', encoding="utf-8") as f:
         data = json.load(f)
     agent_time = []
     for name, actions in data.items():
@@ -215,8 +222,7 @@ def handleViewer(*args):
 
         task(blue_prints[select_idx])
 
-        with open(".cache/load_status.cache", "w") as f:
-            json.dump({"status": "loaded"}, f, indent=4)
+        atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
 
         global start_time
         start_time = time.time()
@@ -557,9 +563,9 @@ def handleViewer(*args):
     @On(bot, "time")
     def handle(this):
         def calculate_action_time():
-            if not os.path.exists('data/action_log.json'):
+            if not runtime_paths.action_log.exists():
                 return 0
-            with open('data/action_log.json', 'r') as f:
+            with runtime_paths.action_log.open('r', encoding="utf-8") as f:
                 data = json.load(f)
             time_list = []
             for name, actions in data.items():
@@ -596,13 +602,10 @@ def handleViewer(*args):
                 efficiency = max_action_time / calculate_action_time()
                 bot.chat(f"finish {efficiency}")
                 # 给出结束信号和写入文件
-                if not os.path.exists(os.path.join("result", task_name)):
-                    os.mkdir(os.path.join("result", task_name))
                 # else:
                 #     shutil.rmtree(os.path.join("result", task_name))
                 #     os.mkdir(os.path.join("result", task_name))
-                with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                    json.dump({
+                atomic_write_json(run_result_dir / "score.json", {
                         "block_hit_rate": block_hit_rate,
                         "view_hit_rate": view_hit_rate,
                         "efficiency": efficiency,
@@ -610,23 +613,19 @@ def handleViewer(*args):
                         "end_reason": "complete task",
                         "complexity": complexity,
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                    }, f, indent=4)
-                shutil.move("data/action_log.json", os.path.join(os.path.join("result", task_name), "action_log.json"))
-                shutil.move("data/tokens.json", os.path.join(os.path.join("result", task_name), "tokens.json"))
-                with open(".cache/load_status.cache", "w") as f:
-                    json.dump({"status": "end"}, f, indent=4)
+                    })
+                shutil.move(runtime_paths.action_log, run_result_dir / "action_log.json")
+                shutil.move(runtime_paths.tokens, run_result_dir / "tokens.json")
+                atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
             if start_time and now_time and calculate_action_time() > max_action_time and task_data:
                 efficiency = 1
                 bot.chat(f'time out')
                 # 给出结束信号和写入文件
-                if not os.path.exists(os.path.join("result", task_name)):
-                    os.mkdir(os.path.join("result", task_name))
                 # else:
                 #     shutil.rmtree(os.path.join("result", task_name))
                 #     os.mkdir(os.path.join("result", task_name))
-                with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                    json.dump({
+                atomic_write_json(run_result_dir / "score.json", {
                         "block_hit_rate": block_hit_rate,
                         "view_hit_rate": view_hit_rate,
                         "efficiency": efficiency,
@@ -634,9 +633,8 @@ def handleViewer(*args):
                         "end_reason": "action time out",
                         "complexity": complexity,
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                    }, f, indent=4)
-                with open(".cache/load_status.cache", "w") as f:
-                    json.dump({"status": "end"}, f, indent=4)
+                    })
+                atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
             if start_time and now_time and now_time - start_time > max_time and task_data:
                 action_time = calculate_action_time()
@@ -646,13 +644,10 @@ def handleViewer(*args):
                     efficiency = max_action_time / action_time
                 bot.chat(f'time out')
                 # 给出结束信号和写入文件
-                if not os.path.exists(os.path.join("result", task_name)):
-                    os.mkdir(os.path.join("result", task_name))
                 # else:
                 #     shutil.rmtree(os.path.join("result", task_name))
                 #     os.mkdir(os.path.join("result", task_name))
-                with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                    json.dump({
+                atomic_write_json(run_result_dir / "score.json", {
                         "block_hit_rate": block_hit_rate,
                         "view_hit_rate": view_hit_rate,
                         "efficiency": efficiency,
@@ -660,9 +655,8 @@ def handleViewer(*args):
                         "end_reason": "max time out",
                         "complexity": complexity,
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                    }, f, indent=4)
-                with open(".cache/load_status.cache", "w") as f:
-                    json.dump({"status": "end"}, f, indent=4)
+                    })
+                atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
             if last_update_time and start_time and task_data and last_update_time - start_time > wait_interval and now_time - last_update_time > wait_interval:
                 action_time = calculate_action_time()
@@ -672,13 +666,10 @@ def handleViewer(*args):
                     efficiency = max_action_time / action_time
                 bot.chat(f'time out')
                 # 给出结束信号和写入文件
-                if not os.path.exists(os.path.join("result", task_name)):
-                    os.mkdir(os.path.join("result", task_name))
                 # else:
                 #     shutil.rmtree(os.path.join("result", task_name))
                 #     os.mkdir(os.path.join("result", task_name))
-                with open(os.path.join(os.path.join("result", task_name), "score.json"), "w") as f:
-                    json.dump({
+                atomic_write_json(run_result_dir / "score.json", {
                         "block_hit_rate": block_hit_rate,
                         "view_hit_rate": view_hit_rate,
                         "efficiency": efficiency,
@@ -686,12 +677,10 @@ def handleViewer(*args):
                         "end_reason": "no better score in wait interval",
                         "complexity": complexity,
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
-                    }, f, indent=4)
-                with open(".cache/load_status.cache", "w") as f:
-                    json.dump({"status": "end"}, f, indent=4)
+                    })
+                atomic_write_json(runtime_paths.load_status, {"status": "end"})
 
-            with open(".cache/heart_beat.cache", "w") as f:
-                json.dump({"time": now_time}, f, indent=4)
+            atomic_write_json(runtime_paths.heartbeat, {"time": now_time})
 
         if now_time - last_time > 20 and task_data:
             block_hit_rate = cal_block_hit_rate(task_data)
@@ -709,12 +698,11 @@ def handleViewer(*args):
 
             # bot.chat(f' complexity: {complexity}')
 
-            with open("data/score.json", "r") as f:
-                score = json.load(f)
+            score_result = read_json_artifact(runtime_paths.score)
+            score = score_result.value if score_result.state == "valid" else []
             score.append(
                 {"time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "block_hit_rate": block_hit_rate,
                  "view_hit_rate": view_hit_rate})
-            with open("data/score.json", "w") as f:
-                json.dump(score, f, indent=4)
+            atomic_write_json(runtime_paths.score, score)
 
             last_time = now_time

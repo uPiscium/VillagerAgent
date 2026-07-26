@@ -4,9 +4,11 @@ import math
 import os
 import sys
 import time
+from functools import wraps
 from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
+from env.runtime_paths import RuntimePaths, atomic_write_json
 
 start_time = time.time()
 from pipeline.controller_tiny import GlobalController
@@ -50,14 +52,7 @@ def _runtime_checkpoint_result(env=None, tm=None) -> dict:
 def _write_runtime_result(path: str | None, payload: dict) -> None:
     if not path:
         return
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    temporary_path = path + ".tmp"
-    with open(temporary_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temporary_path, path)
+    atomic_write_json(path, payload)
 
 print(f"pipeline Time taken: {time.time() - start_time}")
 start_time = time.time()
@@ -65,13 +60,26 @@ start_time = time.time()
 os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True):
+
+def _with_runtime_paths(function):
+    @wraps(function)
+    def wrapped(*args, runtime_paths: RuntimePaths | None = None, **kwargs):
+        paths = runtime_paths or RuntimePaths.legacy()
+        with paths.activated():
+            return function(*args, runtime_paths=paths, **kwargs)
+
+    return wrapped
+
+
+@_with_runtime_paths
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list = [], document: dict = {}, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None):
     start_time = time.time()
 
     if task_type == "meta" and not task_scenario:
         raise ValueError("meta task requires task_scenario")
+    runtime_paths = runtime_paths or RuntimePaths.legacy()
+    runtime_paths.ensure_directories()
     api_key_list = load_agent_api_key_list()
-    os.makedirs(".cache", exist_ok=True)
     meta_setting = {
             "api_model": api_model,
             "api_base": api_base,
@@ -90,8 +98,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
     if task_type == "meta":
         meta_setting["task_scenario"] = task_scenario
         meta_setting["evaluation_arg"] = document
-    with open(".cache/meta_setting.json", "w") as f:
-        json.dump(meta_setting, f, indent=4)
+    atomic_write_json(runtime_paths.meta_setting, meta_setting)
 
     # Agent.base_url = "https://api.deepseek.com/v1"
     # Agent.model = "deepseek-chat"
@@ -107,15 +114,15 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
 
     # 设置env
     if task_type == "construction":
-        env = VillagerBench(env_type=env_type.construction, task_id=task_idx, dig_needed=dig_needed, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False)
+        env = VillagerBench(env_type=env_type.construction, task_id=task_idx, dig_needed=dig_needed, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
     elif task_type == "farming":
-        env = VillagerBench(env_type=env_type.farming, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False)
+        env = VillagerBench(env_type=env_type.farming, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
     elif task_type == "puzzle":
-        env = VillagerBench(env_type=env_type.puzzle, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False)
+        env = VillagerBench(env_type=env_type.puzzle, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
     elif task_type == "meta":
-        env = VillagerBench(env_type=env_type.meta, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False)
+        env = VillagerBench(env_type=env_type.meta, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
     elif task_type == "gen":
-        env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False)
+        env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
     else:
         raise NotImplementedError
     if task_type == "meta" and runtime_result_path:
@@ -173,7 +180,8 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
     try:
         with env.run(fast_api=True):  # Use the FastAPI bridge; it avoids viewer-only Node dependencies such as canvas.
             # 启动DM
-            dm = DataManager(silent=False)
+            history_output_dir = runtime_paths.run_result_dir(task_name)
+            dm = DataManager(silent=False, history_output_dir=history_output_dir)
             dm.update_database_init(env.get_init_state())
 
             print(f"DataManager Time taken: {time.time() - start_time}")
@@ -182,7 +190,11 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             # 启动TM
             from pipeline.runtime_events import JsonlRuntimeEventRecorder, NoOpRuntimeEventSink
             event_sink = JsonlRuntimeEventRecorder(runtime_event_path, run_id=task_name) if runtime_event_path else NoOpRuntimeEventSink()
-            tm = TaskManager(silent=False, cache_enabled=False)
+            tm = TaskManager(
+                silent=False,
+                cache_enabled=False,
+                history_output_dir=history_output_dir,
+            )
             tm.event_sink = event_sink
             runtime_tm = tm
             tm.runtime_checkpoint = lambda: _write_runtime_result(

@@ -11,6 +11,11 @@ from minecraft_define import *
 from env_api import *
 import platform
 
+try:
+    from env.runtime_paths import RuntimePaths, atomic_write_json
+except ImportError:
+    from runtime_paths import RuntimePaths, atomic_write_json
+
 system_type = platform.system().lower()
 parser = argparse.ArgumentParser()
 parser.add_argument('--idx', type=int, default=0, help='the index of the escape test to be judged')
@@ -30,6 +35,8 @@ max_task_num = args.max_task_num
 agent_names = args.agent_names.split(",")
 task_name = args.task_name
 op_path = args.op_path
+runtime_paths = RuntimePaths.from_environment()
+runtime_paths.ensure_directories()
 
 mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
@@ -59,14 +66,9 @@ bot.loadPlugin(pvp)
 bot.loadPlugin(minecraftHawkEye)
 
 ### reset the environments
-with open("data/score.json", "w") as f:
-    json.dump({}, f, indent=4)
-
-with open(".cache/env.cache", "w") as f:
-    json.dump([], f, indent=4)
-
-with open(".cache/load_status.cache", "w") as f:
-    json.dump({"status": "loading"}, f, indent=4)
+atomic_write_json(runtime_paths.score, {})
+atomic_write_json(runtime_paths.env_cache, [])
+atomic_write_json(runtime_paths.load_status, {"status": "loading"})
 
 if not os.path.exists("result"):
     os.makedirs("result")
@@ -127,7 +129,7 @@ def handleViewer(*args):
     time.sleep(.1)
     bot.chat(f'/fill 40 -61 40 -40 -61 -40 minecraft:grass_block')
 
-    
+
 
     op_commands = json.load(open(op_path, "r"))
     for op in op_commands["materials_op"]:
@@ -156,8 +158,7 @@ def handleViewer(*args):
 
 
 
-    with open(".cache/load_status.cache", "w") as f:
-        json.dump({"status": "loaded"}, f, indent=4)
+    atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
 
     summon_time = 40
     for i in range(summon_time):
@@ -166,6 +167,3 @@ def handleViewer(*args):
     for op in op_commands["entities_op"]:
         bot.chat(op)
         time.sleep(.2)
-    
-
-    
