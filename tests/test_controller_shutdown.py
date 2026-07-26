@@ -355,6 +355,94 @@ def test_terminal_checkpoint_failure_surfaces_through_real_task_manager():
     assert sink.events[0]["payload"]["thread"] == "run.checkpoint"
 
 
+def test_non_cooperative_timeout_run_checkpoints_running_lifecycle():
+    controller, _, sink = _controller()
+    controller.shutdown_grace_period = 0.05
+    controller.cancellation_grace_period = 0
+    controller.max_task_time = 0
+    controller.query_interval = 0
+    controller.env = SimpleNamespace(agents_ping=lambda: {"status": True})
+    release = threading.Event()
+    running = threading.Event()
+    task = Task("Non-cooperative timeout", {})
+    task.candidate_list = ["Alice"]
+    task.number = 1
+    manager = TaskManager(silent=True, event_sink=sink)
+    manager.set_task_list_from_decomposition([task])
+    projected_task = manager.query_runnable_subtasks(["Alice"])[0]
+    manager.mark_task_running(projected_task, ["Alice"])
+    checkpoints = []
+    manager.runtime_checkpoint = lambda: checkpoints.append(
+        manager.runtime_task_store.snapshot()
+    )
+    controller.task_manager = manager
+    agent = SimpleNamespace(name="Alice")
+
+    def active_step():
+        running.set()
+        release.wait()
+        return "done", "detail"
+
+    future = controller.executor.submit(active_step)
+    assert running.wait(1)
+    group = TaskExecutionGroup(
+        task=projected_task,
+        agents=[agent],
+        futures={"Alice": future},
+        started_at=time.time() - 1,
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = projected_task.id
+    controller.execute_tasks = controller.shutdown_event.wait
+    controller.worker = controller.shutdown_event.wait
+
+    try:
+        with pytest.raises(ControllerShutdownError, match="remained active after timeout"):
+            controller.run()
+    finally:
+        release.set()
+        for thread in controller.executor._threads:
+            thread.join(1)
+
+    node = checkpoints[-1]["nodes"][0]
+    assert node["lifecycle"]["status"] == Task.running
+    assert node["lifecycle"]["active_agents"] == ["Alice"]
+    assert node["lifecycle"]["last_assigned_agents"] == ["Alice"]
+    assert node["content"]["reflect"] == {
+        "reason": "task_timeout_shutdown_escalation",
+        "execution_may_still_be_active": True,
+        "assigned_agents": ["Alice"],
+        "submitted_agents": ["Alice"],
+        "active_agents": ["Alice"],
+        "unsubmitted_agents": [],
+        "submission_complete": True,
+        "agent_reuse_blocked": True,
+        "requires_agent_reconciliation": True,
+        "timeout_detected": ["Alice"],
+        "shutdown_escalated": ["Alice"],
+        "cancellation_requested": [],
+        "cancellation_acknowledged": [],
+        "cancellation_forced": [],
+        "timeout_details": {
+            "Alice": {
+                "status": "timeout",
+                "error": f"Task {projected_task.description} timeout for agent Alice",
+                "cooperative_cancellation": False,
+                "timeout_detected": True,
+                "shutdown_escalated": True,
+                "cancellation_requested": False,
+                "cancellation_acknowledged": False,
+                "cancellation_forced": False,
+            },
+        },
+    }
+    assert controller.assignment == {"Alice": projected_task.id}
+    assert group.terminal_state_persisted is False
+    assert group.completed is False
+    assert sink.events[-1]["event_type"] == "run_failed"
+
+
 def _controller():
     controller = object.__new__(GlobalController)
     controller.logger = logging.getLogger("test-controller-shutdown")

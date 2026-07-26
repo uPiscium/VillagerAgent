@@ -29,12 +29,18 @@ class TaskExecutionGroup:
     started_at: float | None = None
     submission_complete: bool = False
     completed: bool = False
+    terminal_state_persisted: bool = False
+    post_processing_complete: bool = False
     cancellation_tokens: dict[str, threading.Event] = field(default_factory=dict)
+    timeout_detected: set[str] = field(default_factory=set)
+    timeout_detected_at: dict[str, float] = field(default_factory=dict)
     cancellation_requested: set[str] = field(default_factory=set)
     cancellation_acknowledged: set[str] = field(default_factory=set)
     cancellation_forced: set[str] = field(default_factory=set)
     cancellation_requested_at: dict[str, float] = field(default_factory=dict)
+    shutdown_escalated: set[str] = field(default_factory=set)
     timeout_details: dict[str, dict] = field(default_factory=dict)
+    timeout_checkpoint_persisted: bool = False
 
 
 class ControllerShutdownError(RuntimeError):
@@ -275,77 +281,110 @@ class GlobalController:
     def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
         if group.completed:
             return True
+        if group.terminal_state_persisted:
+            self._complete_execution_group(group)
+            return True
         if not group.submission_complete:
             return False
         now = time.time() if now is None else now
-        timed_out = bool(group.cancellation_requested) or (
+        future_snapshots = {
+            agent_name: self._snapshot_future(future)
+            for agent_name, future in group.futures.items()
+        }
+        deadline_reached = (
             group.started_at is not None
-            and now - group.started_at > self.max_task_time
-            and not all(future.done() for future in group.futures.values())
+            and now - group.started_at >= self.max_task_time
         )
-        if timed_out:
+        if deadline_reached:
             for agent in group.agents:
                 agent_name = agent.name
-                future = group.futures[agent_name]
-                if future.done() or agent_name in group.cancellation_requested:
+                if future_snapshots[agent_name]["done"]:
                     continue
-                group.cancellation_requested.add(agent_name)
-                group.cancellation_requested_at[agent_name] = now
-                group.timeout_details[agent_name] = {
-                    "status": "timeout",
-                    "error": f"Task {group.task.description} timeout for agent {agent_name}",
-                    "cooperative_cancellation": agent_name in group.cancellation_tokens,
-                    "cancellation_requested": True,
-                    "cancellation_acknowledged": False,
-                    "cancellation_forced": False,
-                }
-                token = group.cancellation_tokens.get(agent_name)
-                if token is not None:
-                    token.set()
+                if agent_name not in group.timeout_detected:
+                    group.timeout_detected.add(agent_name)
+                    group.timeout_detected_at[agent_name] = now
+                    group.timeout_details[agent_name] = {
+                        "status": "timeout",
+                        "error": f"Task {group.task.description} timeout for agent {agent_name}",
+                        "cooperative_cancellation": agent_name in group.cancellation_tokens,
+                        "timeout_detected": True,
+                        "shutdown_escalated": False,
+                        "cancellation_requested": False,
+                        "cancellation_acknowledged": False,
+                        "cancellation_forced": False,
+                    }
 
-        unacknowledged = []
+                # Completion may race with the deadline snapshot. Recheck before
+                # delivering a cancellation signal or deciding work is active.
+                future_snapshots[agent_name] = self._snapshot_future(
+                    group.futures[agent_name]
+                )
+                if future_snapshots[agent_name]["done"]:
+                    continue
+                token = group.cancellation_tokens.get(agent_name)
+                if token is not None and agent_name not in group.cancellation_requested:
+                    token.set()
+                    group.cancellation_requested.add(agent_name)
+                    group.cancellation_requested_at[agent_name] = now
+                    group.timeout_details[agent_name]["cancellation_requested"] = True
+
         for agent_name in group.cancellation_requested:
-            future = group.futures[agent_name]
-            if future.done() and self._is_cancellation_acknowledgement(future):
+            snapshot = future_snapshots[agent_name]
+            if snapshot["done"] and self._is_cancellation_acknowledgement(snapshot):
                 group.cancellation_acknowledged.add(agent_name)
                 group.timeout_details[agent_name]["cancellation_acknowledged"] = True
-                continue
-            unacknowledged.append(agent_name)
 
-        cancellation_grace_period = getattr(
-            self, "cancellation_grace_period", self.shutdown_grace_period
-        )
-        forced_agents = [
+        active_agents = [
             agent_name
-            for agent_name in unacknowledged
-            if now - group.cancellation_requested_at[agent_name] >= cancellation_grace_period
+            for agent_name, snapshot in future_snapshots.items()
+            if not snapshot["done"]
         ]
-        if forced_agents:
-            for agent_name in forced_agents:
-                group.cancellation_forced.add(agent_name)
-                group.timeout_details[agent_name]["cancellation_forced"] = True
-            self._request_shutdown()
-            names = ", ".join(sorted(forced_agents))
-            raise ControllerShutdownError(
-                f"Task {group.task.description} cancellation was not acknowledged by {names}"
+        if active_agents:
+            if not group.timeout_detected:
+                return False
+            cancellation_grace_period = getattr(
+                self, "cancellation_grace_period", self.shutdown_grace_period
             )
-        if unacknowledged:
-            return False
-
-        if not timed_out and not all(future.done() for future in group.futures.values()):
-            return False
+            escalation_agents = [
+                agent_name
+                for agent_name in active_agents
+                if agent_name in group.timeout_detected
+                and now - group.timeout_detected_at[agent_name] >= cancellation_grace_period
+            ]
+            if escalation_agents:
+                for agent_name in escalation_agents:
+                    future_snapshots[agent_name] = self._snapshot_future(
+                        group.futures[agent_name]
+                    )
+                escalation_agents = [
+                    agent_name
+                    for agent_name in escalation_agents
+                    if not future_snapshots[agent_name]["done"]
+                ]
+            if escalation_agents:
+                for agent_name in escalation_agents:
+                    group.shutdown_escalated.add(agent_name)
+                    group.timeout_details[agent_name]["shutdown_escalated"] = True
+                self._request_shutdown()
+                names = ", ".join(sorted(escalation_agents))
+                raise ControllerShutdownError(
+                    f"Task {group.task.description} remained active after timeout for {names}"
+                )
+            if any(not snapshot["done"] for snapshot in future_snapshots.values()):
+                return False
 
         agent_results = {}
-        group_succeeded = not timed_out
+        group_succeeded = not group.timeout_detected
         for agent in group.agents:
-            future = group.futures[agent.name]
-            if agent.name in group.cancellation_requested:
+            snapshot = future_snapshots[agent.name]
+            if agent.name in group.timeout_detected:
                 agent_results[agent.name] = dict(group.timeout_details[agent.name])
                 group_succeeded = False
                 continue
-
             try:
-                _, detail = future.result()
+                if snapshot["exception"] is not None:
+                    raise snapshot["exception"]
+                _, detail = snapshot["result"]
                 explicit_failure = isinstance(detail, dict) and "failure" in detail
                 reflected_success = False if explicit_failure else bool(agent.reflect(group.task, detail))
                 agent_results[agent.name] = {
@@ -375,18 +414,29 @@ class GlobalController:
             )
         else:
             feedback = {"agent_results": agent_results}
-        self.update_task_status(group.task, status, feedback)
-        group.completed = True
+        self.set_task_status(group.task.id, status, feedback)
+        group.task.status = status
+        group.terminal_state_persisted = True
+        self._complete_execution_group(group)
         return True
 
     @staticmethod
-    def _is_cancellation_acknowledgement(future: Future) -> bool:
+    def _snapshot_future(future: Future) -> dict:
+        if not future.done():
+            return {"done": False, "cancelled": False, "result": None, "exception": None}
         if future.cancelled():
-            return False
+            return {"done": True, "cancelled": True, "result": None, "exception": None}
         try:
             result = future.result()
-        except BaseException:
+        except BaseException as exc:
+            return {"done": True, "cancelled": False, "result": None, "exception": exc}
+        return {"done": True, "cancelled": False, "result": result, "exception": None}
+
+    @staticmethod
+    def _is_cancellation_acknowledgement(snapshot: dict) -> bool:
+        if snapshot["cancelled"] or snapshot["exception"] is not None:
             return False
+        result = snapshot["result"]
         if not isinstance(result, tuple) or len(result) != 2:
             return False
         detail = result[1]
@@ -394,7 +444,19 @@ class GlobalController:
             isinstance(detail, dict)
             and isinstance(detail.get("failure"), dict)
             and detail["failure"].get("reason") == "cancelled"
+            and detail["failure"].get("cancellation_acknowledged") is True
         )
+
+    def _complete_execution_group(self, group: TaskExecutionGroup) -> None:
+        for agent in self.agent_list:
+            if self.assignment.get(agent.name) == group.task.id:
+                self.assignment.pop(agent.name)
+        self.logger.info(
+            f"task {group.task.description} has been executed, the result is {group.task.status}"
+        )
+        self.task_manager.feedback_task(self.get_task_by_id(group.task.id))
+        group.post_processing_complete = True
+        group.completed = True
 
     # worker
     def worker(self):
@@ -713,7 +775,7 @@ class GlobalController:
                 lock.release()
 
         for queue_name, group in groups:
-            if group.completed:
+            if group.completed or group.terminal_state_persisted:
                 continue
             try:
                 execution_may_still_be_active = any(
@@ -740,16 +802,26 @@ class GlobalController:
                     "agent_reuse_blocked": True,
                     "requires_agent_reconciliation": True,
                 }
-                if group.cancellation_requested:
+                if group.timeout_detected:
                     feedback.update({
+                        "timeout_detected": sorted(group.timeout_detected),
+                        "shutdown_escalated": sorted(group.shutdown_escalated),
                         "cancellation_requested": sorted(group.cancellation_requested),
                         "cancellation_acknowledged": sorted(group.cancellation_acknowledged),
                         "cancellation_forced": sorted(group.cancellation_forced),
                         "timeout_details": dict(group.timeout_details),
                     })
-                group.task.status = Task.failure
-                self.task_manager.mark_task_status(group.task.id, Task.failure, feedback)
-                group.completed = True
+                if group.shutdown_escalated and execution_may_still_be_active:
+                    feedback["reason"] = "task_timeout_shutdown_escalation"
+                    if not group.timeout_checkpoint_persisted:
+                        self.task_manager.mark_task_status(group.task.id, Task.running, feedback)
+                        group.timeout_checkpoint_persisted = True
+                else:
+                    self.task_manager.mark_task_status(group.task.id, Task.failure, feedback)
+                    group.task.status = Task.failure
+                    group.terminal_state_persisted = True
+                    group.post_processing_complete = True
+                    group.completed = True
                 interrupted_task_ids.append(group.task.id)
                 if execution_may_still_be_active:
                     active_task_ids.append(group.task.id)

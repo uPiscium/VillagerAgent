@@ -179,6 +179,7 @@ def test_running_future_timeout_does_not_release_or_reassign_agent():
 
     assert controller.finalize_execution_group(group) is False
 
+    assert group.timeout_detected == {"Bob"}
     assert group.cancellation_requested == {"Bob"}
     assert group.cancellation_acknowledged == set()
     assert group.cancellation_forced == set()
@@ -209,6 +210,8 @@ def test_cancellation_acknowledgement_releases_assignments_and_fails_once():
         "status": "timeout",
         "error": f"Task {task.description} timeout for agent Bob",
         "cooperative_cancellation": True,
+        "timeout_detected": True,
+        "shutdown_escalated": False,
         "cancellation_requested": True,
         "cancellation_acknowledged": True,
         "cancellation_forced": False,
@@ -225,14 +228,120 @@ def test_non_cooperative_timeout_stops_controller_and_retains_assignment():
     timeout_at = group.started_at + controller.max_task_time + 1
 
     assert controller.finalize_execution_group(group, now=timeout_at) is False
-    with pytest.raises(ControllerShutdownError, match="not acknowledged by Alice"):
+    with pytest.raises(ControllerShutdownError, match="remained active after timeout for Alice"):
         controller.finalize_execution_group(group, now=timeout_at + 0.5)
 
     assert controller.shutdown_event.is_set()
     assert group.cancellation_tokens == {}
-    assert group.cancellation_forced == {"Alice"}
+    assert group.timeout_detected == {"Alice"}
+    assert group.cancellation_requested == set()
+    assert group.cancellation_forced == set()
+    assert group.shutdown_escalated == {"Alice"}
     assert controller.assignment == {"Alice": task.id}
     assert controller.task_manager.status_updates == []
+
+
+def test_timeout_boundary_is_inclusive():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    agents[0].cooperative_cancellation = True
+    group = _started_group(controller, task, agents, pending_agent="Alice")
+    group.futures["Alice"].set_running_or_notify_cancel()
+
+    assert controller.finalize_execution_group(
+        group, now=group.started_at + controller.max_task_time
+    ) is False
+
+    assert group.timeout_detected == {"Alice"}
+    assert group.cancellation_requested == {"Alice"}
+
+
+def test_completion_racing_with_timeout_snapshot_does_not_request_or_escalate():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    agents[0].cooperative_cancellation = True
+    group = _started_group(controller, task, agents, pending_agent="Alice")
+    racing_future = _CompletesAfterFirstPendingSnapshot(("done", "late detail"))
+    group.futures["Alice"] = racing_future
+    timeout_at = group.started_at + controller.max_task_time
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is True
+
+    assert group.timeout_detected == {"Alice"}
+    assert group.cancellation_requested == set()
+    assert group.shutdown_escalated == set()
+    assert not group.cancellation_tokens["Alice"].is_set()
+    assert controller.shutdown_event.is_set() is False
+    assert controller.task_manager.status_updates[0][1] == Task.failure
+
+
+def test_completion_racing_with_grace_snapshot_does_not_escalate():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    controller.cancellation_grace_period = 0.5
+    group = _started_group(controller, task, agents, pending_agent="Alice")
+    racing_future = _CompletesAfterPendingSnapshots(("done", "late detail"), 4)
+    group.futures["Alice"] = racing_future
+    timeout_at = group.started_at + controller.max_task_time
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is False
+    assert controller.finalize_execution_group(group, now=timeout_at + 0.5) is True
+
+    assert group.timeout_detected == {"Alice"}
+    assert group.cancellation_requested == set()
+    assert group.shutdown_escalated == set()
+    assert controller.shutdown_event.is_set() is False
+
+
+def test_execution_finishing_during_grace_terminalizes_timeout_without_escalation():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    agents[0].cooperative_cancellation = True
+    group = _started_group(controller, task, agents, pending_agent="Alice")
+    group.futures["Alice"].set_running_or_notify_cancel()
+    timeout_at = group.started_at + controller.max_task_time
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is False
+    group.futures["Alice"].set_result(("done", "finished after deadline"))
+    assert controller.finalize_execution_group(group, now=timeout_at + 0.5) is True
+
+    assert group.cancellation_requested == {"Alice"}
+    assert group.cancellation_acknowledged == set()
+    assert group.shutdown_escalated == set()
+    assert controller.shutdown_event.is_set() is False
+    assert controller.assignment == {}
+
+
+def test_cancelled_reason_without_explicit_marker_is_not_acknowledgement():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    agents[0].cooperative_cancellation = True
+    group = _started_group(controller, task, agents, pending_agent="Alice")
+    group.futures["Alice"].set_running_or_notify_cancel()
+    timeout_at = group.started_at + controller.max_task_time
+
+    assert controller.finalize_execution_group(group, now=timeout_at) is False
+    group.futures["Alice"].set_result(("cancelled", {
+        "failure": {"reason": "cancelled"},
+    }))
+    assert controller.finalize_execution_group(group, now=timeout_at + 0.1) is True
+
+    assert group.cancellation_requested == {"Alice"}
+    assert group.cancellation_acknowledged == set()
+    assert controller.task_manager.status_updates[0][2]["cancellation_acknowledged"] is False
+
+
+def test_terminal_status_is_not_persisted_twice_when_post_processing_raises():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    group = _started_group(controller, task, agents)
+    controller.task_manager.feedback_errors = [RuntimeError("feedback failed"), None]
+
+    with pytest.raises(RuntimeError, match="feedback failed"):
+        controller.finalize_execution_group(group)
+
+    assert group.terminal_state_persisted is True
+    assert group.post_processing_complete is False
+    assert group.completed is False
+    assert len(controller.task_manager.status_updates) == 1
+
+    assert controller.finalize_execution_group(group) is True
+    assert group.post_processing_complete is True
+    assert len(controller.task_manager.status_updates) == 1
 
 
 def test_timeout_acknowledgement_preserves_multi_agent_lifecycle_history():
@@ -255,6 +364,9 @@ def test_timeout_acknowledgement_preserves_multi_agent_lifecycle_history():
     timeout_at = group.started_at + controller.max_task_time + 1
 
     assert controller.finalize_execution_group(group, now=timeout_at) is False
+    assert group.timeout_detected == {"Bob"}
+    assert group.cancellation_requested == {"Bob"}
+    assert controller.assignment == {"Alice": projected_task.id, "Bob": projected_task.id}
     running_node = manager.runtime_task_store.snapshot()["nodes"][0]
     assert running_node["lifecycle"]["active_agents"] == ["Alice", "Bob"]
     group.futures["Bob"].set_result(_cancelled_result())
@@ -336,6 +448,7 @@ class _TaskManagerStub:
         self.running_updates = []
         self.status_updates = []
         self.graph = SimpleNamespace(vertex=[task])
+        self.feedback_errors = []
 
     def mark_task_running(self, task, agent_names):
         self.running_updates.append((task.id, list(agent_names)))
@@ -344,6 +457,10 @@ class _TaskManagerStub:
         self.status_updates.append((task_id, status, feedback))
 
     def feedback_task(self, _task):
+        if self.feedback_errors:
+            error = self.feedback_errors.pop(0)
+            if error is not None:
+                raise error
         return None
 
 
@@ -397,3 +514,25 @@ def _cancelled_result():
             "cancellation_acknowledged": True,
         },
     })
+
+
+class _CompletesAfterPendingSnapshots(Future):
+    def __init__(self, result, pending_snapshots):
+        super().__init__()
+        self.result_after_snapshot = result
+        self.pending_snapshots = pending_snapshots
+        self.snapshot_count = 0
+
+    def done(self):
+        self.snapshot_count += 1
+        if self.snapshot_count == self.pending_snapshots:
+            self.set_result(self.result_after_snapshot)
+            return False
+        if self.snapshot_count < self.pending_snapshots:
+            return False
+        return super().done()
+
+
+class _CompletesAfterFirstPendingSnapshot(_CompletesAfterPendingSnapshots):
+    def __init__(self, result):
+        super().__init__(result, 1)
