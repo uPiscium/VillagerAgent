@@ -351,9 +351,10 @@ class GlobalController:
 
             with self.result_list_lock:
                 result_list_copy = []
-                for group in self.result_queue:
+                for index, group in enumerate(self.result_queue):
 
                     if self.shutdown_event.is_set():
+                        result_list_copy.extend(self.result_queue[index:])
                         break
                     if self.finalize_execution_group(group):
                         self.logger.info(f"Task {group.task.description} finished!")
@@ -508,8 +509,8 @@ class GlobalController:
             for thread in [*started_threads, *executor_threads]
             if thread.is_alive()
         ]
-        interrupted_task_ids, undrained_queues = self._finalize_shutdown_groups()
-        shutdown_complete = not alive_threads and not undrained_queues
+        interrupted_task_ids, active_task_ids, undrained_queues = self._finalize_shutdown_groups()
+        shutdown_complete = not alive_threads and not active_task_ids and not undrained_queues
         if not shutdown_complete or interrupted_task_ids:
             message = "Controller shutdown incomplete"
             if alive_threads:
@@ -523,15 +524,25 @@ class GlobalController:
                 "live_threads": alive_threads,
                 "undrained_queues": undrained_queues,
                 "interrupted_task_ids": interrupted_task_ids,
+                "active_task_ids": active_task_ids,
             })
             setattr(self._first_failure[0], "controller_shutdown_context", {
                 "shutdown_complete": shutdown_complete,
                 "live_threads": alive_threads,
                 "undrained_queues": undrained_queues,
                 "interrupted_task_ids": interrupted_task_ids,
+                "active_task_ids": active_task_ids,
             })
 
-        self.task_manager.checkpoint_runtime_state()
+        try:
+            self.task_manager.checkpoint_runtime_state()
+        except BaseException as exc:
+            if self._first_failure is not None:
+                self._first_failure[2]["checkpoint_error"] = {
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            self._record_failure("run.checkpoint", exc)
 
         if self._first_failure is None:
             if self.emit_terminal_events:
@@ -552,6 +563,7 @@ class GlobalController:
 
     def _finalize_shutdown_groups(self):
         interrupted_task_ids = []
+        active_task_ids = []
         undrained_queues = []
         groups = []
         for name, lock, queue in (
@@ -562,29 +574,33 @@ class GlobalController:
                 undrained_queues.append(name)
                 continue
             try:
-                groups.extend(queue)
-                queue.clear()
+                groups.extend((name, group) for group in queue)
             finally:
                 lock.release()
 
-        for group in groups:
+        for queue_name, group in groups:
             if group.completed:
                 continue
             try:
-                if group.futures and all(future.done() for future in group.futures.values()):
-                    self.finalize_execution_group(group)
-                    continue
                 execution_may_still_be_active = any(
                     future.running() for future in group.futures.values()
                 )
+                agent_names = [agent.name for agent in group.agents]
                 feedback = {
                     "reason": "controller_shutdown",
                     "execution_may_still_be_active": execution_may_still_be_active,
+                    "assigned_agents": agent_names,
+                    "agent_reuse_blocked": execution_may_still_be_active,
+                    "requires_agent_reconciliation": execution_may_still_be_active,
                 }
                 group.task.status = Task.failure
                 self.task_manager.mark_task_status(group.task.id, Task.failure, feedback)
                 group.completed = True
                 interrupted_task_ids.append(group.task.id)
+                if execution_may_still_be_active:
+                    active_task_ids.append(group.task.id)
             except BaseException as exc:
+                if queue_name not in undrained_queues:
+                    undrained_queues.append(queue_name)
                 self._record_failure("run.finalize_shutdown", exc)
-        return interrupted_task_ids, undrained_queues
+        return interrupted_task_ids, active_task_ids, undrained_queues

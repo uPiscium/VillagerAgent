@@ -106,12 +106,13 @@ def test_active_future_is_interrupted_without_releasing_agent_for_reuse():
 
     future = controller.executor.submit(active_step)
     assert running.wait(1)
-    controller.result_queue.append(TaskExecutionGroup(
+    group = TaskExecutionGroup(
         task=task,
         agents=[agent],
         futures={"Alice": future},
         started_at=time.time(),
-    ))
+    )
+    controller.result_queue.append(group)
     controller.assignment["Alice"] = task.id
     failure = RuntimeError("controller failed")
     controller.execute_tasks = lambda: (_ for _ in ()).throw(failure)
@@ -131,9 +132,19 @@ def test_active_future_is_interrupted_without_releasing_agent_for_reuse():
     assert controller.task_manager.status_updates == [(task.id, Task.failure, {
         "reason": "controller_shutdown",
         "execution_may_still_be_active": True,
+        "assigned_agents": ["Alice"],
+        "agent_reuse_blocked": True,
+        "requires_agent_reconciliation": True,
     })]
+    next_task = Task("Must not be reassigned", {})
+    next_task.candidate_list = ["Alice"]
+    controller.agent_list = [agent]
+    controller.task_list = [next_task]
+    assert controller.assign_runnable_tasks() == 0
+    assert controller.result_queue == [group]
     assert checkpoints == ["checkpoint"]
     assert sink.events[0]["payload"]["shutdown_complete"] is False
+    assert sink.events[0]["payload"]["active_task_ids"] == [task.id]
 
 
 def test_queued_group_is_checkpointed_as_interrupted():
@@ -156,7 +167,11 @@ def test_queued_group_is_checkpointed_as_interrupted():
     assert controller.task_manager.status_updates == [(task.id, Task.failure, {
         "reason": "controller_shutdown",
         "execution_may_still_be_active": False,
+        "assigned_agents": ["Alice"],
+        "agent_reuse_blocked": False,
+        "requires_agent_reconciliation": False,
     })]
+    assert len(controller.task_queue) == 1
     assert checkpoints == ["checkpoint"]
 
 
@@ -171,6 +186,99 @@ def test_offline_agent_is_reported_as_run_failure():
 
     assert [event["event_type"] for event in sink.events] == ["run_failed"]
     assert sink.events[0]["payload"]["error"] == "Some agents are offline"
+
+
+def test_result_processor_preserves_unprocessed_groups_on_shutdown():
+    controller, _, _ = _controller()
+    controller.env = SimpleNamespace(agents_ping=lambda: {"status": True})
+    controller.query_interval = 0
+    groups = [
+        TaskExecutionGroup(Task(f"Task {index}", {}), [])
+        for index in range(3)
+    ]
+    controller.result_queue = list(groups)
+
+    def finalize(group):
+        assert group is groups[0]
+        controller._request_shutdown()
+        return True
+
+    controller.finalize_execution_group = finalize
+
+    controller.process_completed_tasks()
+
+    assert controller.result_queue == groups[1:]
+    controller.executor.shutdown(wait=True)
+
+
+def test_shutdown_finalization_never_reflects_completed_future():
+    controller, _, _ = _controller()
+    task = Task("Completed but unprocessed", {})
+    future = controller.executor.submit(lambda: ("done", "detail"))
+    future.result(timeout=1)
+    reflected = []
+    agent = SimpleNamespace(
+        name="Alice",
+        reflect=lambda *_args: reflected.append(True),
+    )
+    controller.result_queue.append(TaskExecutionGroup(
+        task=task,
+        agents=[agent],
+        futures={"Alice": future},
+        started_at=time.time(),
+    ))
+    failure = RuntimeError("controller failed")
+    controller.execute_tasks = lambda: (_ for _ in ()).throw(failure)
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    with pytest.raises(RuntimeError):
+        controller.run()
+
+    assert reflected == []
+    assert controller.task_manager.status_updates[0][2]["reason"] == "controller_shutdown"
+
+
+def test_group_remains_queued_when_interrupted_marking_fails():
+    controller, _, sink = _controller()
+    task = Task("Preserve me", {})
+    group = TaskExecutionGroup(task, [SimpleNamespace(name="Alice")])
+    controller.task_queue.append(group)
+    controller.task_manager.mark_error = RuntimeError("task store unavailable")
+    failure = RuntimeError("controller failed")
+    controller.execute_tasks = lambda: (_ for _ in ()).throw(failure)
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    with pytest.raises(RuntimeError) as raised:
+        controller.run()
+
+    assert raised.value is failure
+    assert controller.task_queue == [group]
+    assert group.completed is False
+    assert sink.events[0]["payload"]["undrained_queues"] == ["task_queue"]
+
+
+def test_group_remains_queued_when_final_checkpoint_fails():
+    controller, _, sink = _controller()
+    task = Task("Checkpoint me", {})
+    group = TaskExecutionGroup(task, [SimpleNamespace(name="Alice")])
+    controller.task_queue.append(group)
+    controller.task_manager.checkpoint_error = RuntimeError("checkpoint unavailable")
+    failure = RuntimeError("controller failed")
+    controller.execute_tasks = lambda: (_ for _ in ()).throw(failure)
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    with pytest.raises(RuntimeError) as raised:
+        controller.run()
+
+    assert raised.value is failure
+    assert controller.task_queue == [group]
+    assert sink.events[0]["payload"]["checkpoint_error"] == {
+        "error": "checkpoint unavailable",
+        "error_type": "RuntimeError",
+    }
 
 
 def _controller():
@@ -201,9 +309,15 @@ class _TaskManagerStub:
     def __init__(self, checkpoints):
         self.checkpoints = checkpoints
         self.status_updates = []
+        self.mark_error = None
+        self.checkpoint_error = None
 
     def mark_task_status(self, task_id, status, feedback):
+        if self.mark_error is not None:
+            raise self.mark_error
         self.status_updates.append((task_id, status, feedback))
 
     def checkpoint_runtime_state(self):
+        if self.checkpoint_error is not None:
+            raise self.checkpoint_error
         self.checkpoints.append("checkpoint")
