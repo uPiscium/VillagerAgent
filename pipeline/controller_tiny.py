@@ -2,6 +2,7 @@ import sys
 import os
 import threading
 import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -26,7 +27,12 @@ class TaskExecutionGroup:
     agents: list[BaseAgent]
     futures: dict[str, Future] = field(default_factory=dict)
     started_at: float | None = None
+    submission_complete: bool = False
     completed: bool = False
+
+
+class ControllerShutdownError(RuntimeError):
+    pass
 
 
 class GlobalController:
@@ -46,7 +52,7 @@ class GlobalController:
     def __init__(self, llm_config: dict, task_manager: TaskManager, data_manager: DataManager, env: VillagerBench,
                  silent: bool = False, max_workers=4, tm_llm_config: dict = None, dm_llm_config: dict = None,
                  base_agent_config: dict = None, all_tools=[], minecraft_dual_dag_config: dict | None = None,
-                 event_sink=None):
+                 event_sink=None, emit_terminal_events: bool = True):
 
         self.task_manager = task_manager
         tm_llm_config = llm_config.copy() if tm_llm_config is None else tm_llm_config
@@ -88,13 +94,45 @@ class GlobalController:
         # init max task time
         self.max_task_time = 60 * 30 # 3min
 
-        self.shutdown = False
+        self.shutdown_event = threading.Event()
+        self._failure_lock = threading.Lock()
+        self._first_failure = None
+        self._controller_threads = []
+        self.shutdown_grace_period = 5.0
+        self._run_started = False
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
+        self.emit_terminal_events = emit_terminal_events
         self.task_manager.event_sink = self.event_sink
 
     def emit_runtime_event(self, event_type, *, entity_id=None, source, payload=None):
         safe_emit_runtime_event(getattr(self, "event_sink", NoOpRuntimeEventSink()), event_type, entity_id=entity_id, source=source, payload=payload)
+
+    def _request_shutdown(self):
+        self.shutdown_event.set()
+
+    def _record_failure(self, name, exc):
+        failure = {
+            "thread": name,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        }
+        with self._failure_lock:
+            if self._first_failure is None:
+                self._first_failure = (exc, exc.__traceback__, failure)
+        self._request_shutdown()
+
+    def _run_thread(self, name, entrypoint):
+        try:
+            entrypoint()
+            if not self.shutdown_event.is_set():
+                self._record_failure(
+                    name,
+                    ControllerShutdownError(f"Controller thread {name} exited before shutdown"),
+                )
+        except BaseException as exc:
+            self._record_failure(name, exc)
 
     def validate_assignments(self, result: [dict]):
         validated_assignments = []
@@ -183,17 +221,27 @@ class GlobalController:
 
             task_instance.status = Task.running
 
-    def start_execution_group(self, group: TaskExecutionGroup) -> None:
+    def start_execution_group(self, group: TaskExecutionGroup, *, enqueue: bool = True) -> None:
+        if enqueue:
+            with self.result_list_lock:
+                self.result_queue.append(group)
         group.started_at = time.time()
         for agent in group.agents:
-            group.futures[agent.name] = self.executor.submit(agent.step, group.task)
+            if self.shutdown_event.is_set():
+                raise ControllerShutdownError(
+                    f"Task {group.task.description} submission interrupted by controller shutdown"
+                )
+            with self.result_list_lock:
+                group.futures[agent.name] = self.executor.submit(agent.step, group.task)
             self.logger.info(f"Agent {agent.name} is executing task now ...")
         with self.result_list_lock:
-            self.result_queue.append(group)
+            group.submission_complete = True
 
     def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
         if group.completed:
             return True
+        if not group.submission_complete:
+            return False
         now = time.time() if now is None else now
         timed_out = (
             group.started_at is not None
@@ -249,23 +297,25 @@ class GlobalController:
     # worker
     def worker(self):
         while True:
-            if self.shutdown:
+            if self.shutdown_event.is_set():
                 break
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
             if self.env.agents_ping()["status"] == False:
-                self.logger.info("Some agents are offline!")
-                self.shutdown = True
-                break
-                
+                raise ControllerShutdownError("Some agents are offline")
+
             with self.task_list_lock:
                 if not self.task_queue:
-                    time.sleep(self.query_interval)
-                    continue
-                while self.task_queue:
-                    group = self.task_queue.pop(0)
-                    self.start_execution_group(group)
-                    # time.sleep(self.query_interval)
+                    group = None
+                else:
+                    group = self.task_queue[0]
+                    with self.result_list_lock:
+                        self.result_queue.append(group)
+                        self.task_queue.pop(0)
+            if group is None:
+                self.shutdown_event.wait(self.query_interval)
+                continue
+            self.start_execution_group(group, enqueue=False)
 
     def set_task_status(self, task_id, status, feedback):
         self.task_manager.mark_task_status(task_id, status, feedback)
@@ -307,26 +357,25 @@ class GlobalController:
 
     def process_completed_tasks(self):
         while True:
-            if self.shutdown:
+            if self.shutdown_event.is_set():
                 break
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
             if self.env.agents_ping()["status"] == False:
-                self.logger.info("Some agents are offline!")
-                self.shutdown = True
-                break
+                raise ControllerShutdownError("Some agents are offline")
 
             with self.result_list_lock:
                 result_list_copy = []
-                for group in self.result_queue:
+                for index, group in enumerate(self.result_queue):
 
-                    if self.shutdown:
+                    if self.shutdown_event.is_set():
+                        result_list_copy.extend(self.result_queue[index:])
                         break
                     if self.finalize_execution_group(group):
                         self.logger.info(f"Task {group.task.description} finished!")
                     else:
                         result_list_copy.append(group)
-                    time.sleep(self.query_interval)
+                    self.shutdown_event.wait(self.query_interval)
                 self.result_queue = result_list_copy
 
                 
@@ -370,62 +419,51 @@ class GlobalController:
 
     # 生产者
     def execute_tasks(self):
-        try:
-            while True:
-                if self.shutdown:
-                    break
+        while True:
+            if self.shutdown_event.is_set():
+                break
 
-                # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
-                if self.env.agents_ping()["status"] == False:
-                    self.logger.info("Some agents are offline!")
-                    self.shutdown = True
-                    break
+            # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
+            if self.env.agents_ping()["status"] == False:
+                raise ControllerShutdownError("Some agents are offline")
 
-                open_task_list = self.task_manager.query_subtask_list()
-                if open_task_list == []:
-                    self.logger.info("all assigned tasks are finished ...")
-                    self.shutdown = True
-                    break
+            open_task_list = self.task_manager.query_subtask_list()
+            if open_task_list == []:
+                self.logger.info("all assigned tasks are finished ...")
+                self._request_shutdown()
+                break
 
-                free_agent_names = [
-                    agent.name for agent in self.agent_list
-                    if self.assignment.get(agent.name) is None
-                ]
-                self.task_list = self.task_manager.query_runnable_subtasks(free_agent_names)
-                self.task_list = self._rank_task_list_with_minecraft_dual_dag(self.task_list)
-                # 写到 logs/task_list.json 中
-                agent_states = []
-                for agent in self.agent_list:
-                    if self.assignment.get(agent.name) is None:
-                        agent_states.append({"name": agent.name, "state": "free", "task": None})
-                    else:
-                        tmp_description = ""
-                        for task in self.task_list:
-                            if task.id == self.assignment.get(agent.name):
-                                tmp_description = task.description
-                                break
-                        agent_states.append({"name": agent.name, "state": "busy", "task": tmp_description})
+            free_agent_names = [
+                agent.name for agent in self.agent_list
+                if self.assignment.get(agent.name) is None
+            ]
+            self.task_list = self.task_manager.query_runnable_subtasks(free_agent_names)
+            self.task_list = self._rank_task_list_with_minecraft_dual_dag(self.task_list)
+            # 写到 logs/task_list.json 中
+            agent_states = []
+            for agent in self.agent_list:
+                if self.assignment.get(agent.name) is None:
+                    agent_states.append({"name": agent.name, "state": "free", "task": None})
+                else:
+                    tmp_description = ""
+                    for task in self.task_list:
+                        if task.id == self.assignment.get(agent.name):
+                            tmp_description = task.description
+                            break
+                    agent_states.append({"name": agent.name, "state": "busy", "task": tmp_description})
 
-                with open("logs/task_list.json", "w") as f:
-                    json.dump({
-                        "agent_states": agent_states,
-                        "task_list": [task.assign_json(idx) for idx, task in enumerate(self.task_list)],
-                    }, f, indent=4)
-                    
-                if self.check_task_list_available() == []:
-                    # self.logger.info("no available task ...")
-                    # sleep
-                    time.sleep(self.query_interval)
-                    continue
+            with open("logs/task_list.json", "w") as f:
+                json.dump({
+                    "agent_states": agent_states,
+                    "task_list": [task.assign_json(idx) for idx, task in enumerate(self.task_list)],
+                }, f, indent=4)
 
-                self.assign_runnable_tasks()
+            if self.check_task_list_available() == []:
+                # self.logger.info("no available task ...")
+                self.shutdown_event.wait(self.query_interval)
+                continue
 
-        except KeyboardInterrupt:
-            self.shutdown = True
-            self.task_manager = None
-            self.data_manager = None
-            self.executor.shutdown(wait=False)
-            raise Exception("Interrupted by user")
+            self.assign_runnable_tasks()
 
     def _rank_task_list_with_minecraft_dual_dag(self, task_list):
         ranked = rank_minecraft_runtime_tasks(
@@ -444,25 +482,179 @@ class GlobalController:
         return ranked.get("tasks", task_list)
 
     def run(self):
+        if self._run_started:
+            raise ControllerShutdownError("Controller instances cannot be reused after run() starts")
+        self._run_started = True
+        self.shutdown_event.clear()
+        self._first_failure = None
+        self._controller_threads = [
+            threading.Thread(
+                name=f"controller-{name}",
+                target=self._run_thread,
+                args=(name, entrypoint),
+                daemon=True,
+            )
+            for name, entrypoint in (
+                ("execute_tasks", self.execute_tasks),
+                ("worker", self.worker),
+                ("process_completed_tasks", self.process_completed_tasks),
+            )
+        ]
+        started_threads = []
         try:
-            # generate threads
-            task_thread = threading.Thread(target=self.execute_tasks)
-            worker_thread = threading.Thread(target=self.worker)
-            result_thread = threading.Thread(target=self.process_completed_tasks)
-            # start threads
-            task_thread.start()
-            worker_thread.start()
-            result_thread.start()
-            # wait for threads to finish
-            task_thread.join()
-            worker_thread.join()
-            result_thread.join()
-        except KeyboardInterrupt:
-            # shutdown
-            self.shutdown = True
-            self.task_manager = None
-            self.data_manager = None
+            for thread in self._controller_threads:
+                thread.start()
+                started_threads.append(thread)
+            self.shutdown_event.wait()
+        except BaseException as exc:
+            self._record_failure("run", exc)
 
-            self.executor.shutdown(wait=False)
-            # raise exception
-            raise Exception("Interrupted by user")
+        self._request_shutdown()
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        deadline = time.monotonic() + self.shutdown_grace_period
+        executor_threads = list(getattr(self.executor, "_threads", ()))
+        for thread in [*started_threads, *executor_threads]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+
+        alive_threads = [
+            thread.name
+            for thread in [*started_threads, *executor_threads]
+            if thread.is_alive()
+        ]
+        (
+            interrupted_task_ids,
+            active_task_ids,
+            active_agent_ids,
+            incomplete_submission_task_ids,
+            undrained_queues,
+        ) = self._finalize_shutdown_groups()
+        shutdown_complete = (
+            not alive_threads
+            and not active_task_ids
+            and not incomplete_submission_task_ids
+            and not undrained_queues
+        )
+        if not shutdown_complete or interrupted_task_ids:
+            message = "Controller shutdown incomplete"
+            if alive_threads:
+                message += f"; live threads: {', '.join(alive_threads)}"
+            if undrained_queues:
+                message += f"; undrained queues: {', '.join(undrained_queues)}"
+            if self._first_failure is None:
+                self._record_failure("run", ControllerShutdownError(message))
+            self._first_failure[2].update({
+                "shutdown_complete": shutdown_complete,
+                "live_threads": alive_threads,
+                "undrained_queues": undrained_queues,
+                "interrupted_task_ids": interrupted_task_ids,
+                "active_task_ids": active_task_ids,
+                "active_agent_ids": active_agent_ids,
+                "incomplete_submission_task_ids": incomplete_submission_task_ids,
+            })
+            setattr(self._first_failure[0], "controller_shutdown_context", {
+                "shutdown_complete": shutdown_complete,
+                "live_threads": alive_threads,
+                "undrained_queues": undrained_queues,
+                "interrupted_task_ids": interrupted_task_ids,
+                "active_task_ids": active_task_ids,
+                "active_agent_ids": active_agent_ids,
+                "incomplete_submission_task_ids": incomplete_submission_task_ids,
+            })
+
+        try:
+            self.task_manager.checkpoint_runtime_state(raise_on_error=True)
+        except BaseException as exc:
+            if self._first_failure is not None:
+                self._first_failure[2]["checkpoint_error"] = {
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            self._record_failure("run.checkpoint", exc)
+
+        if self._first_failure is None:
+            if self.emit_terminal_events:
+                self.emit_runtime_event(
+                    "run_completed",
+                    source="GlobalController.run",
+                )
+            return
+
+        exc, exc_traceback, failure = self._first_failure
+        if self.emit_terminal_events:
+            self.emit_runtime_event(
+                "run_failed",
+                source="GlobalController.run",
+                payload=failure,
+            )
+        raise exc.with_traceback(exc_traceback)
+
+    def _finalize_shutdown_groups(self):
+        interrupted_task_ids = []
+        active_task_ids = []
+        active_agent_ids = []
+        incomplete_submission_task_ids = []
+        undrained_queues = []
+        groups = []
+        for name, lock, queue in (
+            ("task_queue", self.task_list_lock, self.task_queue),
+            ("result_queue", self.result_list_lock, self.result_queue),
+        ):
+            if not lock.acquire(blocking=False):
+                undrained_queues.append(name)
+                continue
+            try:
+                groups.extend((name, group) for group in queue)
+            finally:
+                lock.release()
+
+        for queue_name, group in groups:
+            if group.completed:
+                continue
+            try:
+                execution_may_still_be_active = any(
+                    future.running() for future in group.futures.values()
+                )
+                agent_names = [agent.name for agent in group.agents]
+                submitted_agent_names = list(group.futures)
+                active_group_agents = [
+                    agent_name
+                    for agent_name, future in group.futures.items()
+                    if future.running()
+                ]
+                feedback = {
+                    "reason": "controller_shutdown",
+                    "execution_may_still_be_active": execution_may_still_be_active,
+                    "assigned_agents": agent_names,
+                    "submitted_agents": submitted_agent_names,
+                    "active_agents": active_group_agents,
+                    "unsubmitted_agents": [
+                        agent_name for agent_name in agent_names
+                        if agent_name not in group.futures
+                    ],
+                    "submission_complete": group.submission_complete,
+                    "agent_reuse_blocked": True,
+                    "requires_agent_reconciliation": True,
+                }
+                group.task.status = Task.failure
+                self.task_manager.mark_task_status(group.task.id, Task.failure, feedback)
+                group.completed = True
+                interrupted_task_ids.append(group.task.id)
+                if execution_may_still_be_active:
+                    active_task_ids.append(group.task.id)
+                    active_agent_ids.extend(active_group_agents)
+                if not group.submission_complete:
+                    incomplete_submission_task_ids.append(group.task.id)
+            except BaseException as exc:
+                if queue_name not in undrained_queues:
+                    undrained_queues.append(queue_name)
+                self._record_failure("run.finalize_shutdown", exc)
+        return (
+            interrupted_task_ids,
+            active_task_ids,
+            active_agent_ids,
+            incomplete_submission_task_ids,
+            undrained_queues,
+        )

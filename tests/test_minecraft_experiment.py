@@ -19,6 +19,7 @@ from benchmarks.minecraft.experiment import (
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
+from pipeline.runtime_events import InMemoryRuntimeEventRecorder
 
 
 def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
@@ -244,6 +245,44 @@ def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monke
     assert result == {"score": {}}
     assert captured["args"][14] == config["evaluation_arg"]
     assert captured["kwargs"]["task_scenario"] == "move"
+    assert captured["kwargs"]["emit_controller_terminal_event"] is False
+
+
+def test_minecraft_experiment_emits_one_terminal_event_when_finalization_raises(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_minecraft_config("terminal_once")), encoding="utf-8")
+    sink = InMemoryRuntimeEventRecorder("terminal_once")
+    finalize_calls = 0
+    real_finalize = __import__(
+        "benchmarks.minecraft.experiment",
+        fromlist=["finalize_run_directory"],
+    ).finalize_run_directory
+
+    def fail_first_finalization(*args, **kwargs):
+        nonlocal finalize_calls
+        finalize_calls += 1
+        if finalize_calls == 1:
+            raise RuntimeError("finalization failed")
+        return real_finalize(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.finalize_run_directory",
+        fail_first_finalization,
+    )
+
+    with pytest.raises(RuntimeError, match="finalization failed"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            event_sink=sink,
+        )
+
+    terminal_events = [
+        event["event_type"]
+        for event in sink.events
+        if event["event_type"] in {"run_completed", "run_failed", "run_timed_out"}
+    ]
+    assert terminal_events == ["run_failed"]
 
 
 def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, monkeypatch):

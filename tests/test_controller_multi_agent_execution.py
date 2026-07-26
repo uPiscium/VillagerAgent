@@ -197,6 +197,7 @@ def _controller_with_task(agent_names, required):
     controller.result_queue = []
     controller.task_list_lock = threading.Lock()
     controller.result_list_lock = threading.Lock()
+    controller.shutdown_event = threading.Event()
     controller.task_manager = _TaskManagerStub(task)
     controller.logger = logging.getLogger("test-controller-multi-agent")
     controller.max_task_time = 30

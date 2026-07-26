@@ -89,10 +89,9 @@ def run_minecraft_experiment(
         if attempt_state:
             attempt_state["error"] = str(exc)
             attempt_state["error_type"] = exc.__class__.__name__
-            safe_emit_runtime_event(
-                attempt_state.get("event_sink", NoOpRuntimeEventSink()),
+            _emit_attempt_terminal_event(
+                attempt_state,
                 "run_timed_out" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "run_failed",
-                source="benchmarks.minecraft.experiment",
                 payload={"error": str(exc), "error_type": exc.__class__.__name__},
             )
             finalize_provenance(
@@ -151,6 +150,7 @@ def _run_minecraft_experiment_attempt(
         "execute": execute,
         "run_name": selected_run_name,
         "event_sink": event_sink,
+        "terminal_event_emitted": False,
     })
     safe_emit_runtime_event(event_sink, "run_started", source="benchmarks.minecraft.experiment", payload={"mode": "execute" if execute else "dry_run"})
     runtime_llm_config = {}
@@ -298,12 +298,6 @@ def _run_minecraft_experiment_attempt(
     selected_task = _find_task(artifact_tasks, runtime_selected_task_ids[0]) if runtime_selected_task_ids else None
     if not execute and ranked_tasks:
         selected_task = ranked_tasks[0]
-    safe_emit_runtime_event(
-        event_sink,
-        "run_timed_out" if timed_out else "run_failed" if error else "run_completed",
-        source="benchmarks.minecraft.experiment",
-        payload={"error": error, "error_type": error_type},
-    )
     normalized_events = None
     event_artifact_error = None
     try:
@@ -416,7 +410,39 @@ def _run_minecraft_experiment_attempt(
         producer="benchmarks.minecraft.experiment",
         status="failed" if error else "completed",
     )
+    _emit_attempt_terminal_event(
+        attempt_state,
+        "run_timed_out" if timed_out else "run_failed" if error else "run_completed",
+        payload={"error": error, "error_type": error_type},
+    )
+    if runtime_event_path is not None:
+        try:
+            normalized_events = build_normalized_events(
+                run_id=selected_run_name,
+                runtime_journal=runtime_event_path,
+                action_log=action_log,
+                analysis_artifact=artifact,
+            )
+            _write_jsonl(output_dir / "events.jsonl", normalized_events.events)
+            summary["events_available"] = True
+            summary["event_count"] = len(normalized_events.events)
+            summary["event_warnings"] = list(normalized_events.warnings)
+            _write_json(output_dir / "summary.json", summary)
+        except Exception as exc:
+            summary["event_artifact_error"] = type(exc).__name__
     return summary
+
+
+def _emit_attempt_terminal_event(attempt_state: dict, event_type: str, *, payload: dict) -> None:
+    if attempt_state.get("terminal_event_emitted"):
+        return
+    safe_emit_runtime_event(
+        attempt_state.get("event_sink", NoOpRuntimeEventSink()),
+        event_type,
+        source="benchmarks.minecraft.experiment",
+        payload=payload,
+    )
+    attempt_state["terminal_event_emitted"] = True
 
 
 def _minecraft_provenance_assets(
@@ -663,6 +689,7 @@ def _execute_real_runtime(
         runtime_result_path=str(runtime_result_path),
         task_scenario=config.get("task_scenario"),
         runtime_event_path=str(runtime_event_path) if runtime_event_path is not None else None,
+        emit_controller_terminal_event=False,
     )
 
 
