@@ -36,7 +36,11 @@ class RuntimeTaskDAGStore:
             target_id = self.task_node_id(task)
             for predecessor_index in self._normalized_predecessor_indexes(task, task_index, len(tasks)):
                 self.add_task_dependency(self.task_node_id(tasks[predecessor_index - 1]), target_id)
-            if not getattr(task, "_pre_idxs", []) and task_index > 0:
+            if (
+                not getattr(task, "_pre_idxs", [])
+                and task_index > 0
+                and not getattr(task, "_pre_idxs_explicit", False)
+            ):
                 self.add_task_dependency(self.task_node_id(tasks[task_index - 1]), target_id)
         self._validate_acyclic()
 

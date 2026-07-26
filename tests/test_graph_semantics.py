@@ -8,7 +8,7 @@ def test_query_graph_fallback_connects_unspecified_tasks_sequentially():
 
     graph = TaskManager(silent=True).query_graph([task_a, task_b])
 
-    assert graph.edge == [(task_a, task_b)]
+    assert [(start.description, end.description) for start, end in graph.edge] == [("A", "B")]
 
 
 def test_query_graph_fallback_connects_after_previous_task_not_previous_predecessors():
@@ -19,7 +19,7 @@ def test_query_graph_fallback_connects_after_previous_task_not_previous_predeces
 
     graph = TaskManager(silent=True).query_graph([task_a, task_b, task_c])
 
-    assert graph.edge == [(task_a, task_b), (task_b, task_c)]
+    assert [(start.description, end.description) for start, end in graph.edge] == [("A", "B"), ("B", "C")]
 
 
 def test_query_graph_preserves_explicit_parallel_dependencies():
@@ -31,7 +31,7 @@ def test_query_graph_preserves_explicit_parallel_dependencies():
 
     graph = TaskManager(silent=True).query_graph([task_a, task_b, task_c])
 
-    assert graph.edge == [(task_a, task_b), (task_a, task_c)]
+    assert [(start.description, end.description) for start, end in graph.edge] == [("A", "B"), ("A", "C")]
 
 
 def test_open_task_list_direct_predecessors_exclude_transitive_ancestors():

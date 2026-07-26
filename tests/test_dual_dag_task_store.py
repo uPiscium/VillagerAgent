@@ -41,6 +41,18 @@ def test_store_preserves_explicit_parallel_dependencies():
     assert _edge_descriptions(store) == [("A", "B"), ("A", "C")]
 
 
+def test_store_preserves_explicit_tasks_without_predecessors_as_parallel():
+    task_a = Task("A", {})
+    task_a._pre_idxs_explicit = True
+    task_b = Task("B", {})
+    task_b._pre_idxs_explicit = True
+
+    store = RuntimeTaskDAGStore()
+    store.load_tasks_from_decomposition([task_a, task_b])
+
+    assert _edge_descriptions(store) == []
+
+
 def test_store_open_tasks_distinguishes_direct_and_transitive_predecessors():
     task_a = Task("A", {})
     task_b = Task("B", {})
