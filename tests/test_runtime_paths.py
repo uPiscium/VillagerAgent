@@ -3,6 +3,7 @@ import os
 from types import SimpleNamespace
 
 from env.env import VillagerBench, env_type
+from env.minecraft_client import Agent as MinecraftAgent
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
 from start_with_config import _with_runtime_paths
@@ -73,6 +74,29 @@ def test_environment_reads_injected_score_and_status_paths(tmp_path):
 
     assert environment.get_score() == {"score": 100}
     assert environment.is_task_complete() is True
+
+
+def test_minecraft_interaction_history_uses_injected_runtime_path(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    agent = object.__new__(MinecraftAgent)
+    agent.runtime_paths = paths
+
+    agent._save_interaction_history(
+        {"input": "move to target"},
+        [{"action": {"tool": "navigateTo"}, "feedback": {"status": True}}],
+        "arrived",
+    )
+
+    history_files = list(paths.history_dir.iterdir())
+    assert len(history_files) == 1
+    assert read_json_artifact(history_files[0]).value == {
+        "input": "move to target",
+        "action_list": [
+            {"action": {"tool": "navigateTo"}, "feedback": {"status": True}}
+        ],
+        "final_answer": "arrived",
+    }
+    assert not (tmp_path / "data" / "history").exists()
 
 
 def test_environment_escalates_persistently_invalid_status(tmp_path):
