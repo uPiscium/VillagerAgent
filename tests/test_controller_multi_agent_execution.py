@@ -92,7 +92,8 @@ def test_terminal_observation_waits_for_complete_multi_agent_submission():
     assert executor.submitted_agents == ["Alice", "Bob"]
     assert group.submission_complete is True
     assert observation_result == [True]
-    assert controller._judger_terminal_observed is True
+    assert controller._judger_terminal_pending is True
+    assert controller._judger_terminal_observed is False
 
 
 def test_controller_forwards_local_runtime_config_to_base_agents(monkeypatch):
@@ -581,6 +582,8 @@ def _controller_with_task(agent_names, required):
     controller._active_tool_actions = 0
     controller._judger_terminal_pending = False
     controller._judger_terminal_observed = False
+    controller._judger_terminal_detected_at = None
+    controller._tool_drain_timed_out = False
     controller.shutdown_event = threading.Event()
     controller.task_manager = _TaskManagerStub(task)
     controller.logger = logging.getLogger("test-controller-multi-agent")
