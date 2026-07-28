@@ -173,7 +173,12 @@ def _write_runtime_result(path: str | None, payload: dict) -> None:
     atomic_write_json(path, payload)
 
 
-def _resolve_runtime_document_path(document_file: str, runtime_paths: RuntimePaths) -> Path:
+def _resolve_runtime_document_path(
+    document_file: str,
+    runtime_paths: RuntimePaths,
+) -> Path | None:
+    if not document_file.strip():
+        return None
     document_path = Path(document_file.replace("\\", "/"))
     if document_path.name == "recipe_hint.json":
         return runtime_paths.recipe_hint
@@ -439,7 +444,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
                     task_goal += f"bowl: {task_data['bowl']}\n"
                 
             document_path = _resolve_runtime_document_path(document_file, runtime_paths)
-            if document_path.exists():
+            if document_path is not None and document_path.is_file():
                 with document_path.open("r", encoding="utf-8") as stream:
                     document["recipe"] = json.load(stream)
             tm.init_task(description=task_goal, document=document)
