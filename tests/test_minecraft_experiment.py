@@ -19,6 +19,7 @@ from benchmarks.minecraft.experiment import (
     _read_completed_runtime_result,
     _task_graph_from_config,
     _terminate_runtime_process,
+    _cleanup_exited_runtime_process_group,
     _validate_child_status,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
@@ -1035,6 +1036,32 @@ def test_runtime_process_group_cleanup_waits_for_delayed_exit(monkeypatch):
 
     assert metadata["process_group_alive_after_kill"] is False
     assert checks >= 3
+
+
+def test_cleaned_descendants_do_not_turn_successful_child_into_failure(monkeypatch):
+    process = SimpleNamespace(exitcode=0)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._process_group_exists",
+        lambda _group_id: True,
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._terminate_runtime_process",
+        lambda *_args, **_kwargs: {
+            "exit_code": 0,
+            "terminated": True,
+            "killed": True,
+            "process_alive_after_kill": False,
+            "process_group_alive_after_kill": False,
+        },
+    )
+
+    metadata = _cleanup_exited_runtime_process_group(
+        process,
+        process_group_id=123,
+    )
+
+    assert metadata["terminated"] is True
+    assert metadata["process_group_alive_after_kill"] is False
 
 
 def test_runtime_process_group_cleanup_falls_back_to_direct_termination(monkeypatch):

@@ -999,25 +999,10 @@ def _execute_real_runtime_bounded(
                 process_metadata=process_metadata,
             )
 
-        if process_group_id is not None and _process_group_exists(process_group_id):
-            process_metadata = _terminate_runtime_process(
-                process,
-                grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
-                process_group_id=process_group_id,
-            )
-            raise MinecraftRuntimeChildError(
-                "Minecraft runtime child left a live process group",
-                error_type="ProcessGroupCleanupError",
-                process_metadata=process_metadata,
-            )
-
-        process_metadata = {
-            "exit_code": process.exitcode,
-            "terminated": False,
-            "killed": False,
-            "process_alive_after_kill": False,
-            "process_group_alive_after_kill": False,
-        }
+        process_metadata = _cleanup_exited_runtime_process_group(
+            process,
+            process_group_id=process_group_id,
+        )
         child_status = _read_child_status(status_queue)
         child_protocol = _validate_child_status(
             child_status,
@@ -1167,6 +1152,37 @@ def _terminate_runtime_process(
         "process_alive_after_kill": process_alive_after_kill,
         "process_group_alive_after_kill": process_group_alive_after_kill,
     }
+
+
+def _cleanup_exited_runtime_process_group(
+    process,
+    *,
+    process_group_id: int | None,
+) -> dict:
+    process_metadata = {
+        "exit_code": process.exitcode,
+        "terminated": False,
+        "killed": False,
+        "process_alive_after_kill": False,
+        "process_group_alive_after_kill": False,
+    }
+    if process_group_id is None or not _process_group_exists(process_group_id):
+        return process_metadata
+    process_metadata = _terminate_runtime_process(
+        process,
+        grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
+        process_group_id=process_group_id,
+    )
+    if (
+        process_metadata["process_alive_after_kill"]
+        or process_metadata["process_group_alive_after_kill"]
+    ):
+        raise MinecraftRuntimeChildError(
+            "Minecraft runtime child left a live process group",
+            error_type="ProcessGroupCleanupError",
+            process_metadata=process_metadata,
+        )
+    return process_metadata
 
 
 def _isolated_process_group_id(process) -> int | None:
