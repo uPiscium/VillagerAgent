@@ -128,8 +128,9 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
         def run(self, **_kwargs):
             raise StopAfterMetaSetting
 
+    environment = FakeEnvironment()
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(start_with_config, "VillagerBench", lambda **_kwargs: FakeEnvironment())
+    monkeypatch.setattr(start_with_config, "VillagerBench", lambda **_kwargs: environment)
     monkeypatch.setattr(start_with_config, "load_agent_api_key_list", lambda: [])
     monkeypatch.setattr(start_with_config, "configure_ollama_agent", lambda *_args, **_kwargs: None)
 
@@ -155,6 +156,52 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
     setting = json.loads((tmp_path / ".cache" / "meta_setting.json").read_text(encoding="utf-8"))
     assert setting["task_scenario"] == "move"
     assert setting["evaluation_arg"] == evaluation_arg
+    assert isinstance(setting["attempt_id"], str) and setting["attempt_id"]
+    assert environment.attempt_id == setting["attempt_id"]
+
+
+def test_attempt_id_resolver_preserves_explicit_identity():
+    assert start_with_config._resolve_attempt_id("attempt-a") == "attempt-a"
+
+
+def test_attempt_id_resolver_generates_distinct_uuid_hex_values():
+    first = start_with_config._resolve_attempt_id(None)
+    second = start_with_config._resolve_attempt_id(None)
+
+    assert len(first) == 32
+    assert len(second) == 32
+    assert int(first, 16) >= 0
+    assert int(second, 16) >= 0
+    assert first != second
+
+
+def test_generated_attempt_identity_is_used_for_score_ownership():
+    attempt_id = start_with_config._resolve_attempt_id(None)
+    environment = SimpleNamespace(
+        get_score=lambda: {
+            "attempt_id": attempt_id,
+            "task_name": "runtime-task-a",
+            "status": "success",
+            "score": 100,
+        },
+        get_action_log=lambda: {},
+    )
+
+    result = start_with_config._runtime_result(
+        environment,
+        attempt_id=attempt_id,
+        task_name="runtime-task-a",
+    )
+
+    assert result["attempt_id"] == attempt_id
+    assert result["score"]["attempt_id"] == attempt_id
+    assert result["expected_score_identity"]["attempt_id"] == attempt_id
+
+
+@pytest.mark.parametrize("value", ["", "   ", 0, False])
+def test_attempt_id_resolver_rejects_invalid_explicit_identity(value):
+    with pytest.raises(ValueError, match="non-empty string"):
+        start_with_config._resolve_attempt_id(value)
 
 
 def test_runtime_result_does_not_supplement_score_identity():
