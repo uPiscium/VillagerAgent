@@ -1,4 +1,4 @@
-from env.minecraft_client import Agent
+from env.minecraft_client import Agent, MinecraftBridgeCleanupError
 from contextlib import contextmanager
 from copy import copy
 from functools import wraps
@@ -55,6 +55,8 @@ class VillagerBench:
         self.log = {}
         self.reset_token()
         self.running = False
+        self.bridge_cleanup_result = None
+        self.bridge_cleanup_error = None
         self._virtual_debug = _virtual_debug
         self.logger = init_logger(name="Env", level=logging.DEBUG)
         self.max_task_num = max_task_num  # For puzzle
@@ -116,9 +118,19 @@ class VillagerBench:
                 atomic_write_json(paths.env_cache, [])
 
     def stop(self):
-        if self.running:
+        if self.bridge_cleanup_result is not None:
+            return self.bridge_cleanup_result
+        if not self.running:
+            return {"processes": {}, "cleanup_complete": True}
+        try:
+            self.bridge_cleanup_result = Agent.kill()
+            return self.bridge_cleanup_result
+        except MinecraftBridgeCleanupError as exc:
+            self.bridge_cleanup_result = exc.cleanup_result
+            self.bridge_cleanup_error = exc
+            raise
+        finally:
             self.running = False
-            Agent.kill()
 
     def virtual_env(name: str):
         env = {

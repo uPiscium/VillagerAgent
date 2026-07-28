@@ -59,8 +59,16 @@ class MinecraftActionLogError(RuntimeError):
             self.failure_detail["agent"] = agent
 
 
+class MinecraftBridgeCleanupError(RuntimeError):
+    def __init__(self, message: str, *, cleanup_result: dict):
+        super().__init__(message)
+        self.cleanup_result = cleanup_result
+
+
 DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS = 30.0
+DEFAULT_BRIDGE_TERMINATE_GRACE_SECONDS = 2.0
+DEFAULT_BRIDGE_KILL_GRACE_SECONDS = 1.0
 
 
 def _minecraft_request(method: str, url: str, **kwargs):
@@ -320,6 +328,7 @@ class Agent():
     _url_registry_lock = threading.Lock()
     _action_log_locks: dict[str, threading.Lock] = {}
     _action_log_locks_guard = threading.Lock()
+    last_bridge_cleanup: dict | None = None
     minecraft_connect_timeout_seconds = DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS
     minecraft_read_timeout_seconds = DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS
     last_tool_timeout = None
@@ -512,6 +521,7 @@ class Agent():
     @staticmethod
     def launch(host="10.21.31.18", port=25565, world="world", verbose=False, ignore_name=[], debug=False, fast=False, runtime_paths: RuntimePaths | None = None):
         Agent.port = port
+        Agent.last_bridge_cleanup = None
         runtime_paths = runtime_paths or RuntimePaths.legacy()
         process_env = runtime_paths.subprocess_environment(env)
         if verbose:
@@ -538,17 +548,65 @@ class Agent():
         if verbose:
             print("launch done.")
 
-    @staticmethod
-    def kill():
-        for value in Agent.agent_process.values():
-            value.terminate()
-        with Agent._url_registry_lock:
-            for name in set(Agent.runtime_paths_by_name) | set(Agent.name2port):
-                Agent.runtime_paths_by_name.pop(name, None)
-                Agent.name2port.pop(name, None)
-            Agent.agent_process.clear()
-        with Agent._action_log_locks_guard:
-            Agent._action_log_locks.clear()
+    @classmethod
+    def kill(
+        cls,
+        *,
+        terminate_grace_seconds: float = DEFAULT_BRIDGE_TERMINATE_GRACE_SECONDS,
+        kill_grace_seconds: float = DEFAULT_BRIDGE_KILL_GRACE_SECONDS,
+    ) -> dict:
+        if (
+            not cls.agent_process
+            and not cls.runtime_paths_by_name
+            and not cls.name2port
+            and cls.last_bridge_cleanup is not None
+        ):
+            return cls.last_bridge_cleanup
+        process_results = {}
+        for name, process in tuple(cls.agent_process.items()):
+            metadata = {
+                "pid": getattr(process, "pid", None),
+                "terminated": False,
+                "killed": False,
+                "alive_after_kill": False,
+            }
+            if process.poll() is None:
+                process.terminate()
+                metadata["terminated"] = True
+                try:
+                    process.wait(timeout=terminate_grace_seconds)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    metadata["killed"] = True
+                    try:
+                        process.wait(timeout=kill_grace_seconds)
+                    except subprocess.TimeoutExpired:
+                        pass
+            metadata["alive_after_kill"] = process.poll() is None
+            process_results[name] = metadata
+
+        cleanup_result = {
+            "processes": process_results,
+            "cleanup_complete": not any(
+                item["alive_after_kill"] for item in process_results.values()
+            ),
+        }
+        cls.last_bridge_cleanup = cleanup_result
+        if not cleanup_result["cleanup_complete"]:
+            raise MinecraftBridgeCleanupError(
+                "Minecraft bridge subprocess cleanup did not complete",
+                cleanup_result=cleanup_result,
+            )
+
+        with cls._url_registry_lock:
+            for name in set(cls.runtime_paths_by_name) | set(cls.name2port):
+                cls.runtime_paths_by_name.pop(name, None)
+                cls.name2port.pop(name, None)
+            cls.agent_process.clear()
+        with cls._action_log_locks_guard:
+            cls._action_log_locks.clear()
+        cls.last_tool_timeout = None
+        return cleanup_result
 
     # @tool
     # @timeit

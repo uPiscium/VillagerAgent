@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
 from env.minecraft_client import (
     Agent as MinecraftAgent,
     MinecraftActionLogError,
+    MinecraftBridgeCleanupError,
     MinecraftToolTimeoutError,
     ToolActionBlockedError,
     _minecraft_request,
@@ -326,7 +328,7 @@ def test_minecraft_url_registry_rejects_unknown_agent(tmp_path):
 
 def test_minecraft_kill_clears_runtime_registry_state(tmp_path):
     paths = RuntimePaths.isolated(tmp_path / "attempt")
-    process = SimpleNamespace(terminate=lambda: None)
+    process = _FakeBridgeProcess(exit_on_terminate=True)
     MinecraftAgent("Alice", runtime_paths=paths)
     MinecraftAgent.agent_process["Alice"] = process
 
@@ -336,6 +338,123 @@ def test_minecraft_kill_clears_runtime_registry_state(tmp_path):
     assert "Alice" not in MinecraftAgent.name2port
     assert "Alice" not in MinecraftAgent.agent_process
     assert MinecraftAgent._action_log_locks == {}
+
+
+class _FakeBridgeProcess:
+    pid = 1234
+
+    def __init__(self, *, exit_on_terminate=False, exit_on_kill=True):
+        self.alive = True
+        self.exit_on_terminate = exit_on_terminate
+        self.exit_on_kill = exit_on_kill
+        self.calls = []
+
+    def poll(self):
+        return None if self.alive else 0
+
+    def terminate(self):
+        self.calls.append("terminate")
+        if self.exit_on_terminate:
+            self.alive = False
+
+    def kill(self):
+        self.calls.append("kill")
+        if self.exit_on_kill:
+            self.alive = False
+
+    def wait(self, timeout=None):
+        self.calls.append(("wait", timeout))
+        if self.alive:
+            raise subprocess.TimeoutExpired("bridge", timeout)
+        return 0
+
+
+def test_bridge_cleanup_stops_after_terminate():
+    process = _FakeBridgeProcess(exit_on_terminate=True)
+    MinecraftAgent.agent_process["Alice"] = process
+
+    result = MinecraftAgent.kill(terminate_grace_seconds=0.2, kill_grace_seconds=0.1)
+
+    assert process.calls == ["terminate", ("wait", 0.2)]
+    assert result["cleanup_complete"] is True
+    assert result["processes"]["Alice"]["killed"] is False
+
+
+def test_bridge_cleanup_escalates_to_bounded_kill():
+    process = _FakeBridgeProcess(exit_on_kill=True)
+    MinecraftAgent.agent_process["Alice"] = process
+
+    result = MinecraftAgent.kill(terminate_grace_seconds=0.2, kill_grace_seconds=0.1)
+
+    assert process.calls == [
+        "terminate",
+        ("wait", 0.2),
+        "kill",
+        ("wait", 0.1),
+    ]
+    assert result["cleanup_complete"] is True
+    assert result["processes"]["Alice"]["alive_after_kill"] is False
+
+
+def test_bridge_cleanup_failure_preserves_process_mapping():
+    process = _FakeBridgeProcess(exit_on_kill=False)
+    MinecraftAgent.agent_process["Alice"] = process
+    MinecraftAgent.runtime_paths_by_name["Alice"] = RuntimePaths.legacy()
+
+    try:
+        with pytest.raises(MinecraftBridgeCleanupError) as raised:
+            MinecraftAgent.kill(terminate_grace_seconds=0.2, kill_grace_seconds=0.1)
+
+        assert raised.value.cleanup_result["cleanup_complete"] is False
+        assert raised.value.cleanup_result["processes"]["Alice"]["alive_after_kill"] is True
+        assert MinecraftAgent.agent_process["Alice"] is process
+        assert "Alice" in MinecraftAgent.runtime_paths_by_name
+    finally:
+        MinecraftAgent.agent_process.clear()
+        MinecraftAgent.runtime_paths_by_name.clear()
+        MinecraftAgent.name2port.clear()
+        MinecraftAgent.last_bridge_cleanup = None
+
+
+def test_environment_stop_is_idempotent_and_keeps_cleanup_result(monkeypatch):
+    environment = object.__new__(VillagerBench)
+    environment.running = True
+    environment.bridge_cleanup_result = None
+    environment.bridge_cleanup_error = None
+    calls = []
+    cleanup = {"processes": {}, "cleanup_complete": True}
+    monkeypatch.setattr(
+        MinecraftAgent,
+        "kill",
+        lambda: calls.append(True) or cleanup,
+    )
+
+    assert environment.stop() is cleanup
+    assert environment.stop() is cleanup
+    assert calls == [True]
+
+
+def test_environment_stop_does_not_repeat_cleanup_failure(monkeypatch):
+    environment = object.__new__(VillagerBench)
+    environment.running = True
+    environment.bridge_cleanup_result = None
+    environment.bridge_cleanup_error = None
+    calls = []
+    cleanup = {
+        "processes": {"Alice": {"alive_after_kill": True}},
+        "cleanup_complete": False,
+    }
+
+    def fail_cleanup():
+        calls.append(True)
+        raise MinecraftBridgeCleanupError("cleanup failed", cleanup_result=cleanup)
+
+    monkeypatch.setattr(MinecraftAgent, "kill", fail_cleanup)
+
+    with pytest.raises(MinecraftBridgeCleanupError):
+        environment.stop()
+    assert environment.stop() is cleanup
+    assert calls == [True]
 
 
 def test_action_log_uses_injected_paths_without_activation(tmp_path):
