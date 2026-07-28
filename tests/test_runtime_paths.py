@@ -3,6 +3,7 @@ import os
 from types import SimpleNamespace
 
 from env.env import VillagerBench, env_type
+from env.judger_artifacts import TerminalArtifactWriter
 from env.minecraft_client import Agent as MinecraftAgent
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
@@ -97,6 +98,19 @@ def test_minecraft_interaction_history_uses_injected_runtime_path(tmp_path):
         "final_answer": "arrived",
     }
     assert not (tmp_path / "data" / "history").exists()
+
+
+def test_judger_terminal_artifact_cannot_be_overwritten(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    writer = TerminalArtifactWriter(paths, paths.run_result_dir("run-a"))
+    success = {"status": "success", "score": 100}
+
+    assert writer.write(success, {"attempt_id": "attempt-a"}) is True
+    assert writer.write({"status": "failure"}, {"attempt_id": "attempt-a"}) is False
+
+    assert read_json_artifact(paths.score).value == success
+    assert read_json_artifact(paths.load_status).value == {"status": "end"}
+    assert read_json_artifact(paths.run_result_dir("run-a") / "score.json").value == success
 
 
 def test_environment_escalates_persistently_invalid_status(tmp_path):
