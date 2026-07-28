@@ -7,6 +7,7 @@ import time
 import inspect
 from functools import wraps
 from pathlib import Path
+from uuid import uuid4
 from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
@@ -181,6 +182,14 @@ def _resolve_runtime_document_path(document_file: str, runtime_paths: RuntimePat
     return document_path
 
 
+def _resolve_attempt_id(value: str | None) -> str:
+    if value is None:
+        return uuid4().hex
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("attempt_id must be a non-empty string")
+    return value
+
+
 def _write_failure_runtime_result(path: str | None, payload: dict) -> dict | None:
     try:
         _write_runtime_result(path, payload)
@@ -219,6 +228,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
 
     if task_type == "meta" and not task_scenario:
         raise ValueError("meta task requires task_scenario")
+    attempt_id = _resolve_attempt_id(attempt_id)
     runtime_paths = runtime_paths or RuntimePaths.legacy()
     runtime_paths.ensure_directories()
     document = dict(document or {})
