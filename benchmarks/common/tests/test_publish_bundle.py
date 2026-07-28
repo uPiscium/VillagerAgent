@@ -312,6 +312,52 @@ def test_single_segment_path_like_values_are_local(key, value):
 
 
 @pytest.mark.parametrize(
+    "key,value",
+    [
+        ("output_path", "/data"),
+        ("root", "/give"),
+        ("cwd", "/msg"),
+    ],
+)
+def test_path_keys_take_precedence_over_minecraft_command_names(key, value):
+    assert contains_local_absolute_path(value, key=key) is True
+    assert sanitize_local_paths(value, key=key) == "[LOCAL_PATH]"
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("command", "/data get entity Alice"),
+        ("input", "/give Alice stone"),
+        ("instruction", "/msg Bob hello"),
+        ("command_text", "/recipe take Alice *"),
+        ("command", "/op Alice"),
+    ],
+)
+def test_command_keys_preserve_known_minecraft_commands(key, value):
+    assert contains_local_absolute_path(value, key=key) is False
+    assert sanitize_local_paths(value, key=key) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Run /msg Bob hello",
+        "Execute /data get entity Alice",
+    ],
+)
+def test_free_text_preserves_explicit_minecraft_command_context(value):
+    assert contains_local_absolute_path(value) is False
+    assert sanitize_local_paths(value) == value
+
+
+@pytest.mark.parametrize("value", ["Generated in /data", "Copied from /give"])
+def test_free_text_path_context_sanitizes_minecraft_command_names(value):
+    assert contains_local_absolute_path(value) is True
+    assert "[LOCAL_PATH]" in sanitize_local_paths(value)
+
+
+@pytest.mark.parametrize(
     "value",
     [
         "https://example.com/path",
@@ -388,6 +434,35 @@ def test_validator_rejects_single_segment_paths_in_all_text_formats(tmp_path, na
 
     with pytest.raises(PublicBundleValidationError, match="Absolute local path"):
         validate_public_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("key-path.json", {"output_path": "/data", "root": "/give"}),
+        ("key-path.csv", "event,output_path\nstep,/data\n"),
+        ("key-path.yaml", "root: /data\n"),
+    ],
+)
+def test_validator_rejects_command_names_under_path_keys(tmp_path, name, content):
+    bundle = _bundle(tmp_path, extra={name: content})
+
+    with pytest.raises(PublicBundleValidationError, match="Absolute local path"):
+        validate_public_bundle(bundle)
+
+
+def test_validator_preserves_commands_under_command_keys(tmp_path):
+    bundle = _bundle(tmp_path, extra={
+        "commands.json": {
+            "command": "/data get entity Alice",
+            "input": "/give Alice stone",
+            "instruction": "/msg Bob hello",
+            "command_text": "/recipe take Alice *",
+            "action": "/op Alice",
+        },
+    })
+
+    validate_public_bundle(bundle)
 
 
 def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):

@@ -110,8 +110,8 @@ _SINGLE_SEGMENT_POSIX_LINE = re.compile(
 )
 _MINECRAFT_SLASH_COMMANDS = {
     "clear", "data", "effect", "execute", "fill", "gamemode", "gamerule",
-    "give", "item", "kill", "locate", "place", "setblock", "summon",
-    "tellraw", "time", "tp", "weather",
+    "give", "item", "kill", "locate", "msg", "op", "place", "recipe",
+    "setblock", "summon", "tellraw", "time", "tp", "weather",
 }
 _LOCAL_PATH_PATTERNS = (
     _FILE_URI,
@@ -120,8 +120,17 @@ _LOCAL_PATH_PATTERNS = (
     _POSIX_ABSOLUTE_PATH,
 )
 _PATH_LIKE_KEY = re.compile(
-    r"(?:^|_)(?:cwd|destination|dir|directory|executable|file|filename|home|input|output|path|root|workspace)s?$"
+    r"(?:^|_)(?:cwd|destination|dir|directory|executable|file|filename|home|path|root|workspace)s?$"
 )
+_COMMAND_LIKE_KEYS = {
+    "action",
+    "command",
+    "command_text",
+    "input",
+    "instruction",
+    "minecraft_command",
+    "tool_input",
+}
 _PAPER_RESULT = re.compile(r"<!--\s*paper-result:\s*([A-Za-z0-9_.-]+)\s*-->")
 _BENCHMARK_RESULT = re.compile(r"<!--\s*benchmark-result:\s*([A-Za-z0-9_.-]+)\s*-->")
 _HISTORICAL_RESULT = re.compile(r"<!--\s*historical-result:\s*([A-Za-z0-9_.-]+)\s*-->")
@@ -893,14 +902,12 @@ def _sanitize_text(text: str) -> str:
 
 def sanitize_local_paths(value: str, *, key: str | None = None) -> str:
     stripped = value.strip().strip("\"'")
-    if (
-        _is_stable_reference(stripped)
-        or _is_json_pointer(stripped, key=key)
-        or _is_minecraft_slash_command(stripped)
-    ):
+    if _is_stable_reference(stripped) or _is_json_pointer(stripped, key=key):
         return value
     if _is_path_like_key(key) and _is_absolute_local_reference(stripped):
         return _LOCAL_PATH_MARKER
+    if _is_minecraft_command(stripped, key=key):
+        return value
     sanitized = value
     for pattern in _LOCAL_PATH_PATTERNS:
         sanitized = pattern.sub(
@@ -910,14 +917,12 @@ def sanitize_local_paths(value: str, *, key: str | None = None) -> str:
             sanitized,
         )
     sanitized = _CONTEXTUAL_SINGLE_SEGMENT_POSIX_PATH.sub(
-        lambda match: match.group(0)
-        if _is_minecraft_slash_command(match.group(1))
-        else match.group(0).replace(match.group(1), _LOCAL_PATH_MARKER),
+        lambda match: match.group(0).replace(match.group(1), _LOCAL_PATH_MARKER),
         sanitized,
     )
     sanitized = _SINGLE_SEGMENT_POSIX_LINE.sub(
         lambda match: match.group(0)
-        if _is_minecraft_slash_command(match.group("path"))
+        if _is_minecraft_command(match.group("path"), key=key)
         else f'{match.group("prefix")}{_LOCAL_PATH_MARKER}{match.group("suffix")}',
         sanitized,
     )
@@ -926,27 +931,22 @@ def sanitize_local_paths(value: str, *, key: str | None = None) -> str:
 
 def contains_local_absolute_path(value: str, *, key: str | None = None) -> bool:
     stripped = value.strip().strip("\"'")
-    if (
-        _is_stable_reference(stripped)
-        or _is_json_pointer(stripped, key=key)
-        or _is_minecraft_slash_command(stripped)
-    ):
+    if _is_stable_reference(stripped) or _is_json_pointer(stripped, key=key):
         return False
     if _is_path_like_key(key) and _is_absolute_local_reference(stripped):
         return True
+    if _is_minecraft_command(stripped, key=key):
+        return False
     for pattern in _LOCAL_PATH_PATTERNS:
         if any(
             not _preserve_free_text_path_match(value, match)
             for match in pattern.finditer(value)
         ):
             return True
-    if any(
-        not _is_minecraft_slash_command(match.group(1))
-        for match in _CONTEXTUAL_SINGLE_SEGMENT_POSIX_PATH.finditer(value)
-    ):
+    if _CONTEXTUAL_SINGLE_SEGMENT_POSIX_PATH.search(value):
         return True
     return any(
-        not _is_minecraft_slash_command(match.group("path"))
+        not _is_minecraft_command(match.group("path"), key=key)
         for match in _SINGLE_SEGMENT_POSIX_LINE.finditer(value)
     )
 
@@ -959,13 +959,20 @@ def _preserve_free_text_path_match(value: str, match: re.Match[str]) -> bool:
         prefix.endswith("#")
         or re.search(r"(?i)\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*$", prefix)
         or re.match(r"(?i)^\s+under\s+\$ref\b", suffix)
-        or _is_minecraft_slash_command(candidate)
+        or _is_minecraft_command(candidate, key=None)
     )
 
 
-def _is_minecraft_slash_command(value: str) -> bool:
+def _is_minecraft_command(value: str, *, key: str | None) -> bool:
+    if _is_path_like_key(key):
+        return False
     match = re.match(r"^/([A-Za-z]+)(?:\s|$)", value.strip())
-    return bool(match and match.group(1).lower() in _MINECRAFT_SLASH_COMMANDS)
+    if not match or match.group(1).lower() not in _MINECRAFT_SLASH_COMMANDS:
+        return False
+    if key is None:
+        return value.strip().startswith("/")
+    normalized = key.lower().replace("-", "_")
+    return normalized in _COMMAND_LIKE_KEYS
 
 
 def _is_stable_reference(value: str) -> bool:
