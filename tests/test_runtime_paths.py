@@ -56,6 +56,8 @@ def test_generated_document_paths_resolve_under_runtime_root(tmp_path):
     assert _resolve_runtime_document_path("data\\recipe_hint.json", paths) == paths.recipe_hint
     assert _resolve_runtime_document_path("data/map_description.json", paths) == paths.map_description
     assert _resolve_runtime_document_path("data/recipes.json", paths) == Path("data/recipes.json")
+    assert _resolve_runtime_document_path("", paths) is None
+    assert _resolve_runtime_document_path("   ", paths) is None
 
 
 def test_runtime_write_audit_has_no_known_global_judger_outputs():
