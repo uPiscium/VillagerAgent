@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 from uuid import uuid4
 from env.env import VillagerBench, env_type, Agent
+from env.minecraft_client import MinecraftBridgeCleanupError
 from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json
@@ -109,6 +110,7 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
         "runtime_task_dag_snapshot": runtime_snapshot,
         "task_graph_snapshot": task_graph_snapshot,
         "controller": controller_snapshot,
+        "bridge_cleanup": dict(getattr(env, "bridge_cleanup_result", {}) or {}),
         "collection_errors": collection_errors,
         "error": error,
         "error_type": error_type,
@@ -128,6 +130,14 @@ def _runtime_checkpoint_result(env=None, tm=None, controller=None, *, attempt_id
             result["collection_errors"].append(action_error)
     if result["collection_errors"]:
         result["checkpoint_collection_error"] = result["collection_errors"][0]
+    return result
+
+
+def _apply_runtime_cleanup_failure(result: dict, error: BaseException) -> dict:
+    if not isinstance(error, MinecraftBridgeCleanupError):
+        return result
+    result["score"] = {}
+    result["bridge_cleanup"] = dict(error.cleanup_result)
     return result
 
 
@@ -493,8 +503,11 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             result = _runtime_result(env, tm, ctrl, attempt_id=attempt_id, task_name=task_name)
             if task_type == "meta":
                 validate_judged_runtime_result(result)
-            _write_runtime_result(runtime_result_path, result)
-            return result
+        result["bridge_cleanup"] = dict(
+            getattr(env, "bridge_cleanup_result", {}) or {}
+        )
+        _write_runtime_result(runtime_result_path, result)
+        return result
     except Exception as exc:
         result = _runtime_result(
             env,
@@ -505,6 +518,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             attempt_id=attempt_id,
             task_name=task_name,
         )
+        _apply_runtime_cleanup_failure(result, exc)
         _write_failure_runtime_result(runtime_result_path, result)
         raise
 

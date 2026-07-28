@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import start_with_config
+from env.minecraft_client import MinecraftBridgeCleanupError
 
 
 def _install_harness(monkeypatch, run_minecraft_experiment):
@@ -218,6 +219,45 @@ def test_runtime_result_does_not_supplement_score_identity():
         "attempt_id": "attempt-a",
         "task_name": "runtime-task-a",
     }
+
+
+def test_runtime_result_includes_bridge_cleanup_metadata():
+    cleanup = {
+        "processes": {
+            "Alice": {
+                "terminated": True,
+                "killed": False,
+                "alive_after_kill": False,
+            }
+        },
+        "cleanup_complete": True,
+    }
+    environment = SimpleNamespace(
+        get_score=lambda: {},
+        get_action_log=lambda: {},
+        bridge_cleanup_result=cleanup,
+    )
+
+    result = start_with_config._runtime_result(environment)
+
+    assert result["bridge_cleanup"] == cleanup
+
+
+def test_bridge_cleanup_failure_suppresses_successful_score():
+    cleanup = {
+        "processes": {"Alice": {"alive_after_kill": True}},
+        "cleanup_complete": False,
+    }
+    result = {"score": {"status": "success", "score": 100}}
+    error = MinecraftBridgeCleanupError(
+        "cleanup failed",
+        cleanup_result=cleanup,
+    )
+
+    start_with_config._apply_runtime_cleanup_failure(result, error)
+
+    assert result["score"] == {}
+    assert result["bridge_cleanup"] == cleanup
 
 
 def test_judged_runtime_validator_accepts_consistent_success():
