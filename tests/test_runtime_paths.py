@@ -175,13 +175,89 @@ def test_minecraft_interaction_history_uses_injected_runtime_path(tmp_path):
 def test_minecraft_url_prefix_uses_injected_runtime_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     paths = RuntimePaths.isolated(tmp_path / "attempt")
+    legacy = RuntimePaths.legacy(tmp_path)
+    atomic_write_json(legacy.url_prefix, {"Alice": "http://localhost:9999"})
 
-    with paths.activated():
+    try:
         MinecraftAgent("Alice", runtime_paths=paths)
-        assert MinecraftAgent.get_url_prefix() == {"Alice": "http://localhost:5000"}
+        assert MinecraftAgent.get_url_prefix(paths) == {"Alice": "http://localhost:5000"}
+        assert MinecraftAgent.get_agent_url("Alice") == "http://localhost:5000"
+    finally:
+        MinecraftAgent.kill()
 
     assert read_json_artifact(paths.url_prefix).value == {"Alice": "http://localhost:5000"}
-    assert not (tmp_path / "data" / "url_prefix.json").exists()
+    assert read_json_artifact(legacy.url_prefix).value == {"Alice": "http://localhost:9999"}
+
+
+def test_minecraft_url_registries_are_isolated_without_activation(tmp_path):
+    first = RuntimePaths.isolated(tmp_path / "attempt-a")
+    second = RuntimePaths.isolated(tmp_path / "attempt-b")
+
+    try:
+        MinecraftAgent("Alice", local_port=5001, runtime_paths=first)
+        MinecraftAgent("Bob", local_port=5002, runtime_paths=second)
+
+        assert MinecraftAgent.get_agent_url("Alice") == "http://localhost:5001"
+        assert MinecraftAgent.get_agent_url("Bob") == "http://localhost:5002"
+        assert read_json_artifact(first.url_prefix).value == {"Alice": "http://localhost:5001"}
+        assert read_json_artifact(second.url_prefix).value == {"Bob": "http://localhost:5002"}
+    finally:
+        MinecraftAgent.kill()
+
+
+def test_minecraft_url_registry_read_modify_write_keeps_all_agents(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+
+    try:
+        MinecraftAgent("Alice", local_port=5001, runtime_paths=paths)
+        MinecraftAgent("Bob", local_port=5002, runtime_paths=paths)
+
+        assert read_json_artifact(paths.url_prefix).value == {
+            "Alice": "http://localhost:5001",
+            "Bob": "http://localhost:5002",
+        }
+    finally:
+        MinecraftAgent.kill()
+
+
+def test_minecraft_ping_uses_injected_registry_without_activation(tmp_path, monkeypatch):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    requested_urls = []
+
+    class Response:
+        @staticmethod
+        def json():
+            return {"status": True}
+
+    monkeypatch.setattr(
+        "env.minecraft_client._minecraft_request",
+        lambda _method, url, **_kwargs: requested_urls.append(url) or Response(),
+    )
+    try:
+        MinecraftAgent("Alice", local_port=5010, runtime_paths=paths)
+        assert MinecraftAgent.ping("Alice") == {"status": True}
+    finally:
+        MinecraftAgent.kill()
+
+    assert requested_urls == ["http://localhost:5010/post_ping"]
+
+
+def test_minecraft_url_registry_rejects_unknown_agent(tmp_path):
+    with pytest.raises(RuntimeError, match="No runtime paths registered"):
+        MinecraftAgent.get_agent_url("Unknown")
+
+
+def test_minecraft_kill_clears_runtime_registry_state(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    process = SimpleNamespace(terminate=lambda: None)
+    MinecraftAgent("Alice", runtime_paths=paths)
+    MinecraftAgent.agent_process["Alice"] = process
+
+    MinecraftAgent.kill()
+
+    assert "Alice" not in MinecraftAgent.runtime_paths_by_name
+    assert "Alice" not in MinecraftAgent.name2port
+    assert "Alice" not in MinecraftAgent.agent_process
 
 
 def test_judger_terminal_artifact_cannot_be_overwritten(tmp_path):
