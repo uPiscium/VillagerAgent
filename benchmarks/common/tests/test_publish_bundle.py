@@ -12,8 +12,10 @@ from benchmarks.common.publish_bundle import (
     PublicBundleValidationError,
     build_deterministic_archive,
     check_paper_result_archives,
+    contains_local_absolute_path,
     derive_public_bundle,
     publish_bundle,
+    sanitize_local_paths,
     validate_public_bundle,
     _validate_minecraft_judged_summaries,
 )
@@ -268,6 +270,70 @@ def test_scanner_rejects_absolute_local_path(tmp_path):
         validate_public_bundle(bundle)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/mnt/data/private.json",
+        "/run/user/1000/socket",
+        "/srv/project/output",
+        "/private/var/tmp/file",
+        r"C:\Users\name\project",
+        "D:/work/result.json",
+        r"\\server\share\secret",
+        "file:///home/name/file",
+        "file:///C:/Users/name/file",
+        "file://server/share/file",
+    ],
+)
+def test_portable_local_path_detector_and_sanitizer(value):
+    assert contains_local_absolute_path(value, key="output_path") is True
+    assert sanitize_local_paths(value, key="output_path") == "[LOCAL_PATH]"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/path",
+        "http://example.com/path",
+        "s3://bucket/key",
+        "gs://bucket/key",
+        "doi:10.1000/example",
+        "ipfs://example/path",
+        "runs/source/artifact_manifest.json",
+        "result/craft/run/summary.json",
+        "a/b",
+        "minecraft:stone",
+    ],
+)
+def test_portable_local_path_detector_preserves_public_references(value):
+    assert contains_local_absolute_path(value, key="path") is False
+    assert sanitize_local_paths(value, key="path") == value
+
+
+@pytest.mark.parametrize("value", ["/components/schemas/Task", "#/components/schemas/Task"])
+def test_portable_local_path_detector_preserves_json_pointer(value):
+    assert contains_local_absolute_path(value, key="$ref") is False
+    assert sanitize_local_paths(value, key="$ref") == value
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("path.json", {"output_path": "/mnt/data/private.json"}),
+        ("path.jsonl", '{"cwd":"C:\\\\Users\\\\name\\\\project"}\n'),
+        ("path.csv", "event,output_path\nstep,D:/work/result.json\n"),
+        ("path.yaml", "workspace: '\\\\server\\share\\secret'\n"),
+        ("path.md", "Generated at /srv/project/output\n"),
+        ("path.txt", "source: file:///home/name/file\n"),
+    ],
+)
+def test_validator_rejects_portable_local_paths_in_all_text_formats(tmp_path, name, content):
+    bundle = _bundle(tmp_path, extra={name: content})
+
+    with pytest.raises(PublicBundleValidationError, match="Absolute local path"):
+        validate_public_bundle(bundle)
+
+
 def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
     source = tmp_path / "source"
     source_attempt = prepare_run_directory(source, producer="benchmarks.cwah.matrix")
@@ -295,6 +361,11 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
             '"builder_prompt":"SENTINEL_BUILDER_PROMPT",'
             '"private_reasoning":"SENTINEL_REASONING","stdout":"SENTINEL_STDOUT"}\n'
         ),
+        "paths.json": {"output_path": "/mnt/data/private.json"},
+        "paths.jsonl": '{"cwd":"C:\\\\Users\\\\name\\\\project"}\n',
+        "paths.csv": "event,output_path\nstep,D:/work/result.json\n",
+        "paths.yaml": "workspace: '\\\\server\\share\\secret'\n",
+        "paths.md": "Generated at /srv/project/output\n",
     }
     for name, payload in files.items():
         path = source / name
@@ -338,6 +409,10 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
     assert source_config["api_key_list"] == "[REDACTED]"
     assert source_config["credentials"] == "[REDACTED]"
     assert list(__import__("csv").DictReader((public / "matrix_metrics.csv").open()))[0]["password"] == "[REDACTED]"
+    for name in ("paths.json", "paths.jsonl", "paths.csv", "paths.yaml", "paths.md"):
+        text = (public / name).read_text(encoding="utf-8")
+        assert "[LOCAL_PATH]" in text
+        assert not contains_local_absolute_path(text)
 
 
 def test_sanitize_preserves_judged_score_ownership_and_lifecycle(tmp_path):

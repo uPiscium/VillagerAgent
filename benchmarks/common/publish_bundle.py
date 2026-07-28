@@ -89,8 +89,25 @@ _SECRET_PATTERNS = (
 _INLINE_CREDENTIAL = re.compile(
     r"(?i)((?:--api[-_]?key|--authorization|--password|--secret|--token)(?:=|\s+))(?!\[REDACTED\])\S+"
 )
-_LOCAL_ABSOLUTE_PATH = re.compile(
-    r"(?<![A-Za-z0-9_:/.-])/(?:etc|home|nix|opt|root|tmp|usr|var|workspace|Users)(?:/[^\s\"']*)?"
+_LOCAL_PATH_MARKER = "[LOCAL_PATH]"
+_FILE_URI = re.compile(r"\bfile://[^\s\"'<>]+", re.IGNORECASE)
+_WINDOWS_DRIVE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'<>]+"
+)
+_UNC_PATH = re.compile(
+    r"(?<![:/\\])(?:\\\\|//)[A-Za-z0-9.$_-]+[\\/][^\s\"'<>]+"
+)
+_POSIX_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:/.-])/(?!/)(?:[^/\s\"'<>]+/)+[^\s\"'<>]*"
+)
+_LOCAL_PATH_PATTERNS = (
+    _FILE_URI,
+    _WINDOWS_DRIVE_PATH,
+    _UNC_PATH,
+    _POSIX_ABSOLUTE_PATH,
+)
+_PATH_LIKE_KEY = re.compile(
+    r"(?:^|_)(?:cwd|destination|dir|directory|executable|file|filename|home|input|output|path|root|workspace)s?$"
 )
 _PAPER_RESULT = re.compile(r"<!--\s*paper-result:\s*([A-Za-z0-9_.-]+)\s*-->")
 _BENCHMARK_RESULT = re.compile(r"<!--\s*benchmark-result:\s*([A-Za-z0-9_.-]+)\s*-->")
@@ -796,7 +813,7 @@ def _write_sanitized_artifact(source: Path, target: Path) -> None:
         target.write_text(_sanitize_text(text), encoding="utf-8")
 
 
-def _sanitize_value(value: Any) -> Any:
+def _sanitize_value(value: Any, *, parent_key: str | None = None) -> Any:
     if isinstance(value, dict):
         if _has_private_provenance(value):
             return None
@@ -808,13 +825,13 @@ def _sanitize_value(value: Any) -> Any:
             if _is_credential_key(key_text) and not _CREDENTIAL_SOURCE_KEY.search(key_text):
                 result[key] = "[REDACTED]"
             else:
-                result[key] = _sanitize_value(child)
+                result[key] = _sanitize_value(child, parent_key=key_text)
         return result
     if isinstance(value, list):
-        sanitized = [_sanitize_value(item) for item in value]
+        sanitized = [_sanitize_value(item, parent_key=parent_key) for item in value]
         return [item for item in sanitized if item is not None]
     if isinstance(value, str):
-        return _LOCAL_ABSOLUTE_PATH.sub("[LOCAL_PATH]", value)
+        return sanitize_local_paths(value, key=parent_key)
     return value
 
 
@@ -834,11 +851,11 @@ def _has_private_provenance(value: dict[str, Any]) -> bool:
 def _sanitize_scalar_for_key(key: str, value: Any) -> Any:
     if _is_credential_key(key) and not _CREDENTIAL_SOURCE_KEY.search(key):
         return "[REDACTED]"
-    return value
+    return sanitize_local_paths(value, key=key) if isinstance(value, str) else value
 
 
 def _sanitize_text(text: str) -> str:
-    text = _LOCAL_ABSOLUTE_PATH.sub("[LOCAL_PATH]", text)
+    text = sanitize_local_paths(text)
     text = _INLINE_CREDENTIAL.sub(lambda match: match.group(1) + "[REDACTED]", text)
     lines = []
     assignment = re.compile(r"^(\s*)([A-Za-z0-9_-]+)(\s*[:=]\s*)(.*)$")
@@ -849,12 +866,71 @@ def _sanitize_text(text: str) -> str:
         if match and _is_credential_key(match.group(2)) and not _CREDENTIAL_SOURCE_KEY.search(match.group(2)):
             ending = "\n" if line.endswith("\n") else ""
             line = f"{match.group(1)}{match.group(2)}{match.group(3)}[REDACTED]{ending}"
+        elif match:
+            ending = "\n" if line.endswith("\n") else ""
+            value = sanitize_local_paths(match.group(4), key=match.group(2))
+            line = f"{match.group(1)}{match.group(2)}{match.group(3)}{value}{ending}"
         lines.append(line)
     sanitized = "".join(lines)
     for pattern in _SECRET_PATTERNS:
         if pattern.search(sanitized):
             raise PublicBundleValidationError("Credential literal in free-form source artifact cannot be safely derived")
     return sanitized
+
+
+def sanitize_local_paths(value: str, *, key: str | None = None) -> str:
+    stripped = value.strip().strip("\"'")
+    if _is_stable_reference(stripped) or _is_json_pointer(stripped, key=key):
+        return value
+    if _is_path_like_key(key) and _is_absolute_local_reference(stripped):
+        return _LOCAL_PATH_MARKER
+    sanitized = value
+    for pattern in _LOCAL_PATH_PATTERNS:
+        sanitized = pattern.sub(_LOCAL_PATH_MARKER, sanitized)
+    return sanitized
+
+
+def contains_local_absolute_path(value: str, *, key: str | None = None) -> bool:
+    stripped = value.strip().strip("\"'")
+    if _is_stable_reference(stripped) or _is_json_pointer(stripped, key=key):
+        return False
+    if _is_path_like_key(key) and _is_absolute_local_reference(stripped):
+        return True
+    return any(pattern.search(value) for pattern in _LOCAL_PATH_PATTERNS)
+
+
+def _is_stable_reference(value: str) -> bool:
+    lowered = value.lower()
+    return not any(character.isspace() for character in value) and lowered.startswith(
+        ("http://", *_STABLE_URL_PREFIXES)
+    )
+
+
+def _is_path_like_key(key: str | None) -> bool:
+    if key is None:
+        return False
+    normalized = key.lower().replace("-", "_")
+    return bool(_PATH_LIKE_KEY.search(normalized))
+
+
+def _is_json_pointer(value: str, *, key: str | None) -> bool:
+    if key is None:
+        return False
+    normalized = key.lower().replace("-", "_")
+    return normalized in {"$ref", "json_pointer", "pointer"} and value.startswith(
+        ("/", "#/")
+    )
+
+
+def _is_absolute_local_reference(value: str) -> bool:
+    if not value or _is_stable_reference(value):
+        return False
+    return bool(
+        value.startswith("/")
+        or _FILE_URI.fullmatch(value)
+        or _WINDOWS_DRIVE_PATH.fullmatch(value)
+        or _UNC_PATH.fullmatch(value)
+    )
 
 
 def _is_hidden_key(key: str) -> bool:
@@ -898,10 +974,6 @@ def _scan_public_file(path: Path, relative: Path) -> None:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise PublicBundleValidationError(f"Binary public artifact is not allowed: {relative}") from exc
-    if _LOCAL_ABSOLUTE_PATH.search(text):
-        raise PublicBundleValidationError(
-            f"Absolute local path detected in public artifact: {relative}"
-        )
     for pattern in _SECRET_PATTERNS:
         if pattern.search(text):
             raise PublicBundleValidationError(f"credential pattern detected in {relative}")
@@ -941,6 +1013,10 @@ def _scan_public_file(path: Path, relative: Path) -> None:
         except yaml.YAMLError as exc:
             raise PublicBundleValidationError(f"Invalid YAML public artifact: {relative}") from exc
     else:
+        if contains_local_absolute_path(text):
+            raise PublicBundleValidationError(
+                f"Absolute local path detected in public artifact: {relative}"
+            )
         for match in re.finditer(
             r"(?im)^\s*([A-Za-z0-9_-]+)\s*[:=]\s*['\"]?([^\s'\"]+)", text
         ):
@@ -948,7 +1024,7 @@ def _scan_public_file(path: Path, relative: Path) -> None:
             _validate_key_value(key, value, relative)
 
 
-def _scan_value(value: Any, relative: Path) -> None:
+def _scan_value(value: Any, relative: Path, *, parent_key: str | None = None) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             key_text = str(key)
@@ -957,10 +1033,14 @@ def _scan_value(value: Any, relative: Path) -> None:
                     f"Hidden evaluator/private observation field detected in {relative}: {key_text}"
                 )
             _validate_key_value(key_text, child, relative)
-            _scan_value(child, relative)
+            _scan_value(child, relative, parent_key=key_text)
     elif isinstance(value, list):
         for child in value:
-            _scan_value(child, relative)
+            _scan_value(child, relative, parent_key=parent_key)
+    elif isinstance(value, str) and contains_local_absolute_path(value, key=parent_key):
+        raise PublicBundleValidationError(
+            f"Absolute local path detected in public artifact: {relative}"
+        )
 
 
 def _validate_key_value(key: str, value: Any, relative: Path) -> None:
@@ -970,11 +1050,14 @@ def _validate_key_value(key: str, value: Any, relative: Path) -> None:
         )
     if _CREDENTIAL_SOURCE_KEY.search(key):
         return
-    if not _is_credential_key(key):
+    if _is_credential_key(key):
+        if value not in (None, "", "[REDACTED]"):
+            raise PublicBundleValidationError(f"Unredacted credential field detected in {relative}: {key}")
         return
-    if value in (None, "", "[REDACTED]"):
-        return
-    raise PublicBundleValidationError(f"Unredacted credential field detected in {relative}: {key}")
+    if isinstance(value, str) and contains_local_absolute_path(value, key=key):
+        raise PublicBundleValidationError(
+            f"Absolute local path detected in public artifact: {relative}"
+        )
 
 
 def _validate_nested_attempts(bundle_dir: Path) -> dict[str, int]:
