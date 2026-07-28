@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 import time
 class HFLanguageModel:
-    def __init__(self, api_key="", api_model="gpt2", model_tokenizer=None, verbose=False, api_key_list=[]):
+    def __init__(self, api_key="", api_model="gpt2", model_tokenizer=None, verbose=False, api_key_list=None):
         self.model = AutoModelForCausalLM.from_pretrained(api_model)
         self.tokenizer = AutoTokenizer.from_pretrained(model_tokenizer or api_model)
         self.verbose = verbose

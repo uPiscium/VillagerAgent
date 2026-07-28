@@ -3,6 +3,7 @@ import threading
 import pytest
 
 from pipeline.agent import BaseAgent
+from model.vllm_model import VLLMLanguageModel
 from type_define.graph import Task
 
 
@@ -327,8 +328,7 @@ def test_base_agent_rejects_ambiguous_local_budget_configuration(config, message
         make_local_agent([], **config)
 
 
-def test_step_rejects_cancellation_token_for_non_local_path(monkeypatch):
-    monkeypatch.setattr(BaseAgent, "_virtual_debug", False)
+def test_step_rejects_cancellation_token_for_non_local_path():
     env = FakeEnv()
     agent = BaseAgent(
         llm=object(),
@@ -343,3 +343,56 @@ def test_step_rejects_cancellation_token_for_non_local_path(monkeypatch):
         agent.step(task, cancellation_token=threading.Event())
 
     assert env.step_calls == 0
+
+
+@pytest.mark.parametrize("creation_order", [(False, True), (True, False)])
+def test_runtime_mode_is_scoped_to_each_agent(creation_order):
+    agents = {}
+    for running in creation_order:
+        env = FakeEnv()
+        env.running = running
+        agents[running] = BaseAgent(
+            llm=object(),
+            env=env,
+            data_manager=FakeDataManager(),
+            name=f"Agent-{running}",
+            silent=True,
+        )
+
+    task = Task("Inspect area", {"document": "public"})
+    agents[True].normal_step = lambda current_task: ("real", current_task)
+    agents[True].virtual_step = lambda current_task: ("virtual", current_task)
+    agents[False].normal_step = lambda current_task: ("real", current_task)
+    agents[False].virtual_step = lambda current_task: ("virtual", current_task)
+
+    assert agents[True].step(task) == ("real", task)
+    assert agents[False].step(task) == ("virtual", task)
+
+
+def test_cancellation_capability_is_scoped_to_each_agent_mode():
+    llm = object.__new__(VLLMLanguageModel)
+    real_env = FakeEnv()
+    virtual_env = FakeEnv()
+    virtual_env.running = False
+
+    real_agent = BaseAgent(llm, real_env, FakeDataManager(), "Real", silent=True)
+    virtual_agent = BaseAgent(llm, virtual_env, FakeDataManager(), "Virtual", silent=True)
+
+    assert real_agent.supports_cooperative_cancellation() is True
+    assert virtual_agent.supports_cooperative_cancellation() is False
+
+
+def test_all_tools_is_not_shared_between_agents_or_with_input():
+    source_tools = [FakeTool()]
+    first = BaseAgent(
+        object(), FakeEnv(), FakeDataManager(), "First", silent=True, all_tools=source_tools
+    )
+    second = BaseAgent(
+        object(), FakeEnv(), FakeDataManager(), "Second", silent=True, all_tools=source_tools
+    )
+
+    source_tools.append(FakeTool())
+    first.all_tools.append(FakeTool())
+
+    assert len(first.all_tools) == 2
+    assert len(second.all_tools) == 1

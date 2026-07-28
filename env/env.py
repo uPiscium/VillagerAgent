@@ -257,10 +257,12 @@ class VillagerBench:
                return Agent.get_environment_info_dict(agent_name)
         return {"message": f"agent {agent_name} not found", "status": False}
 
-    def agent_register(self, agent_tool=[], agent_number: int = 1, name_list: [str] = []):
+    def agent_register(self, agent_tool=None, agent_number: int = 1, name_list: list[str] | None = None):
         '''
         register the agent to the environment
         '''
+        agent_tool = list(agent_tool or ())
+        name_list = list(name_list or ())
         if len(name_list) != agent_number:
             self.logger.warning(
                 "[warning but dont worry] agent number not equal to names number, random names will be used")

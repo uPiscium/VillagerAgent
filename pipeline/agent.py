@@ -47,7 +47,6 @@ class BaseAgent:
     reflect: reflect on the task and return the result
     to_json: return the json format of the agent
     '''
-    _virtual_debug = False
     MAX_LOCAL_INTER_ACTION_DELAY = 5.0
     LOCAL_MODEL_CONFIG_KEYS = (
         "local_model_max_attempts",
@@ -55,7 +54,7 @@ class BaseAgent:
         "local_model_inter_action_delay",
     )
     def __init__(self, llm:OpenAILanguageModel , env:VillagerBench, data_manager:DataManager, name:str, logger:logging.Logger = None, silent = False, 
-    RL_mode = "", rl_env = None, rl_model = None, all_tools = [], local_model_max_attempts = 10,
+    RL_mode = "", rl_env = None, rl_model = None, all_tools = None, local_model_max_attempts = 10,
     local_model_max_actions = 5, local_model_inter_action_delay = 0.0,
     run_id: str | None = None, reflection_output_dir: str | os.PathLike | None = None, **kwargs):
         self.env = env
@@ -66,7 +65,8 @@ class BaseAgent:
         self.reflect_info = {"prompt": [], "response": []}
         self.RL_mode = RL_mode
         self.logger = logger
-        self.all_tools = all_tools
+        self.all_tools = list(all_tools or ())
+        self._virtual_debug = not env.running
         self.run_id = run_id or getattr(env, "task_name", "test")
         runtime_paths = getattr(env, "runtime_paths", RuntimePaths.legacy())
         self.reflection_output_dir = (
@@ -103,9 +103,6 @@ class BaseAgent:
         self.local_model_inter_action_delay = min(
             local_model_inter_action_delay, self.MAX_LOCAL_INTER_ACTION_DELAY
         )
-        if not env.running:
-            BaseAgent._virtual_debug = True
-
         if self.logger is None:
             self.logger = init_logger("BaseAgent", dump=True, silent=silent)
         
@@ -145,7 +142,7 @@ class BaseAgent:
 
     def supports_cooperative_cancellation(self) -> bool:
         return (
-            not BaseAgent._virtual_debug
+            not self._virtual_debug
             and self.RL_mode == ""
             and isinstance(self.llm, VLLMLanguageModel)
         )
@@ -160,7 +157,7 @@ class BaseAgent:
         if cancellation_token is not None and not local_model_step:
             raise ValueError("cancellation_token is only supported for local VLLM agent steps")
 
-        if BaseAgent._virtual_debug:
+        if self._virtual_debug:
             return self.virtual_step(task)
 
         if self.RL_mode != "":

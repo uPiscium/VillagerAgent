@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class GoogleLanguageModel(AbstractLanguageModel):
     _supported_models = ["gemini-pro"]
-    def __init__(self, api_key="", api_model="gemini-pro", role_name="", api_key_list=[]):
+    def __init__(self, api_key="", api_model="gemini-pro", role_name="", api_key_list=None):
         if api_key == "":
             self.api_key = os.environ.get("GOOGLE_API_KEY")
         else:
@@ -31,7 +31,7 @@ class GoogleLanguageModel(AbstractLanguageModel):
             raise Exception(f"only support {GoogleLanguageModel._supported_models}, but got {api_model}")
 
         self.role_name = role_name
-        self.api_key_list = api_key_list if api_key_list else [self.api_key]
+        self.api_key_list = list(api_key_list) if api_key_list else [self.api_key]
         self.cache_path = "google.cache"
 
         # 统计相关

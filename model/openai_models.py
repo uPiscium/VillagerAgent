@@ -33,9 +33,9 @@ class OpenAILanguageModel(AbstractLanguageModel):
                          "gpt-3.5-turbo-0613", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-16k-0613", "gpt-3.5-turbo-instruct"]
     
     # def __init__(self, api_key="", api_model="gpt-3.5-turbo-1106", evaluation_strategy="value", api_base="https://api.openai.com/v1/",
-    #              enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=[]):
+    #              enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None):
     def __init__(self, api_key="", api_model="qwen-max", evaluation_strategy="value", api_base="https://api.chatanywhere.tech/v1",
-                 enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=[]):
+                 enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None):
         if api_key == "" or api_key is None:
             api_key = os.environ.get("OPENAI_API_KEY", "")
         if api_key != "":
@@ -44,7 +44,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
             raise Exception("Please provide OpenAI API key")
         self.api_key = api_key
 
-        if api_key_list != []:
+        if api_key_list:
             self.api_key_list = list(set(api_key_list))
         else:
             self.api_key_list = [api_key]

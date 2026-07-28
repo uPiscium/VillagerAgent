@@ -90,6 +90,36 @@ def test_controller_forwards_local_runtime_config_to_base_agents(monkeypatch):
     }]
 
 
+def test_agent_runtime_mode_does_not_leak_between_controllers(monkeypatch):
+    def init_model(_config):
+        return SimpleNamespace(role_name="")
+
+    monkeypatch.setattr(controller_tiny, "init_language_model", init_model)
+
+    def build_controller(running):
+        manager = SimpleNamespace()
+        data_manager = SimpleNamespace()
+        env = SimpleNamespace(
+            running=running,
+            agent_pool=[SimpleNamespace(name="Alice")],
+        )
+        return GlobalController(
+            {"provider": "openai", "api_model": "test"},
+            manager,
+            data_manager,
+            env,
+            silent=True,
+        )
+
+    virtual_controller = build_controller(False)
+    real_controller = build_controller(True)
+    virtual_controller.executor.shutdown()
+    real_controller.executor.shutdown()
+
+    assert virtual_controller.agent_list[0]._virtual_debug is True
+    assert real_controller.agent_list[0]._virtual_debug is False
+
+
 def test_execution_group_succeeds_only_after_all_agents_succeed():
     controller, task, agents = _controller_with_task(["Alice", "Bob"], required=2)
     group = _started_group(controller, task, agents)

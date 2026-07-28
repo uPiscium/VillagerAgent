@@ -68,10 +68,11 @@ class GlobalController:
     STATE_SHUTDOWN = "shutdown"
     def __init__(self, llm_config: dict, task_manager: TaskManager, data_manager: DataManager, env: VillagerBench,
                  silent: bool = False, max_workers=4, tm_llm_config: dict = None, dm_llm_config: dict = None,
-                 base_agent_config: dict = None, all_tools=[], minecraft_dual_dag_config: dict | None = None,
+                 base_agent_config: dict = None, all_tools=None, minecraft_dual_dag_config: dict | None = None,
                  event_sink=None, emit_terminal_events: bool = True):
 
         self.task_manager = task_manager
+        all_tools = list(all_tools or ())
         tm_llm_config = llm_config.copy() if tm_llm_config is None else tm_llm_config
         tm_llm_config["role_name"] = "TaskManager"
         self.task_manager.llm = init_language_model(tm_llm_config)

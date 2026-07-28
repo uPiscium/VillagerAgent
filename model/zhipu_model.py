@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ZhipuLanguageModel(AbstractLanguageModel):
     _supported_models = ["glm-4", "glm-3-turbo"]
-    def __init__(self, api_key="", api_model="glm-4", role_name="", api_key_list=[]):
+    def __init__(self, api_key="", api_model="glm-4", role_name="", api_key_list=None):
         if api_key == "":
             self.api_key = os.environ.get("ZHIPU_API_KEY")
         else:
@@ -28,7 +28,7 @@ class ZhipuLanguageModel(AbstractLanguageModel):
         else:
             raise Exception(f"only support {ZhipuLanguageModel._supported_models}, but got {api_model}")
 
-        self.api_key_list = api_key_list
+        self.api_key_list = list(api_key_list or ())
 
         self.role_name = role_name
 
@@ -195,5 +195,4 @@ class ZhipuLanguageModel(AbstractLanguageModel):
             logger.warning(e)
             logger.warning(e.__cause__)
             raise e
-
 
