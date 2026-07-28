@@ -23,7 +23,7 @@ from numbers import Integral, Real
 from pathlib import Path
 from model.utils import extract_info
 from env.runtime_paths import RuntimePaths, atomic_write_json
-from env.minecraft_client import ToolActionBlockedError
+from env.minecraft_client import MinecraftToolTimeoutError, ToolActionBlockedError
 
 class AgentFeedback:
     def __init__(self, task:Task, detail, status):
@@ -467,7 +467,7 @@ class BaseAgent:
                 self.IDLE = True
                 self.logger.error("ConnectionRefusedError")
                 raise ConnectionRefusedError
-            except ToolActionBlockedError:
+            except (ToolActionBlockedError, MinecraftToolTimeoutError):
                 self.IDLE = True
                 raise
             except Exception as e:
@@ -654,6 +654,17 @@ class BaseAgent:
                     tool_feedback = target_tool(tool_input)
                 except ToolActionBlockedError:
                     fail("cancelled", "Tool action was blocked by judged terminal status.")
+                    break
+                except MinecraftToolTimeoutError as error:
+                    last_failure = dict(error.failure_detail)
+                    fail(
+                        "minecraft_tool_timeout",
+                        "Minecraft tool response timed out; the operation outcome is unknown.",
+                    )
+                    detail["failure"].update({
+                        "outcome_certainty": "unknown",
+                        "retry_safe": False,
+                    })
                     break
                 except Exception as error:
                     last_failure = {"reason": "tool_exception", "message": str(error)}

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pipeline.controller_tiny as controller_tiny
 import pytest
 
+from env.minecraft_client import MinecraftToolTimeoutError
 from pipeline.controller_tiny import ControllerShutdownError, GlobalController, TaskExecutionGroup
 from pipeline.task_manager import TaskManager
 from type_define.graph import Task
@@ -223,6 +224,30 @@ def test_execution_group_fails_once_when_one_agent_raises():
 
     assert controller.finalize_execution_group(group) is True
     assert len(controller.task_manager.status_updates) == 1
+
+
+def test_minecraft_timeout_failure_metadata_reaches_task_feedback():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    agents[0].step_error = MinecraftToolTimeoutError(
+        "response timed out",
+        agent="Alice",
+        tool="post_place",
+    )
+    group = _started_group(controller, task, agents)
+
+    assert controller.finalize_execution_group(group) is True
+
+    _, status, feedback = controller.task_manager.status_updates[0]
+    assert status == Task.failure
+    assert feedback["error"] == "response timed out"
+    assert feedback["failure"] == {
+        "reason": "minecraft_tool_timeout",
+        "outcome_certainty": "unknown",
+        "retry_safe": False,
+        "message": "response timed out",
+        "agent": "Alice",
+        "tool": "post_place",
+    }
 
 
 def test_execution_group_waits_for_all_agents_and_fails_on_reflection():

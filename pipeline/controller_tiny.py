@@ -560,12 +560,15 @@ class GlobalController:
                     "status": "failure",
                     "error": str(exc),
                 }
+                failure_detail = getattr(exc, "failure_detail", None)
+                if isinstance(failure_detail, dict):
+                    agent_results[agent.name]["failure"] = dict(failure_detail)
                 group_succeeded = False
 
         status = Task.success if group_succeeded else Task.failure
         if len(group.agents) == 1:
             result = agent_results[group.agents[0].name]
-            feedback = (
+            feedback = result if "failure" in result else (
                 result
                 if result.get("status") == "timeout"
                 else result.get("detail", result.get("error"))

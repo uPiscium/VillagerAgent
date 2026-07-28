@@ -32,7 +32,18 @@ class ToolActionBlockedError(RuntimeError):
 
 
 class MinecraftToolTimeoutError(TimeoutError):
-    pass
+    def __init__(self, message: str, *, agent: str | None = None, tool: str | None = None):
+        super().__init__(message)
+        self.failure_detail = {
+            "reason": "minecraft_tool_timeout",
+            "outcome_certainty": "unknown",
+            "retry_safe": False,
+            "message": message,
+        }
+        if agent is not None:
+            self.failure_detail["agent"] = agent
+        if tool is not None:
+            self.failure_detail["tool"] = tool
 
 
 DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS = 5.0
@@ -48,9 +59,17 @@ def _minecraft_request(method: str, url: str, **kwargs):
         return requests.request(method, url, timeout=timeout, **kwargs)
     except requests.Timeout as exc:
         tool_name = url.rstrip("/").rsplit("/", 1)[-1]
-        Agent.last_tool_timeout = {"tool": tool_name}
+        agent_name = Agent.agent_name_for_url(url)
+        Agent.last_tool_timeout = {
+            "agent": agent_name,
+            "tool": tool_name,
+            "outcome_certainty": "unknown",
+            "retry_safe": False,
+        }
         raise MinecraftToolTimeoutError(
-            f"Minecraft tool request timed out: {tool_name}"
+            f"Minecraft tool request timed out: {tool_name}",
+            agent=agent_name,
+            tool=tool_name,
         ) from exc
 
 
@@ -354,6 +373,17 @@ class Agent():
             raise RuntimeError(
                 f"No bridge URL registered for agent {player_name}"
             ) from exc
+
+    @classmethod
+    def agent_name_for_url(cls, url: str) -> str | None:
+        for player_name, runtime_paths in tuple(cls.runtime_paths_by_name.items()):
+            try:
+                prefix = cls.get_url_prefix(runtime_paths).get(player_name)
+            except (OSError, TypeError, ValueError):
+                continue
+            if isinstance(prefix, str) and url.startswith(prefix + "/"):
+                return player_name
+        return None
 
     def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model="", runtime_paths: RuntimePaths | None = None):
         self.name = name
