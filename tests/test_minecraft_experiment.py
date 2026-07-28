@@ -21,6 +21,7 @@ from benchmarks.minecraft.experiment import (
     _terminate_runtime_process,
     _cleanup_exited_runtime_process_group,
     _validate_child_status,
+    _validate_runtime_cleanup,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
     validate_minecraft_config,
@@ -902,6 +903,77 @@ def test_runtime_process_termination_uses_kill_fallback():
         "process_alive_after_kill": True,
         "process_group_alive_after_kill": False,
     }
+
+
+@pytest.mark.parametrize(
+    "unsafe_field",
+    ["process_alive_after_kill", "process_group_alive_after_kill"],
+)
+def test_runtime_cleanup_validator_prioritizes_cleanup_failure(unsafe_field):
+    metadata = {
+        "process_alive_after_kill": False,
+        "process_group_alive_after_kill": False,
+    }
+    metadata[unsafe_field] = True
+    primary_error = {
+        "error_type": "MinecraftExecuteTimeoutError",
+        "message": "execute timed out",
+    }
+
+    with pytest.raises(MinecraftRuntimeChildError) as raised:
+        _validate_runtime_cleanup(
+            metadata,
+            context="after execute timeout",
+            timed_out=True,
+            primary_error=primary_error,
+        )
+
+    assert raised.value.error_type == "ProcessGroupCleanupError"
+    assert raised.value.timed_out is True
+    assert raised.value.primary_error == primary_error
+
+
+def test_cleanup_failure_summary_keeps_timeout_and_marks_target_unsafe(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    primary_error = {
+        "error_type": "MinecraftExecuteTimeoutError",
+        "message": "execute timed out",
+    }
+
+    def fail_cleanup(*_args, **_kwargs):
+        raise MinecraftRuntimeChildError(
+            "Minecraft runtime cleanup failed after execute timeout",
+            error_type="ProcessGroupCleanupError",
+            process_metadata={
+                "exit_code": None,
+                "terminated": True,
+                "killed": True,
+                "process_alive_after_kill": False,
+                "process_group_alive_after_kill": True,
+            },
+            timed_out=True,
+            primary_error=primary_error,
+        )
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        fail_cleanup,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="unsafe_cleanup",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert summary["error_type"] == "ProcessGroupCleanupError"
+    assert summary["timed_out"] is True
+    assert summary["runtime_primary_error"] == primary_error
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["score_available"] is False
+    assert summary["child_protocol"].get("status") != "completed"
 
 
 def test_runtime_process_termination_targets_isolated_process_group(monkeypatch):

@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import queue
 import signal
+import sys
 import time
 from pathlib import Path
 
@@ -51,11 +52,14 @@ class MinecraftExecuteTimeoutError(TimeoutError):
 
 
 class MinecraftRuntimeChildError(RuntimeError):
-    def __init__(self, message: str, *, error_type: str, process_metadata: dict, child_protocol: dict | None = None):
+    def __init__(self, message: str, *, error_type: str, process_metadata: dict, child_protocol: dict | None = None, timed_out: bool = False, primary_error: dict | None = None, cleanup_state: dict | None = None):
         super().__init__(message)
         self.error_type = error_type
         self.process_metadata = process_metadata
         self.child_protocol = child_protocol or {}
+        self.timed_out = timed_out
+        self.primary_error = primary_error or {}
+        self.cleanup_state = cleanup_state or {}
 
 
 def _require_positive_finite_timeout(value: float | None) -> float:
@@ -287,6 +291,8 @@ def _run_minecraft_experiment_attempt(
     error_type = ""
     timed_out = False
     runtime_process = {}
+    runtime_primary_error = {}
+    runtime_cleanup_state = {}
     child_protocol = {}
     server_lock_acquired = False
     server_lock_released = False
@@ -323,8 +329,11 @@ def _run_minecraft_experiment_attempt(
         except MinecraftRuntimeChildError as exc:
             error = str(exc)
             error_type = exc.error_type
+            timed_out = exc.timed_out
             runtime_process = exc.process_metadata
             child_protocol = exc.child_protocol
+            runtime_primary_error = exc.primary_error
+            runtime_cleanup_state = exc.cleanup_state
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
             error_type = exc.__class__.__name__
@@ -492,6 +501,12 @@ def _run_minecraft_experiment_attempt(
         "runtime_process_group_alive_after_kill": bool(
             runtime_process.get("process_group_alive_after_kill", False)
         ),
+        "runtime_target_safe_to_reuse": not bool(
+            runtime_process.get("process_alive_after_kill", False)
+            or runtime_process.get("process_group_alive_after_kill", False)
+        ),
+        "runtime_primary_error": runtime_primary_error,
+        "runtime_cleanup_state": runtime_cleanup_state,
         "child_protocol": sanitize_public_value(child_protocol),
         "controller_shutdown_complete": bool(
             runtime_result.get("controller", {}).get("shutdown_complete", False)
@@ -987,6 +1002,7 @@ def _execute_real_runtime_bounded(
         process.join(timeout_seconds)
         if process.is_alive():
             partial_before_termination, _ = _read_partial_runtime_result(runtime_result_path)
+            timeout_message = f"Minecraft execute mode timed out after {timeout_seconds} seconds"
             process_metadata = _terminate_runtime_process(
                 process,
                 grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
@@ -994,8 +1010,17 @@ def _execute_real_runtime_bounded(
             )
             if partial_before_termination and not runtime_result_path.exists():
                 _write_runtime_checkpoint(runtime_result_path, partial_before_termination)
+            _validate_runtime_cleanup(
+                process_metadata,
+                context="after execute timeout",
+                timed_out=True,
+                primary_error={
+                    "error_type": "MinecraftExecuteTimeoutError",
+                    "message": timeout_message,
+                },
+            )
             raise MinecraftExecuteTimeoutError(
-                f"Minecraft execute mode timed out after {timeout_seconds} seconds",
+                timeout_message,
                 process_metadata=process_metadata,
             )
 
@@ -1037,11 +1062,35 @@ def _execute_real_runtime_bounded(
     finally:
         group_alive = process_group_id is not None and _process_group_exists(process_group_id)
         if process_started and (process.is_alive() or group_alive):
-            _terminate_runtime_process(
+            final_cleanup_metadata = _terminate_runtime_process(
                 process,
                 grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
                 process_group_id=process_group_id,
             )
+            active_error = sys.exc_info()[1]
+            if isinstance(active_error, (MinecraftExecuteTimeoutError, MinecraftRuntimeChildError)):
+                initial_cleanup_metadata = dict(active_error.process_metadata)
+                active_error.process_metadata = final_cleanup_metadata
+                cleanup_state = {
+                    "initial": initial_cleanup_metadata,
+                    "final": dict(final_cleanup_metadata),
+                }
+                if isinstance(active_error, MinecraftRuntimeChildError):
+                    active_error.cleanup_state = cleanup_state
+            if not (
+                isinstance(active_error, MinecraftRuntimeChildError)
+                and active_error.error_type == "ProcessGroupCleanupError"
+            ):
+                _validate_runtime_cleanup(
+                    final_cleanup_metadata,
+                    context="during final cleanup",
+                    timed_out=isinstance(active_error, MinecraftExecuteTimeoutError)
+                    or bool(getattr(active_error, "timed_out", False)),
+                    primary_error=_primary_error_metadata(active_error),
+                    cleanup_state=cleanup_state
+                    if isinstance(active_error, (MinecraftExecuteTimeoutError, MinecraftRuntimeChildError))
+                    else {"final": dict(final_cleanup_metadata)},
+                )
         status_queue.close()
         if hasattr(status_queue, "join_thread"):
             if hasattr(status_queue, "cancel_join_thread"):
@@ -1173,16 +1222,43 @@ def _cleanup_exited_runtime_process_group(
         grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
         process_group_id=process_group_id,
     )
-    if (
-        process_metadata["process_alive_after_kill"]
-        or process_metadata["process_group_alive_after_kill"]
-    ):
-        raise MinecraftRuntimeChildError(
-            "Minecraft runtime child left a live process group",
-            error_type="ProcessGroupCleanupError",
-            process_metadata=process_metadata,
-        )
+    _validate_runtime_cleanup(
+        process_metadata,
+        context="after child exit",
+    )
     return process_metadata
+
+
+def _validate_runtime_cleanup(
+    process_metadata: dict,
+    *,
+    context: str,
+    timed_out: bool = False,
+    primary_error: dict | None = None,
+    cleanup_state: dict | None = None,
+) -> None:
+    if not (
+        process_metadata.get("process_alive_after_kill")
+        or process_metadata.get("process_group_alive_after_kill")
+    ):
+        return
+    raise MinecraftRuntimeChildError(
+        f"Minecraft runtime cleanup failed {context}",
+        error_type="ProcessGroupCleanupError",
+        process_metadata=process_metadata,
+        timed_out=timed_out,
+        primary_error=primary_error,
+        cleanup_state=cleanup_state,
+    )
+
+
+def _primary_error_metadata(error: BaseException | None) -> dict:
+    if error is None:
+        return {}
+    return {
+        "error_type": error.__class__.__name__,
+        "message": str(error),
+    }
 
 
 def _isolated_process_group_id(process) -> int | None:
