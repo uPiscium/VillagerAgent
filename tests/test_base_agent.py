@@ -3,7 +3,7 @@ import threading
 import pytest
 
 from pipeline.agent import BaseAgent
-from env.minecraft_client import MinecraftToolTimeoutError
+from env.minecraft_client import MinecraftActionLogError, MinecraftToolTimeoutError
 from model.vllm_model import VLLMLanguageModel
 from type_define.graph import Task
 
@@ -158,6 +158,28 @@ def test_base_agent_normal_step_does_not_retry_minecraft_timeout(monkeypatch):
     assert raised.value.failure_detail["outcome_certainty"] == "unknown"
     assert raised.value.failure_detail["retry_safe"] is False
     assert agent.IDLE is True
+
+
+def test_base_agent_normal_step_does_not_retry_action_log_failure(monkeypatch):
+    env = FakeEnv()
+    dm = FakeDataManager()
+    agent = BaseAgent(llm=object(), env=env, data_manager=dm, name="Alice", silent=True)
+    task = Task("Place block", {"document": "public"})
+    task._agent = ["Alice"]
+    sleep_calls = []
+
+    def logging_failure(*_args, **_kwargs):
+        env.step_calls += 1
+        raise MinecraftActionLogError("action log invalid", agent="Alice")
+
+    env.step = logging_failure
+    monkeypatch.setattr("pipeline.agent.time.sleep", sleep_calls.append)
+
+    with pytest.raises(MinecraftActionLogError, match="action log invalid"):
+        agent.normal_step(task)
+
+    assert env.step_calls == 1
+    assert sleep_calls == []
 
 
 def test_local_step_records_minecraft_timeout_as_retry_unsafe():

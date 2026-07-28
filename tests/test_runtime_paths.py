@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,9 +12,11 @@ from env.env import VillagerBench, env_type
 from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
 from env.minecraft_client import (
     Agent as MinecraftAgent,
+    MinecraftActionLogError,
     MinecraftToolTimeoutError,
     ToolActionBlockedError,
     _minecraft_request,
+    timeit,
 )
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
@@ -332,6 +335,126 @@ def test_minecraft_kill_clears_runtime_registry_state(tmp_path):
     assert "Alice" not in MinecraftAgent.runtime_paths_by_name
     assert "Alice" not in MinecraftAgent.name2port
     assert "Alice" not in MinecraftAgent.agent_process
+    assert MinecraftAgent._action_log_locks == {}
+
+
+def test_action_log_uses_injected_paths_without_activation(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    legacy = RuntimePaths.legacy(tmp_path)
+    atomic_write_json(legacy.action_log, {"legacy": []})
+    MinecraftAgent.runtime_paths_by_name["Alice"] = paths
+
+    try:
+        MinecraftAgent.append_action_log("Alice", {"action": "placeBlock"})
+    finally:
+        MinecraftAgent.kill()
+
+    assert read_json_artifact(paths.action_log).value == {
+        "Alice": [{"action": "placeBlock"}]
+    }
+    assert read_json_artifact(legacy.action_log).value == {"legacy": []}
+
+
+def test_action_logs_are_isolated_between_runtime_roots(tmp_path):
+    first = RuntimePaths.isolated(tmp_path / "attempt-a")
+    second = RuntimePaths.isolated(tmp_path / "attempt-b")
+    MinecraftAgent.runtime_paths_by_name.update({"Alice": first, "Bob": second})
+
+    try:
+        MinecraftAgent.append_action_log("Alice", {"action": "first"})
+        MinecraftAgent.append_action_log("Bob", {"action": "second"})
+    finally:
+        MinecraftAgent.kill()
+
+    assert read_json_artifact(first.action_log).value == {
+        "Alice": [{"action": "first"}]
+    }
+    assert read_json_artifact(second.action_log).value == {
+        "Bob": [{"action": "second"}]
+    }
+
+
+@pytest.mark.parametrize("same_agent", [False, True])
+def test_concurrent_action_log_appends_do_not_lose_entries(tmp_path, same_agent):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    names = ["Alice", "Alice" if same_agent else "Bob"]
+    MinecraftAgent.runtime_paths_by_name.update({name: paths for name in names})
+    barrier = threading.Barrier(3)
+    errors = []
+
+    def append(name, index):
+        try:
+            barrier.wait()
+            MinecraftAgent.append_action_log(name, {"action": f"action-{index}"})
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=append, args=(name, index))
+        for index, name in enumerate(names)
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(2)
+    finally:
+        MinecraftAgent.kill()
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    action_log = read_json_artifact(paths.action_log).value
+    assert sum(len(entries) for entries in action_log.values()) == 2
+    assert sorted(
+        entry["action"] for entries in action_log.values() for entry in entries
+    ) == ["action-0", "action-1"]
+
+
+@pytest.mark.parametrize("content", ["{", "[]"])
+def test_action_log_rejects_malformed_existing_artifact(tmp_path, content):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    paths.ensure_directories()
+    paths.action_log.write_text(content, encoding="utf-8")
+    MinecraftAgent.runtime_paths_by_name["Alice"] = paths
+
+    try:
+        with pytest.raises(MinecraftActionLogError):
+            MinecraftAgent.append_action_log("Alice", {"action": "placeBlock"})
+    finally:
+        MinecraftAgent.kill()
+
+
+def test_action_log_failure_does_not_repeat_completed_tool(tmp_path, monkeypatch):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    paths.ensure_directories()
+    paths.action_log.write_text("{", encoding="utf-8")
+    atomic_write_json(paths.url_prefix, {"Alice": "http://localhost:5000"})
+    MinecraftAgent.runtime_paths_by_name["Alice"] = paths
+    calls = []
+
+    class Response:
+        @staticmethod
+        def json():
+            return {"status": True}
+
+    monkeypatch.setattr(
+        "env.minecraft_client._minecraft_request",
+        lambda *_args, **_kwargs: Response(),
+    )
+
+    @timeit
+    def completed_action(*, player_name, emotion, murmur):
+        calls.append(player_name)
+        return {"message": "done", "status": True}
+
+    try:
+        with pytest.raises(MinecraftActionLogError):
+            completed_action(player_name="Alice", emotion=[], murmur="")
+    finally:
+        MinecraftAgent.kill()
+
+    assert calls == ["Alice"]
 
 
 def test_judger_terminal_artifact_cannot_be_overwritten(tmp_path):

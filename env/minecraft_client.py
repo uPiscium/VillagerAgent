@@ -21,7 +21,7 @@ import os
 import random
 import platform
 from model.ollama_config import load_agent_api_key_list
-from env.runtime_paths import RuntimePaths, atomic_write_json
+from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
@@ -44,6 +44,19 @@ class MinecraftToolTimeoutError(TimeoutError):
             self.failure_detail["agent"] = agent
         if tool is not None:
             self.failure_detail["tool"] = tool
+
+
+class MinecraftActionLogError(RuntimeError):
+    def __init__(self, message: str, *, agent: str | None = None):
+        super().__init__(message)
+        self.failure_detail = {
+            "reason": "minecraft_action_log_error",
+            "outcome_certainty": "unknown",
+            "retry_safe": False,
+            "message": message,
+        }
+        if agent is not None:
+            self.failure_detail["agent"] = agent
 
 
 DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS = 5.0
@@ -228,40 +241,14 @@ def timeit(func):
         result = func(*args, **kwargs_in)
         end_time = time.time()
         
-        runtime_paths = RuntimePaths.from_environment()
-        runtime_paths.ensure_directories()
-        max_try = 3
-        while max_try > 0:
-            try:
-                # action log
-                action_log_path = runtime_paths.action_log
-                if action_log_path.exists():
-                    with action_log_path.open("r", encoding='utf-8') as f:
-                        action_log = json.load(f)
-                else:
-                    action_log = {}
-                agent_name = kwargs["player_name"] # 第一个参数是 agent_name
-                if agent_name not in action_log:
-                    action_log[agent_name] = []
-                
-                # 注意：args, kwargs 和 result 需要是可序列化的
-                action_log[agent_name].append({
-                    "action": func.__name__,
-                    # "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)),
-                    "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)),
-                    "duration": end_time - start_time,
-                    "kwargs": kwargs,  # kwargs 可能包含不可序列化的对象
-                    "result": result,  # result 可能包含不可序列化的对象
-                })
-                
-                # 写入文件
-                atomic_write_json(action_log_path, action_log)
-                break
-            except Exception as e:
-                print(e)
-                max_try -= 1
-                time.sleep(1)
+        Agent.append_action_log(agent_name, {
+            "action": func.__name__,
+            "start_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)),
+            "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)),
+            "duration": end_time - start_time,
+            "kwargs": kwargs,
+            "result": result,
+        })
         
         return result
     return wrapper
@@ -331,6 +318,8 @@ class Agent():
     url_prefix = {}
     runtime_paths_by_name: dict[str, RuntimePaths] = {}
     _url_registry_lock = threading.Lock()
+    _action_log_locks: dict[str, threading.Lock] = {}
+    _action_log_locks_guard = threading.Lock()
     minecraft_connect_timeout_seconds = DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS
     minecraft_read_timeout_seconds = DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS
     last_tool_timeout = None
@@ -384,6 +373,50 @@ class Agent():
             if isinstance(prefix, str) and url.startswith(prefix + "/"):
                 return player_name
         return None
+
+    @classmethod
+    def action_log_lock_for(cls, runtime_paths: RuntimePaths) -> threading.Lock:
+        key = str(runtime_paths.action_log.resolve())
+        with cls._action_log_locks_guard:
+            return cls._action_log_locks.setdefault(key, threading.Lock())
+
+    @classmethod
+    def append_action_log(cls, player_name: str, entry: dict) -> None:
+        runtime_paths = cls.runtime_paths_for(player_name)
+        runtime_paths.ensure_directories()
+        action_log_path = runtime_paths.action_log
+        try:
+            with cls.action_log_lock_for(runtime_paths):
+                result = read_json_artifact(action_log_path)
+                if result.state == "absent":
+                    action_log = {}
+                elif result.state == "invalid":
+                    raise MinecraftActionLogError(
+                        f"action log is invalid: {result.error}",
+                        agent=player_name,
+                    )
+                elif not isinstance(result.value, dict):
+                    raise MinecraftActionLogError(
+                        "action log must contain an object",
+                        agent=player_name,
+                    )
+                else:
+                    action_log = result.value
+                entries = action_log.setdefault(player_name, [])
+                if not isinstance(entries, list):
+                    raise MinecraftActionLogError(
+                        f"action log entry for {player_name} must be a list",
+                        agent=player_name,
+                    )
+                entries.append(entry)
+                atomic_write_json(action_log_path, action_log)
+        except MinecraftActionLogError:
+            raise
+        except Exception as exc:
+            raise MinecraftActionLogError(
+                f"failed to persist action log: {exc}",
+                agent=player_name,
+            ) from exc
 
     def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model="", runtime_paths: RuntimePaths | None = None):
         self.name = name
@@ -514,6 +547,8 @@ class Agent():
                 Agent.runtime_paths_by_name.pop(name, None)
                 Agent.name2port.pop(name, None)
             Agent.agent_process.clear()
+        with Agent._action_log_locks_guard:
+            Agent._action_log_locks.clear()
 
     # @tool
     # @timeit
