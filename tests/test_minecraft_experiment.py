@@ -13,10 +13,13 @@ from benchmarks.common.run_artifacts import (
 )
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
+    MinecraftRuntimeChildError,
     _execute_real_runtime,
     _execute_real_runtime_bounded,
+    _read_completed_runtime_result,
     _task_graph_from_config,
     _terminate_runtime_process,
+    _validate_child_status,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
     validate_minecraft_config,
@@ -554,7 +557,7 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     assert summary["error_type"] == "RuntimeError"
     assert summary["timed_out"] is False
     assert summary["runtime_process_isolated"] is True
-    assert summary["runtime_process_exit_code"] == 0
+    assert summary["runtime_process_exit_code"] != 0
     assert summary["runtime_task_name"].startswith("bounded_execute_")
     assert (output_dir / "summary.json").exists()
     assert (output_dir / "metrics.json").exists()
@@ -1394,6 +1397,79 @@ def test_bounded_runtime_terminates_child_when_join_is_interrupted(tmp_path, mon
     assert process.terminated is True
     assert process.is_alive() is False
     assert status_queue.closed is True
+
+
+@pytest.mark.parametrize(
+    "child_status",
+    [
+        None,
+        {},
+        {"schema_version": 1, "status": "running"},
+    ],
+)
+def test_child_protocol_rejects_missing_or_nonterminal_status(child_status):
+    with pytest.raises(MinecraftRuntimeChildError) as raised:
+        _validate_child_status(
+            child_status,
+            expected_attempt_id="attempt-a",
+            expected_task_name="runtime-task-a",
+            process_metadata={"exit_code": 0},
+        )
+
+    assert raised.value.error_type == "ChildProtocolError"
+    assert raised.value.child_protocol["status_received"] is (child_status is not None)
+
+
+def test_child_protocol_accepts_error_status_without_failure_checkpoint():
+    protocol = _validate_child_status(
+        {
+            "schema_version": 1,
+            "status": "error",
+            "attempt_id": "attempt-a",
+            "task_name": "runtime-task-a",
+            "error": "primary failure",
+            "error_type": "RuntimeError",
+            "result_written": False,
+        },
+        expected_attempt_id="attempt-a",
+        expected_task_name="runtime-task-a",
+        process_metadata={"exit_code": 1},
+    )
+
+    assert protocol["status"] == "error"
+    assert protocol["result_valid"] is False
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (None, "without a runtime result"),
+        ([], "must be an object"),
+        ({"attempt_id": "stale", "task_name": "runtime-task-a", "error": None}, "attempt mismatch"),
+        ({"attempt_id": "attempt-a", "task_name": "stale", "error": None}, "task mismatch"),
+        ({"attempt_id": "attempt-a", "task_name": "runtime-task-a", "error": "runtime failed"}, "runtime failed"),
+    ],
+)
+def test_completed_child_requires_valid_owned_error_free_result(tmp_path, payload, message):
+    result_path = tmp_path / "runtime_result.json"
+    if payload is not None:
+        result_path.write_text(json.dumps(payload), encoding="utf-8")
+    protocol = {
+        "schema_version": 1,
+        "status_received": True,
+        "status": "completed",
+        "exit_code": 0,
+        "result_valid": False,
+    }
+
+    with pytest.raises(MinecraftRuntimeChildError, match=message):
+        _read_completed_runtime_result(
+            result_path,
+            expected_attempt_id="attempt-a",
+            expected_task_name="runtime-task-a",
+            process_metadata={"exit_code": 0},
+            child_protocol=protocol,
+        )
 
 
 def _write_minecraft_config(tmp_path):

@@ -50,10 +50,11 @@ class MinecraftExecuteTimeoutError(TimeoutError):
 
 
 class MinecraftRuntimeChildError(RuntimeError):
-    def __init__(self, message: str, *, error_type: str, process_metadata: dict):
+    def __init__(self, message: str, *, error_type: str, process_metadata: dict, child_protocol: dict | None = None):
         super().__init__(message)
         self.error_type = error_type
         self.process_metadata = process_metadata
+        self.child_protocol = child_protocol or {}
 
 
 def run_minecraft_experiment(
@@ -267,6 +268,7 @@ def _run_minecraft_experiment_attempt(
     error_type = ""
     timed_out = False
     runtime_process = {}
+    child_protocol = {}
     server_lock_acquired = False
     server_lock_released = False
     server_lock_stale_owner_detected = False
@@ -303,14 +305,22 @@ def _run_minecraft_experiment_attempt(
             error = str(exc)
             error_type = exc.error_type
             runtime_process = exc.process_metadata
+            child_protocol = exc.child_protocol
         except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
             error = str(exc)
             error_type = exc.__class__.__name__
         finally:
             server_lock_released = not target_lock.acquired
-        persisted_runtime_result = _read_json(runtime_result_path, default={})
+        persisted_runtime_result, persisted_result_error = _read_partial_runtime_result(
+            runtime_result_path
+        )
+        if persisted_result_error is not None:
+            runtime_result.setdefault("collection_errors", []).append(
+                persisted_result_error
+            )
         runtime_result = runtime_result or persisted_runtime_result
         runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
+        child_protocol = child_protocol or runtime_result.get("child_protocol", {})
         action_log_available = isinstance(runtime_result.get("action_log"), dict)
         action_log = runtime_result.get("action_log") if action_log_available else {}
         score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
@@ -457,11 +467,15 @@ def _run_minecraft_experiment_attempt(
         "runtime_process_exit_code": runtime_process.get("exit_code"),
         "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
         "runtime_process_killed": bool(runtime_process.get("killed", False)),
+        "child_protocol": sanitize_public_value(child_protocol),
         "controller_shutdown_complete": bool(
             runtime_result.get("controller", {}).get("shutdown_complete", False)
         ),
         "controller_active_assignments": sanitize_public_value(
             runtime_result.get("controller", {}).get("active_assignments", {})
+        ),
+        "runtime_collection_errors": sanitize_public_value(
+            runtime_result.get("collection_errors", [])
         ),
         "action_log_available": action_log_available,
         "events_available": normalized_events is not None,
@@ -943,7 +957,7 @@ def _execute_real_runtime_bounded(
         process_group_id = _wait_for_isolated_process_group(process)
         process.join(timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None)
         if process.is_alive():
-            partial_before_termination = _read_json(runtime_result_path, default={})
+            partial_before_termination, _ = _read_partial_runtime_result(runtime_result_path)
             process_metadata = _terminate_runtime_process(
                 process,
                 grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
@@ -962,20 +976,35 @@ def _execute_real_runtime_bounded(
             "killed": False,
         }
         child_status = _read_child_status(status_queue)
-        if child_status.get("status") == "error":
+        child_protocol = _validate_child_status(
+            child_status,
+            expected_attempt_id=attempt_id,
+            expected_task_name=launch_config.get("task_name"),
+            process_metadata=process_metadata,
+        )
+        if child_status["status"] == "error":
             raise MinecraftRuntimeChildError(
                 child_status.get("error", "Minecraft runtime child failed"),
                 error_type=child_status.get("error_type", "RuntimeError"),
                 process_metadata=process_metadata,
+                child_protocol=child_protocol,
             )
         if process.exitcode not in (0, None):
             raise MinecraftRuntimeChildError(
                 f"Minecraft runtime child exited with code {process.exitcode}",
                 error_type="ChildProcessError",
                 process_metadata=process_metadata,
+                child_protocol=child_protocol,
             )
-        result = _read_json(runtime_result_path, default={})
+        result = _read_completed_runtime_result(
+            runtime_result_path,
+            expected_attempt_id=attempt_id,
+            expected_task_name=launch_config.get("task_name"),
+            process_metadata=process_metadata,
+            child_protocol=child_protocol,
+        )
         result["runtime_process"] = process_metadata
+        result["child_protocol"] = child_protocol
         return result
     finally:
         group_alive = process_group_id is not None and _process_group_exists(process_group_id)
@@ -986,6 +1015,8 @@ def _execute_real_runtime_bounded(
                 process_group_id=process_group_id,
             )
         status_queue.close()
+        if hasattr(status_queue, "join_thread"):
+            status_queue.join_thread()
 
 
 def _runtime_process_entry(
@@ -997,9 +1028,9 @@ def _runtime_process_entry(
     attempt_id: str | None,
     status_queue,
 ) -> None:
-    if hasattr(os, "setsid"):
-        os.setsid()
     try:
+        if hasattr(os, "setsid"):
+            os.setsid()
         result = _execute_real_runtime(
             launch_config,
             dual_dag_config=dual_dag_config,
@@ -1008,19 +1039,48 @@ def _runtime_process_entry(
             runtime_root=Path(runtime_root) if runtime_root is not None else None,
             attempt_id=attempt_id,
         ) or {}
+        if not isinstance(result, dict):
+            raise TypeError("Minecraft runtime result must be an object")
         result_path = Path(runtime_result_path)
-        if result or not result_path.exists():
-            _write_runtime_checkpoint(result_path, result)
-        status_queue.put({"status": "completed"})
-    except BaseException as exc:
-        partial = _read_json(Path(runtime_result_path), default={})
-        partial["error"] = str(exc)
-        _write_runtime_checkpoint(Path(runtime_result_path), partial)
+        if not result and result_path.exists():
+            persisted, persisted_error = _read_partial_runtime_result(result_path)
+            if persisted_error is not None:
+                raise RuntimeError(persisted_error["error"])
+            result = persisted
+        result.setdefault("attempt_id", attempt_id)
+        result.setdefault("task_name", launch_config.get("task_name"))
+        _write_runtime_checkpoint(result_path, result)
         status_queue.put({
-            "status": "error",
-            "error": str(exc),
-            "error_type": exc.__class__.__name__,
+            "schema_version": 1,
+            "status": "completed",
+            "attempt_id": attempt_id,
+            "task_name": launch_config.get("task_name"),
+            "result_written": True,
         })
+    except BaseException as exc:
+        result_written = False
+        partial, _ = _read_partial_runtime_result(Path(runtime_result_path))
+        partial.setdefault("attempt_id", attempt_id)
+        partial.setdefault("task_name", launch_config.get("task_name"))
+        partial["error"] = str(exc)
+        partial["error_type"] = exc.__class__.__name__
+        try:
+            _write_runtime_checkpoint(Path(runtime_result_path), partial)
+            result_written = True
+        except Exception:
+            pass
+        try:
+            status_queue.put({
+                "schema_version": 1,
+                "status": "error",
+                "attempt_id": attempt_id,
+                "task_name": launch_config.get("task_name"),
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+                "result_written": result_written,
+            })
+        finally:
+            raise
 
 
 def _terminate_runtime_process(
@@ -1096,11 +1156,112 @@ def _signal_process_group(process_group_id: int, sent_signal: int) -> bool:
     return True
 
 
-def _read_child_status(status_queue) -> dict:
+def _read_child_status(status_queue):
     try:
         return status_queue.get(timeout=0.5)
     except queue.Empty:
-        return {}
+        return None
+
+
+def _validate_child_status(
+    child_status,
+    *,
+    expected_attempt_id: str | None,
+    expected_task_name: str | None,
+    process_metadata: dict,
+) -> dict:
+    def protocol_error(message: str):
+        raise MinecraftRuntimeChildError(
+            message,
+            error_type="ChildProtocolError",
+            process_metadata=process_metadata,
+            child_protocol={
+                "schema_version": 1,
+                "status_received": child_status is not None,
+                "status": child_status.get("status") if isinstance(child_status, dict) else None,
+                "exit_code": process_metadata.get("exit_code"),
+                "result_valid": False,
+            },
+        )
+
+    if not isinstance(child_status, dict):
+        protocol_error("Minecraft runtime child exited without a completion status")
+    if child_status.get("schema_version") != 1:
+        protocol_error("Minecraft runtime child status has an unsupported schema")
+    if child_status.get("status") not in ("completed", "error"):
+        protocol_error("Minecraft runtime child status is not terminal")
+    if child_status.get("attempt_id") != expected_attempt_id:
+        protocol_error("Minecraft runtime child status attempt mismatch")
+    if child_status.get("task_name") != expected_task_name:
+        protocol_error("Minecraft runtime child status task mismatch")
+    if child_status.get("status") == "completed" and child_status.get("result_written") is not True:
+        protocol_error("Minecraft runtime child did not persist a runtime result")
+    return {
+        "schema_version": 1,
+        "status_received": True,
+        "status": child_status["status"],
+        "exit_code": process_metadata.get("exit_code"),
+        "result_valid": False,
+    }
+
+
+def _read_completed_runtime_result(
+    path: Path,
+    *,
+    expected_attempt_id: str | None,
+    expected_task_name: str | None,
+    process_metadata: dict,
+    child_protocol: dict,
+) -> dict:
+    def protocol_error(message: str):
+        raise MinecraftRuntimeChildError(
+            message,
+            error_type="ChildProtocolError",
+            process_metadata=process_metadata,
+            child_protocol=child_protocol,
+        )
+
+    if not path.is_file():
+        protocol_error("Minecraft runtime child completed without a runtime result")
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        protocol_error("Minecraft runtime child wrote an invalid runtime result")
+    if not isinstance(result, dict):
+        protocol_error("Minecraft runtime child result must be an object")
+    if result.get("attempt_id") != expected_attempt_id:
+        protocol_error("Minecraft runtime child result attempt mismatch")
+    if result.get("task_name") != expected_task_name:
+        protocol_error("Minecraft runtime child result task mismatch")
+    if result.get("error") is not None:
+        raise MinecraftRuntimeChildError(
+            str(result["error"]),
+            error_type=str(result.get("error_type") or "RuntimeError"),
+            process_metadata=process_metadata,
+            child_protocol=child_protocol,
+        )
+    child_protocol["result_valid"] = True
+    return result
+
+
+def _read_partial_runtime_result(path: Path) -> tuple[dict, dict | None]:
+    if not path.exists():
+        return {}, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, {
+            "field": "runtime_result",
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+    if not isinstance(payload, dict):
+        return {}, {
+            "field": "runtime_result",
+            "error": "runtime result must be an object",
+            "error_type": "TypeError",
+        }
+    return payload, None
 
 
 def _write_runtime_checkpoint(path: Path, payload: dict) -> None:
