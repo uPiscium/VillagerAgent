@@ -750,7 +750,7 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
 def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
 
-    def runtime_with_diagnostics(*args, **kwargs):
+    def runtime_with_diagnostics(launch_config, **kwargs):
         diagnostics_path = Path(kwargs["runtime_result_path"]).parent / "meta_judger_diagnostics.json"
         diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
         diagnostics_path.write_text(json.dumps({
@@ -760,7 +760,15 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
             "exit_code": None,
             "timeout_reason": None,
         }), encoding="utf-8")
-        return {"score": {"score": 1}, "action_log": {}}
+        return {
+            "score": {
+                "attempt_id": kwargs["attempt_id"],
+                "task_name": launch_config["task_name"],
+                "status": "success",
+                "score": 1,
+            },
+            "action_log": {},
+        }
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_with_diagnostics)
 
@@ -1101,6 +1109,40 @@ def test_minecraft_execute_rejects_score_owned_by_another_attempt(tmp_path, monk
     assert summary["score_ownership_verified"] is False
     assert summary["error_type"] == "ScoreOwnershipError"
     assert "another-attempt" in summary["error"]
+
+
+@pytest.mark.parametrize("missing_field", ["attempt_id", "task_name"])
+def test_minecraft_execute_rejects_score_with_missing_ownership(
+    tmp_path, monkeypatch, missing_field
+):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def missing_identity(launch_config, **kwargs):
+        score = {
+            "attempt_id": kwargs["attempt_id"],
+            "task_name": launch_config["task_name"],
+            "status": "success",
+            "score": 100,
+        }
+        score.pop(missing_field)
+        return {"score": score, "action_log": {}}
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        missing_identity,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name=f"missing_{missing_field}",
+        execute=True,
+    )
+
+    assert summary["score_available"] is False
+    assert summary["score_ownership_verified"] is False
+    assert summary["error_type"] == "ScoreOwnershipError"
+    assert f"missing: {missing_field}" in summary["error"]
 
 
 def test_minecraft_execute_ignores_partial_tmp_result(tmp_path, monkeypatch):

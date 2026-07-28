@@ -10,6 +10,7 @@ from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json
+from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
 
 start_time = time.time()
 from pipeline.controller_tiny import GlobalController
@@ -39,14 +40,14 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
     runtime_snapshot = runtime_store.snapshot() if runtime_store is not None else {}
     task_graph_snapshot = _task_graph_snapshot(tm.graph) if tm is not None and hasattr(tm, "graph") else {}
     score = env.get_score() if env is not None and hasattr(env, "get_score") else {}
-    if isinstance(score, dict) and score:
-        score = dict(score)
-        score.setdefault("attempt_id", attempt_id)
-        score.setdefault("task_name", task_name)
     return {
         "score": score,
         "attempt_id": attempt_id,
         "task_name": task_name,
+        "expected_score_identity": {
+            "attempt_id": attempt_id,
+            "task_name": task_name,
+        },
         "action_log": env.get_action_log() if env is not None and hasattr(env, "get_action_log") else {},
         "runtime_task_dag_snapshot": runtime_snapshot,
         "task_graph_snapshot": task_graph_snapshot,
@@ -71,14 +72,18 @@ def validate_judged_runtime_result(result: dict) -> None:
     score = result.get("score")
     if not isinstance(score, dict) or not score:
         raise JudgedRuntimeValidationError("judged runtime result has no score payload")
+    try:
+        validate_score_identity(
+            score,
+            expected_attempt_id=result.get("attempt_id"),
+            expected_task_name=result.get("task_name"),
+        )
+    except ScoreOwnershipError as exc:
+        raise JudgedRuntimeValidationError(str(exc)) from exc
     if score.get("status") != "success":
         raise JudgedRuntimeValidationError(
             f"judger reported terminal status {score.get('status')!r}"
         )
-    if score.get("attempt_id") != result.get("attempt_id"):
-        raise JudgedRuntimeValidationError("judged score attempt does not match runtime attempt")
-    if score.get("task_name") != result.get("task_name"):
-        raise JudgedRuntimeValidationError("judged score task does not match runtime task")
     snapshot = result.get("runtime_task_dag_snapshot")
     if not isinstance(snapshot, dict) or snapshot.get("summary", {}).get("terminal_state") != "success":
         raise JudgedRuntimeValidationError("runtime task DAG is not terminal success")
