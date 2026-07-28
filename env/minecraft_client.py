@@ -1132,6 +1132,8 @@ class Agent():
             except ConnectionRefusedError as e:
                 logging.info(filter_emoji(str(e)))
                 raise ConnectionRefusedError
+            except ToolActionBlockedError:
+                raise
             except Exception as e:
                 print(filter_emoji(str(e)))
                 print("retrying...")
@@ -1258,6 +1260,8 @@ class Agent():
             except ConnectionRefusedError as e:
                 logging.info(filter_emoji(str(e)))
                 raise ConnectionRefusedError
+            except ToolActionBlockedError:
+                raise
             except Exception as e:
                 print(filter_emoji(str(e)))
                 print("retrying...")

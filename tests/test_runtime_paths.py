@@ -7,7 +7,7 @@ from langchain.agents import tool
 
 from env.env import VillagerBench, env_type
 from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
-from env.minecraft_client import Agent as MinecraftAgent
+from env.minecraft_client import Agent as MinecraftAgent, ToolActionBlockedError
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
 from start_with_config import _with_runtime_paths
@@ -174,6 +174,38 @@ def test_environment_guarded_tool_does_not_run_after_barrier_rejection():
     with pytest.raises(RuntimeError, match="barrier closed"):
         guarded.invoke({"value": 3})
     assert calls == []
+
+
+def test_minecraft_agent_does_not_retry_terminal_blocked_tool(monkeypatch):
+    attempts = []
+    agent = object.__new__(MinecraftAgent)
+    agent.name = "Alice"
+    agent.model = "test"
+    agent.api_key_list = ["test-key"]
+    agent.llm = object()
+    agent.tools = []
+    monkeypatch.setattr(MinecraftAgent, "provider", "ollama")
+    monkeypatch.setattr(MinecraftAgent, "api_key_list", ["test-key"])
+    monkeypatch.setattr(
+        "env.minecraft_client.OllamaReasoningChatOpenAI",
+        lambda **_kwargs: object(),
+    )
+
+    class BlockedExecutor:
+        handle_parsing_errors = False
+
+        def __call__(self, _input):
+            attempts.append(True)
+            raise ToolActionBlockedError("terminal barrier closed")
+
+    monkeypatch.setattr(
+        "env.minecraft_client.initialize_agent",
+        lambda **_kwargs: BlockedExecutor(),
+    )
+
+    with pytest.raises(ToolActionBlockedError, match="terminal barrier closed"):
+        agent.run("move", max_try_turn=10)
+    assert attempts == [True]
 
 
 def test_environment_escalates_persistently_invalid_status(tmp_path):
