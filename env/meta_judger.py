@@ -9,8 +9,10 @@ import os
 import math
 
 try:
+    from env.judger_artifacts import TerminalArtifactWriter
     from env.runtime_paths import RuntimePaths, atomic_write_json, atomic_write_text
 except ImportError:
+    from judger_artifacts import TerminalArtifactWriter
     from runtime_paths import RuntimePaths, atomic_write_json, atomic_write_text
 import argparse
 from minecraft_define import *
@@ -47,6 +49,7 @@ runtime_paths = (
 runtime_paths.ensure_directories()
 run_result_dir = runtime_paths.run_result_dir(task_name)
 run_result_dir.mkdir(parents=True, exist_ok=True)
+terminal_writer = TerminalArtifactWriter(runtime_paths, run_result_dir)
 
 mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
@@ -898,10 +901,8 @@ def handle(this):
                     "end_reason": "task completed",
                     "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
                 }
-                atomic_write_json(run_result_dir / "score.json", score_payload)
-                atomic_write_json(runtime_paths.score, score_payload)
-                atomic_write_json(run_result_dir / "config.json", config)
-                atomic_write_json(runtime_paths.load_status, {"status": "end"})
+                terminal_writer.write(score_payload, config)
+                return
 
             # check failed action number
             # failed_action = 0
@@ -966,10 +967,8 @@ def handle(this):
                         "end_reason": "max iteration out",
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time)),
                     }
-                    atomic_write_json(run_result_dir / "score.json", failure_payload)
-                    atomic_write_json(runtime_paths.score, failure_payload)
-                    atomic_write_json(run_result_dir / "config.json", config)
-                    atomic_write_json(runtime_paths.load_status, {"status": "end"})
+                    terminal_writer.write(failure_payload, config)
+                    return
                 if now_iter >= max_iter: 
                     max_iter_flag += 1
 
