@@ -1,6 +1,7 @@
 import argparse
 from copy import deepcopy
 import json
+import math
 import multiprocessing
 import os
 import queue
@@ -57,6 +58,20 @@ class MinecraftRuntimeChildError(RuntimeError):
         self.child_protocol = child_protocol or {}
 
 
+def _require_positive_finite_timeout(value: float | None) -> float:
+    if (
+        value is None
+        or isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(
+            "real Minecraft execute requires a positive finite timeout"
+        )
+    return float(value)
+
+
 def run_minecraft_experiment(
     *,
     config_path: str | Path,
@@ -72,6 +87,10 @@ def run_minecraft_experiment(
     overwrite: bool = False,
     event_sink: RuntimeEventSink | None = None,
 ) -> dict:
+    if execute:
+        execute_timeout_seconds = _require_positive_finite_timeout(
+            execute_timeout_seconds
+        )
     attempt_state: dict = {}
     try:
         return _run_minecraft_experiment_attempt(
@@ -467,6 +486,12 @@ def _run_minecraft_experiment_attempt(
         "runtime_process_exit_code": runtime_process.get("exit_code"),
         "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
         "runtime_process_killed": bool(runtime_process.get("killed", False)),
+        "runtime_process_alive_after_kill": bool(
+            runtime_process.get("process_alive_after_kill", False)
+        ),
+        "runtime_process_group_alive_after_kill": bool(
+            runtime_process.get("process_group_alive_after_kill", False)
+        ),
         "child_protocol": sanitize_public_value(child_protocol),
         "controller_shutdown_complete": bool(
             runtime_result.get("controller", {}).get("shutdown_complete", False)
@@ -935,6 +960,7 @@ def _execute_real_runtime_bounded(
     runtime_root: Path | None = None,
     attempt_id: str | None = None,
 ) -> dict:
+    timeout_seconds = _require_positive_finite_timeout(timeout_seconds)
     context = multiprocessing.get_context()
     status_queue = context.Queue()
     process = context.Process(
@@ -955,7 +981,7 @@ def _execute_real_runtime_bounded(
         process.start()
         process_started = True
         process_group_id = _wait_for_isolated_process_group(process)
-        process.join(timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None)
+        process.join(timeout_seconds)
         if process.is_alive():
             partial_before_termination, _ = _read_partial_runtime_result(runtime_result_path)
             process_metadata = _terminate_runtime_process(
@@ -970,10 +996,24 @@ def _execute_real_runtime_bounded(
                 process_metadata=process_metadata,
             )
 
+        if process_group_id is not None and _process_group_exists(process_group_id):
+            process_metadata = _terminate_runtime_process(
+                process,
+                grace_seconds=RUNTIME_TERMINATE_GRACE_SECONDS,
+                process_group_id=process_group_id,
+            )
+            raise MinecraftRuntimeChildError(
+                "Minecraft runtime child left a live process group",
+                error_type="ProcessGroupCleanupError",
+                process_metadata=process_metadata,
+            )
+
         process_metadata = {
             "exit_code": process.exitcode,
             "terminated": False,
             "killed": False,
+            "process_alive_after_kill": False,
+            "process_group_alive_after_kill": False,
         }
         child_status = _read_child_status(status_queue)
         child_protocol = _validate_child_status(
@@ -1016,7 +1056,10 @@ def _execute_real_runtime_bounded(
             )
         status_queue.close()
         if hasattr(status_queue, "join_thread"):
-            status_queue.join_thread()
+            if hasattr(status_queue, "cancel_join_thread"):
+                status_queue.cancel_join_thread()
+            else:
+                status_queue.join_thread()
 
 
 def _runtime_process_entry(
@@ -1104,13 +1147,18 @@ def _terminate_runtime_process(
             group_signaled = _signal_process_group(process_group_id, signal.SIGKILL)
         if not group_signaled and process.is_alive():
             process.kill()
-        if process.is_alive():
-            process.join()
+        process.join(grace_seconds)
         killed = True
+    process_alive_after_kill = process.is_alive()
+    process_group_alive_after_kill = (
+        process_group_id is not None and _process_group_exists(process_group_id)
+    )
     return {
         "exit_code": process.exitcode,
         "terminated": True,
         "killed": killed,
+        "process_alive_after_kill": process_alive_after_kill,
+        "process_group_alive_after_kill": process_group_alive_after_kill,
     }
 
 

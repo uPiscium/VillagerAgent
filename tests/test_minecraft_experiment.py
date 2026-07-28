@@ -268,9 +268,25 @@ def test_minecraft_meta_execute_requires_non_empty_task_scenario(tmp_path):
             config_path=config_path,
             output_root=tmp_path / "result",
             execute=True,
+            execute_timeout_seconds=30,
+        )
+    assert not (tmp_path / "result").exists()
+
+
+@pytest.mark.parametrize("timeout", [None, 0, -1, float("nan"), float("inf"), True])
+def test_minecraft_execute_requires_positive_finite_timeout(tmp_path, timeout):
+    config_path = _write_minecraft_config(tmp_path)
+    output_root = tmp_path / "result"
+
+    with pytest.raises(ValueError, match="positive finite timeout"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=output_root,
+            execute=True,
+            execute_timeout_seconds=timeout,
         )
 
-    assert not (tmp_path / "result").exists()
+    assert not output_root.exists()
 
 
 def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monkeypatch):
@@ -386,6 +402,7 @@ def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, mon
         config_path=config_path,
         output_root=tmp_path / "result",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     assert summary["error"] is None
@@ -579,6 +596,7 @@ def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
         output_root=tmp_path / "result",
         run_name="execute_real_snapshot",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     output_dir = tmp_path / "result" / "execute_real_snapshot"
@@ -646,6 +664,7 @@ def test_minecraft_execute_builds_task_artifacts_from_real_runtime_state(tmp_pat
         output_root=tmp_path / "result",
         run_name="runtime_artifact_source",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     output_dir = tmp_path / "result" / "runtime_artifact_source"
@@ -684,6 +703,7 @@ def test_minecraft_execute_uses_recorded_runtime_selection_history(tmp_path, mon
         output_root=tmp_path / "result",
         run_name="runtime_selection_history",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     assert summary["runtime_selected_task_ids"] == ["runtime:task:mock"]
@@ -707,6 +727,7 @@ def test_minecraft_execute_failure_uses_partial_runtime_snapshot(tmp_path, monke
         output_root=tmp_path / "result",
         run_name="execute_partial_error",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     output_dir = tmp_path / "result" / "execute_partial_error"
@@ -739,6 +760,9 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert summary["server_lock_released"] is True
     assert summary["runtime_process_isolated"] is True
     assert summary["runtime_process_terminated"] is True
+    assert summary["runtime_process_alive_after_kill"] is False
+    assert summary["runtime_process_group_alive_after_kill"] is False
+    assert summary["child_protocol"].get("status") != "completed"
     assert "timed out after 0.01 seconds" in summary["error"]
     assert (output_dir / "action_log.json").exists()
     persisted = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
@@ -748,6 +772,43 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert provenance["environment_unverifiable"] is True
     common_rows = summarize_inputs([output_dir])
     assert common_rows[0]["error_type"] == "timeout"
+
+
+def test_minecraft_execute_timeout_preserves_partial_runtime_dag(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def persist_partial_then_hang(*_args, **kwargs):
+        runtime_result_path = Path(kwargs["runtime_result_path"])
+        runtime_result_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_result_path.write_text(
+            json.dumps(_runtime_result_snapshot(status="running")),
+            encoding="utf-8",
+        )
+        time.sleep(1)
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        persist_partial_then_hang,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="partial_timeout",
+        execute=True,
+        execute_timeout_seconds=0.01,
+    )
+
+    snapshot = json.loads(
+        (tmp_path / "result" / "partial_timeout" / "runtime_dual_dag_snapshot.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["timed_out"] is True
+    assert summary["score_available"] is False
+    assert summary["server_lock_released"] is True
+    assert summary["runtime_process_group_alive_after_kill"] is False
+    assert snapshot["nodes"][0]["lifecycle"]["status"] == "running"
 
 
 def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, monkeypatch):
@@ -823,11 +884,13 @@ def test_runtime_process_termination_uses_kill_fallback():
 
     metadata = _terminate_runtime_process(process, grace_seconds=0.01)
 
-    assert process.calls == ["terminate", ("join", 0.01), "kill", ("join", None)]
+    assert process.calls == ["terminate", ("join", 0.01), "kill", ("join", 0.01)]
     assert metadata == {
-        "exit_code": -9,
+        "exit_code": None,
         "terminated": True,
         "killed": True,
+        "process_alive_after_kill": True,
+        "process_group_alive_after_kill": False,
     }
 
 
@@ -945,7 +1008,7 @@ def test_runtime_process_group_cleanup_falls_back_to_direct_termination(monkeypa
         process_group_id=process.pid,
     )
 
-    assert process.calls == ["terminate", ("join", 0.01), "kill", ("join", None)]
+    assert process.calls == ["terminate", ("join", 0.01), "kill", ("join", 0.01)]
     assert metadata["killed"] is True
 
 
@@ -1020,12 +1083,14 @@ def test_minecraft_execute_uses_unique_per_run_result_paths_and_cleans_up(tmp_pa
         output_root=tmp_path / "result",
         run_name="run_a",
         execute=True,
+            execute_timeout_seconds=30,
     )
     second = run_minecraft_experiment(
         config_path=config_path,
         output_root=tmp_path / "result",
         run_name="run_b",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     expected_paths = [
@@ -1071,6 +1136,7 @@ def test_minecraft_execute_ignores_stale_global_runtime_result(tmp_path, monkeyp
         output_root=tmp_path / "result",
         run_name="ignore_stale",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     assert summary["snapshot_source"] == "config_fixture"
@@ -1106,6 +1172,7 @@ def test_minecraft_execute_rejects_score_owned_by_another_attempt(tmp_path, monk
         output_root=tmp_path / "result",
         run_name="mismatched_score",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     assert summary["score_available"] is False
@@ -1140,6 +1207,7 @@ def test_minecraft_execute_rejects_score_with_missing_ownership(
         output_root=tmp_path / "result",
         run_name=f"missing_{missing_field}",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     assert summary["score_available"] is False
@@ -1167,6 +1235,7 @@ def test_minecraft_execute_ignores_partial_tmp_result(tmp_path, monkeypatch):
         output_root=tmp_path / "result",
         run_name="partial_tmp",
         execute=True,
+            execute_timeout_seconds=30,
     )
 
     assert summary["snapshot_source"] == "config_fixture"
@@ -1195,6 +1264,7 @@ def test_minecraft_execute_can_retain_internal_result_explicitly(tmp_path, monke
         output_root=tmp_path / "result",
         run_name="retained",
         execute=True,
+            execute_timeout_seconds=30,
         retain_runtime_result=True,
     )
 
@@ -1246,6 +1316,7 @@ def test_minecraft_failed_run_has_no_completion_marker(tmp_path, monkeypatch):
         output_root=tmp_path / "result",
         run_name="failed_bundle",
         execute=True,
+            execute_timeout_seconds=30,
     )
     run_dir = tmp_path / "result" / "failed_bundle"
     manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
@@ -1284,6 +1355,7 @@ def test_minecraft_runtime_error_redacts_secret_literals(tmp_path, monkeypatch):
         output_root=tmp_path / "result",
         run_name="secret_error",
         execute=True,
+            execute_timeout_seconds=30,
         retain_runtime_result=True,
     )
     run_dir = tmp_path / "result" / "secret_error"
@@ -1309,6 +1381,7 @@ def test_minecraft_runtime_config_error_finalizes_failed_attempt(tmp_path, monke
             output_root=tmp_path / "result",
             run_name="config_failure",
             execute=True,
+            execute_timeout_seconds=30,
         )
 
     run_dir = tmp_path / "result" / "config_failure"

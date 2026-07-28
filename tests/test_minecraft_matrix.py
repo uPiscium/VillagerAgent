@@ -134,6 +134,7 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
         output_dir=tmp_path / "matrix",
         run_names=["first_run", "second_run"],
         execute=True,
+        execute_timeout_seconds=30,
     )
 
     expected_paths = [
