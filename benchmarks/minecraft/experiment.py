@@ -776,6 +776,9 @@ def validate_minecraft_config(config: dict, *, context: str = "config", execute:
         task_scenario = config.get("task_scenario")
         if not isinstance(task_scenario, str) or not task_scenario.strip():
             raise ValueError(f"{context}.task_scenario must be a non-empty string for meta execute mode")
+    document_file = config.get("document_file")
+    if document_file is not None and not isinstance(document_file, str):
+        raise ValueError(f"{context}.document_file must be a string or null")
     if config.get("task_selection_policy") not in (None, *TASK_SELECTION_POLICIES):
         raise ValueError(f"{context}.task_selection_policy must be one of: {', '.join(TASK_SELECTION_POLICIES)}")
     _validate_smoke_tasks(config, context=context)
