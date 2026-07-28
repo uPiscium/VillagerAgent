@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pipeline.controller_tiny as controller_tiny
 import pytest
 
-from pipeline.controller_tiny import ControllerShutdownError, GlobalController
+from pipeline.controller_tiny import ControllerShutdownError, GlobalController, TaskExecutionGroup
 from pipeline.task_manager import TaskManager
 from type_define.graph import Task
 
@@ -35,6 +35,64 @@ def test_start_execution_group_creates_one_future_per_agent():
     group = controller.result_queue[0]
     assert list(group.futures) == ["Alice", "Bob"]
     assert controller.executor.submitted_agents == ["Alice", "Bob"]
+
+
+def test_terminal_observation_rejects_direct_group_start():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    controller.env = _terminal_env()
+    controller.executor = _ExecutorStub()
+    assert controller.observe_judger_terminal() is True
+
+    with pytest.raises(ControllerShutdownError, match="after judger terminal"):
+        controller.start_execution_group(TaskExecutionGroup(task=task, agents=agents))
+
+    assert controller.executor.submitted_agents == []
+    assert controller.result_queue == []
+
+
+def test_terminal_observation_prevents_assignment_enqueue():
+    controller, task, agents = _controller_with_task(["Alice"], required=1)
+    controller.env = _terminal_env()
+    assert controller.observe_judger_terminal() is True
+
+    assigned = controller.execute_assignments([{
+        "task_instance": task,
+        "agent_instances": agents,
+    }])
+
+    assert assigned == 0
+    assert controller.assignment == {}
+    assert controller.task_queue == []
+    assert task.status == Task.unknown
+
+
+def test_terminal_observation_waits_for_complete_multi_agent_submission():
+    controller, task, agents = _controller_with_task(["Alice", "Bob"], required=2)
+    controller.env = _terminal_env()
+    executor = _BlockingFirstSubmitExecutor()
+    controller.executor = executor
+    group = TaskExecutionGroup(task=task, agents=agents)
+    submission = threading.Thread(target=controller.start_execution_group, args=(group,))
+    observation_result = []
+    observation = threading.Thread(
+        target=lambda: observation_result.append(controller.observe_judger_terminal())
+    )
+
+    submission.start()
+    assert executor.first_submit_started.wait(1)
+    observation.start()
+    time.sleep(0.05)
+    assert observation.is_alive()
+    executor.release_first_submit.set()
+    submission.join(1)
+    observation.join(1)
+
+    assert not submission.is_alive()
+    assert not observation.is_alive()
+    assert executor.submitted_agents == ["Alice", "Bob"]
+    assert group.submission_complete is True
+    assert observation_result == [True]
+    assert controller._judger_terminal_observed is True
 
 
 def test_controller_forwards_local_runtime_config_to_base_agents(monkeypatch):
@@ -473,6 +531,19 @@ class _ExecutorStub:
         return future
 
 
+class _BlockingFirstSubmitExecutor(_ExecutorStub):
+    def __init__(self):
+        super().__init__()
+        self.first_submit_started = threading.Event()
+        self.release_first_submit = threading.Event()
+
+    def submit(self, fn, task, **kwargs):
+        if not self.submitted_agents:
+            self.first_submit_started.set()
+            assert self.release_first_submit.wait(1)
+        return super().submit(fn, task, **kwargs)
+
+
 class _TaskManagerStub:
     def __init__(self, task):
         self.running_updates = []
@@ -505,6 +576,8 @@ def _controller_with_task(agent_names, required):
     controller.result_queue = []
     controller.task_list_lock = threading.Lock()
     controller.result_list_lock = threading.Lock()
+    controller._execution_state_lock = threading.RLock()
+    controller._judger_terminal_observed = False
     controller.shutdown_event = threading.Event()
     controller.task_manager = _TaskManagerStub(task)
     controller.logger = logging.getLogger("test-controller-multi-agent")
@@ -512,6 +585,20 @@ def _controller_with_task(agent_names, required):
     controller.shutdown_grace_period = 1
     controller.cancellation_grace_period = 1
     return controller, task, agents
+
+
+def _terminal_env():
+    return SimpleNamespace(
+        attempt_id="attempt-a",
+        task_name="runtime-task-a",
+        is_task_complete=lambda: True,
+        get_score=lambda: {
+            "attempt_id": "attempt-a",
+            "task_name": "runtime-task-a",
+            "status": "success",
+            "score": 100,
+        },
+    )
 
 
 def _started_group(controller, task, agents, pending_agent=None, enqueue_assignment=True):

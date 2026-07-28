@@ -149,6 +149,9 @@ def _controller(agent_names):
     controller.task_list = []
     controller.task_queue = []
     controller.task_list_lock = threading.Lock()
+    controller._execution_state_lock = threading.RLock()
+    controller._judger_terminal_observed = False
+    controller.shutdown_event = threading.Event()
     controller.task_manager = _TaskManagerStub()
     controller.logger = logging.getLogger("test-controller-runnable-authority")
     return controller

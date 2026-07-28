@@ -167,6 +167,41 @@ def test_judger_payload_attempt_mismatch_is_rejected():
     assert manager.runtime_task_store.snapshot()["summary"]["terminal_state"] == "running"
 
 
+def test_worker_does_not_pop_queue_after_terminal_observation():
+    controller, _, _ = _controller()
+    task = Task("Queued after judged completion", {})
+    group = TaskExecutionGroup(task=task, agents=[SimpleNamespace(name="Alice")])
+    controller.task_queue.append(group)
+    controller.query_interval = 0.01
+    controller.env = SimpleNamespace(
+        attempt_id="attempt-a",
+        task_name="runtime-task-a",
+        is_task_complete=lambda: True,
+        get_score=lambda: {
+            "attempt_id": "attempt-a",
+            "task_name": "runtime-task-a",
+            "status": "success",
+            "score": 100,
+        },
+        agents_ping=lambda: (_ for _ in ()).throw(
+            AssertionError("worker must not continue after terminal observation")
+        ),
+    )
+    worker = threading.Thread(target=controller.worker)
+
+    worker.start()
+    deadline = time.monotonic() + 1
+    while not controller._judger_terminal_observed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    controller._request_shutdown()
+    worker.join(1)
+    controller.executor.shutdown(wait=True)
+
+    assert not worker.is_alive()
+    assert controller.task_queue == [group]
+    assert controller.result_queue == []
+
+
 @pytest.mark.parametrize("task_count", [0, 2])
 def test_judger_terminal_requires_exactly_one_running_task(task_count):
     controller, _, _, _ = _judged_reconciliation_controller(task_count=task_count)
@@ -668,7 +703,7 @@ def _controller():
     controller._first_failure = None
     controller._controller_threads = []
     controller._run_started = False
-    controller._terminal_shutdown_lock = threading.Lock()
+    controller._execution_state_lock = threading.RLock()
     controller._judger_terminal_observed = False
     controller._judger_terminal_payload = None
     controller._judger_terminal_observed_at = None

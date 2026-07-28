@@ -146,7 +146,7 @@ class GlobalController:
         self.judger_drain_grace_period = 120.0
         self.cancellation_grace_period = 5.0
         self._run_started = False
-        self._terminal_shutdown_lock = threading.Lock()
+        self._execution_state_lock = threading.RLock()
         self._judger_terminal_observed = False
         self._judger_terminal_payload = None
         self._judger_terminal_observed_at = None
@@ -192,20 +192,19 @@ class GlobalController:
         return self.shutdown_event.is_set()
 
     def observe_judger_terminal(self) -> bool:
-        if getattr(self, "_judger_terminal_observed", False):
+        with self._execution_state_lock:
+            if self._judger_terminal_observed:
+                return True
+            if not hasattr(self.env, "is_task_complete") or not self.env.is_task_complete():
+                return False
+            payload = self.env.get_score()
+            self._validate_judger_payload_ownership(payload)
+            self.logger.info("judged task reached terminal score status")
+            self._judger_terminal_payload = dict(payload)
+            self._judger_terminal_observed = True
+            self._judger_terminal_observed_at = time.monotonic()
+            self.controller_state = self.STATE_JUDGER_TERMINAL_OBSERVED
             return True
-        if not hasattr(self.env, "is_task_complete") or not self.env.is_task_complete():
-            return False
-        with self._terminal_shutdown_lock:
-            if not self._judger_terminal_observed:
-                payload = self.env.get_score()
-                self._validate_judger_payload_ownership(payload)
-                self.logger.info("judged task reached terminal score status")
-                self._judger_terminal_payload = dict(payload)
-                self._judger_terminal_observed = True
-                self._judger_terminal_observed_at = time.monotonic()
-                self.controller_state = self.STATE_JUDGER_TERMINAL_OBSERVED
-        return True
 
     def _validate_judger_payload_ownership(self, payload) -> None:
         if not isinstance(payload, dict) or not payload:
@@ -293,62 +292,76 @@ class GlobalController:
 
     
     def execute_assignments(self, validated_assignments):
-        if getattr(self, "_judger_terminal_observed", False):
-            return
-        for assignment in validated_assignments:
-            task_instance = assignment["task_instance"]
-            agent_instances = assignment["agent_instances"]
-            agent_names = [agent.name for agent in agent_instances]
+        with self._execution_state_lock:
+            if self._judger_terminal_observed or self.shutdown_event.is_set():
+                return 0
+            assigned_count = 0
+            for assignment in validated_assignments:
+                task_instance = assignment["task_instance"]
+                agent_instances = assignment["agent_instances"]
+                agent_names = [agent.name for agent in agent_instances]
 
-            for agent in agent_instances:
-                self.assignment[agent.name] = task_instance.id
-                task_instance._agent.append(agent.name)
+                for agent in agent_instances:
+                    self.assignment[agent.name] = task_instance.id
+                    task_instance._agent.append(agent.name)
 
-            with self.task_list_lock:
-                self.task_manager.mark_task_running(task_instance, agent_names)
-                task_instance.status = Task.running
-                self.task_queue.append(TaskExecutionGroup(
-                    task=task_instance,
-                    agents=list(agent_instances),
-                ))
-            self.emit_runtime_event("task_assigned", entity_id=task_instance.id, source="GlobalController.execute_assignments", payload={"agents": agent_names, "required_agent_count": task_instance.number})
-        
-            name_list = ", ".join(agent_names)
-            self.logger.info(f"Agent(s) {name_list} assigned to do task {task_instance.description}")
+                with self.task_list_lock:
+                    self.task_manager.mark_task_running(task_instance, agent_names)
+                    task_instance.status = Task.running
+                    self.task_queue.append(TaskExecutionGroup(
+                        task=task_instance,
+                        agents=list(agent_instances),
+                    ))
+                self.emit_runtime_event("task_assigned", entity_id=task_instance.id, source="GlobalController.execute_assignments", payload={"agents": agent_names, "required_agent_count": task_instance.number})
 
-            # agent_env_dict = self.env.get_init_state()
-            # for env_dict in agent_env_dict:
-            #     self.logger.warning(str(env_dict))
-
-            task_instance.status = Task.running
+                name_list = ", ".join(agent_names)
+                self.logger.info(f"Agent(s) {name_list} assigned to do task {task_instance.description}")
+                assigned_count += 1
+            return assigned_count
 
     def start_execution_group(self, group: TaskExecutionGroup, *, enqueue: bool = True) -> None:
-        if enqueue:
-            with self.result_list_lock:
-                self.result_queue.append(group)
-        group.started_at = time.time()
-        for agent in group.agents:
-            if self.shutdown_event.is_set():
+        with self._execution_state_lock:
+            if self._judger_terminal_observed:
                 raise ControllerShutdownError(
-                    f"Task {group.task.description} submission interrupted by controller shutdown"
+                    "Cannot start execution after judger terminal observation"
                 )
             with self.result_list_lock:
-                supports_cancellation = getattr(
-                    agent, "supports_cooperative_cancellation", None
-                )
-                if callable(supports_cancellation) and supports_cancellation():
-                    token = threading.Event()
-                    group.cancellation_tokens[agent.name] = token
-                    group.futures[agent.name] = self.executor.submit(
-                        agent.step,
-                        group.task,
-                        cancellation_token=token,
+                if enqueue:
+                    self.result_queue.append(group)
+                group.started_at = time.time()
+                for agent in group.agents:
+                    if self.shutdown_event.is_set():
+                        raise ControllerShutdownError(
+                            f"Task {group.task.description} submission interrupted by controller shutdown"
+                        )
+                    supports_cancellation = getattr(
+                        agent, "supports_cooperative_cancellation", None
                     )
-                else:
-                    group.futures[agent.name] = self.executor.submit(agent.step, group.task)
-            self.logger.info(f"Agent {agent.name} is executing task now ...")
-        with self.result_list_lock:
-            group.submission_complete = True
+                    if callable(supports_cancellation) and supports_cancellation():
+                        token = threading.Event()
+                        group.cancellation_tokens[agent.name] = token
+                        group.futures[agent.name] = self.executor.submit(
+                            agent.step,
+                            group.task,
+                            cancellation_token=token,
+                        )
+                    else:
+                        group.futures[agent.name] = self.executor.submit(agent.step, group.task)
+                    self.logger.info(f"Agent {agent.name} is executing task now ...")
+                group.submission_complete = True
+
+    def _take_and_start_next_execution_group(self) -> bool:
+        with self._execution_state_lock:
+            if self._judger_terminal_observed or self.shutdown_event.is_set():
+                return False
+            with self.task_list_lock:
+                if not self.task_queue:
+                    return False
+                with self.result_list_lock:
+                    group = self.task_queue.pop(0)
+                    self.result_queue.append(group)
+            self.start_execution_group(group, enqueue=False)
+            return True
 
     def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
         if group.completed:
@@ -677,24 +690,17 @@ class GlobalController:
         while True:
             if self.should_shutdown():
                 break
-            self.observe_judger_terminal()
+            if self.observe_judger_terminal():
+                self.shutdown_event.wait(self.query_interval)
+                continue
 
             # if future.done() and task.id in [t.id for t in self.task_list] and task.status == Task.running:
             if self.env.agents_ping()["status"] == False:
                 raise ControllerShutdownError("Some agents are offline")
 
-            with self.task_list_lock:
-                if not self.task_queue:
-                    group = None
-                else:
-                    group = self.task_queue[0]
-                    with self.result_list_lock:
-                        self.result_queue.append(group)
-                        self.task_queue.pop(0)
-            if group is None:
+            if not self._take_and_start_next_execution_group():
                 self.shutdown_event.wait(self.query_interval)
                 continue
-            self.start_execution_group(group, enqueue=False)
 
     def set_task_status(self, task_id, status, feedback):
         self.task_manager.mark_task_status(task_id, status, feedback)
@@ -770,50 +776,50 @@ class GlobalController:
         ]
 
     def assign_runnable_tasks(self):
-        if getattr(self, "_judger_terminal_observed", False):
-            return 0
-        assigned_count = 0
-        for task_id, task in enumerate(self.task_list):
-            if not task.available or task.status != Task.unknown:
-                continue
-            if getattr(task, "_candidate_agents_explicit", False) and not task.candidate_list:
-                raise ValueError(
-                    f"Task {task.description} has an explicit empty candidate list"
+        with self._execution_state_lock:
+            if self._judger_terminal_observed or self.shutdown_event.is_set():
+                return 0
+            assigned_count = 0
+            for task_id, task in enumerate(self.task_list):
+                if not task.available or task.status != Task.unknown:
+                    continue
+                if getattr(task, "_candidate_agents_explicit", False) and not task.candidate_list:
+                    raise ValueError(
+                        f"Task {task.description} has an explicit empty candidate list"
+                    )
+                if (
+                    isinstance(task.number, bool)
+                    or not isinstance(task.number, int)
+                    or task.number <= 0
+                ):
+                    raise ValueError(
+                        f"Task {task.description} required agent count must be a positive integer"
+                    )
+
+                eligible_agents = [
+                    agent
+                    for agent in self.agent_list
+                    if self.assignment.get(agent.name) is None
+                    and agent.name in task.candidate_list
+                ]
+                selected_agents = eligible_agents[:task.number]
+                if len(selected_agents) != task.number:
+                    continue
+
+                validated_assignments = self.validate_assignments([{
+                    "task_id": task_id,
+                    "agent": [agent.name for agent in selected_agents],
+                }])
+                if not validated_assignments:
+                    continue
+
+                self.logger.info(
+                    f"Task {task.description} is assigned to {[agent.name for agent in selected_agents]}"
                 )
-            if (
-                isinstance(task.number, bool)
-                or not isinstance(task.number, int)
-                or task.number <= 0
-            ):
-                raise ValueError(
-                    f"Task {task.description} required agent count must be a positive integer"
-                )
+                self.emit_runtime_event("task_selected", entity_id=task.id, source="GlobalController.assign_runnable_tasks", payload={"agents": [agent.name for agent in selected_agents], "selection_policy": getattr(self, "minecraft_dual_dag_config", {}).get("task_selection_policy", "original")})
+                assigned_count += self.execute_assignments(validated_assignments)
 
-            eligible_agents = [
-                agent
-                for agent in self.agent_list
-                if self.assignment.get(agent.name) is None
-                and agent.name in task.candidate_list
-            ]
-            selected_agents = eligible_agents[:task.number]
-            if len(selected_agents) != task.number:
-                continue
-
-            validated_assignments = self.validate_assignments([{
-                "task_id": task_id,
-                "agent": [agent.name for agent in selected_agents],
-            }])
-            if not validated_assignments:
-                continue
-
-            self.logger.info(
-                f"Task {task.description} is assigned to {[agent.name for agent in selected_agents]}"
-            )
-            self.emit_runtime_event("task_selected", entity_id=task.id, source="GlobalController.assign_runnable_tasks", payload={"agents": [agent.name for agent in selected_agents], "selection_policy": getattr(self, "minecraft_dual_dag_config", {}).get("task_selection_policy", "original")})
-            self.execute_assignments(validated_assignments)
-            assigned_count += 1
-
-        return assigned_count
+            return assigned_count
 
     # 生产者
     def execute_tasks(self):

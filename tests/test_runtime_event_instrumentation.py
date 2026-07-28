@@ -26,6 +26,10 @@ def controller_with_sink(sink):
     controller.task_list = []
     controller.task_queue = []
     controller.task_list_lock = threading.Lock()
+    controller.result_list_lock = threading.Lock()
+    controller._execution_state_lock = threading.RLock()
+    controller._judger_terminal_observed = False
+    controller.shutdown_event = threading.Event()
     controller.task_manager = TaskManagerStub()
     controller.logger = logging.getLogger("event-instrumentation-test")
     controller.event_sink = sink
@@ -86,7 +90,7 @@ def test_controller_shutdown_query_does_not_stop_judged_environment() -> None:
     stopped = []
     controller = object.__new__(GlobalController)
     controller.shutdown_event = threading.Event()
-    controller._terminal_shutdown_lock = threading.Lock()
+    controller._execution_state_lock = threading.RLock()
     controller._judger_terminal_observed = False
     controller.logger = logging.getLogger("terminal-status-test")
     controller.env = SimpleNamespace(
