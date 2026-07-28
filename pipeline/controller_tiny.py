@@ -72,7 +72,21 @@ class GlobalController:
                  event_sink=None, emit_terminal_events: bool = True):
 
         self.task_manager = task_manager
-        all_tools = list(all_tools or ())
+        self._execution_state_lock = threading.RLock()
+        self._tool_action_condition = threading.Condition(self._execution_state_lock)
+        self._active_tool_actions = 0
+        self._judger_terminal_pending = False
+        self._judger_terminal_observed = False
+        if hasattr(env, "configure_tool_action_barrier"):
+            env.configure_tool_action_barrier(
+                self._begin_tool_action,
+                self._end_tool_action,
+            )
+        all_tools = (
+            env.guard_tool_actions(all_tools or ())
+            if hasattr(env, "guard_tool_actions")
+            else list(all_tools or ())
+        )
         tm_llm_config = llm_config.copy() if tm_llm_config is None else tm_llm_config
         tm_llm_config["role_name"] = "TaskManager"
         self.task_manager.llm = init_language_model(tm_llm_config)
@@ -146,8 +160,6 @@ class GlobalController:
         self.judger_drain_grace_period = 120.0
         self.cancellation_grace_period = 5.0
         self._run_started = False
-        self._execution_state_lock = threading.RLock()
-        self._judger_terminal_observed = False
         self._judger_terminal_payload = None
         self._judger_terminal_observed_at = None
         self._judger_terminal_reconciled = False
@@ -192,19 +204,43 @@ class GlobalController:
         return self.shutdown_event.is_set()
 
     def observe_judger_terminal(self) -> bool:
-        with self._execution_state_lock:
+        with self._tool_action_condition:
             if self._judger_terminal_observed:
                 return True
             if not hasattr(self.env, "is_task_complete") or not self.env.is_task_complete():
                 return False
             payload = self.env.get_score()
             self._validate_judger_payload_ownership(payload)
+            self._judger_terminal_pending = True
+            while self._active_tool_actions:
+                self._tool_action_condition.wait()
             self.logger.info("judged task reached terminal score status")
             self._judger_terminal_payload = dict(payload)
             self._judger_terminal_observed = True
             self._judger_terminal_observed_at = time.monotonic()
             self.controller_state = self.STATE_JUDGER_TERMINAL_OBSERVED
             return True
+
+    def _begin_tool_action(self) -> None:
+        with self._tool_action_condition:
+            if (
+                self._judger_terminal_pending
+                or self._judger_terminal_observed
+                or self.shutdown_event.is_set()
+            ):
+                from env.minecraft_client import ToolActionBlockedError
+                raise ToolActionBlockedError(
+                    "Cannot start Minecraft tool action after judger terminal detection"
+                )
+            self._active_tool_actions += 1
+
+    def _end_tool_action(self) -> None:
+        with self._tool_action_condition:
+            if self._active_tool_actions <= 0:
+                raise ControllerShutdownError("Minecraft tool action barrier is unbalanced")
+            self._active_tool_actions -= 1
+            if self._active_tool_actions == 0:
+                self._tool_action_condition.notify_all()
 
     def _validate_judger_payload_ownership(self, payload) -> None:
         if not isinstance(payload, dict) or not payload:

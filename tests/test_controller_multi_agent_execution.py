@@ -577,6 +577,9 @@ def _controller_with_task(agent_names, required):
     controller.task_list_lock = threading.Lock()
     controller.result_list_lock = threading.Lock()
     controller._execution_state_lock = threading.RLock()
+    controller._tool_action_condition = threading.Condition(controller._execution_state_lock)
+    controller._active_tool_actions = 0
+    controller._judger_terminal_pending = False
     controller._judger_terminal_observed = False
     controller.shutdown_event = threading.Event()
     controller.task_manager = _TaskManagerStub(task)

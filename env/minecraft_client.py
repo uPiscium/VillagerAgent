@@ -26,6 +26,11 @@ from env.runtime_paths import RuntimePaths, atomic_write_json
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
 
+
+class ToolActionBlockedError(RuntimeError):
+    pass
+
+
 def filter_emoji(text: str) -> str:
     ret_str = []
     for c in text:
