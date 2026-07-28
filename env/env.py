@@ -509,7 +509,7 @@ class VillagerBench:
 
     def get_metadata(self):
         if self.env_type == env_type.construction:
-            with open(f"data/map_description.json") as f:
+            with self._paths().map_description.open("r", encoding="utf-8") as f:
                 metadata = json.load(f)
             return metadata
 

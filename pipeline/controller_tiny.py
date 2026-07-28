@@ -18,6 +18,7 @@ from pipeline.controller_prompt import *
 from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_event
 from env.env import VillagerBench
 from env.minecraft_dual_dag import rank_minecraft_runtime_tasks
+from env.runtime_paths import RuntimePaths, atomic_write_json
 import logging
 
 
@@ -932,7 +933,6 @@ class GlobalController:
             ]
             self.task_list = self.task_manager.query_runnable_subtasks(free_agent_names)
             self.task_list = self._rank_task_list_with_minecraft_dual_dag(self.task_list)
-            # 写到 logs/task_list.json 中
             agent_states = []
             for agent in self.agent_list:
                 if self.assignment.get(agent.name) is None:
@@ -945,11 +945,11 @@ class GlobalController:
                             break
                     agent_states.append({"name": agent.name, "state": "busy", "task": tmp_description})
 
-            with open("logs/task_list.json", "w") as f:
-                json.dump({
-                    "agent_states": agent_states,
-                    "task_list": [task.assign_json(idx) for idx, task in enumerate(self.task_list)],
-                }, f, indent=4)
+            runtime_paths = getattr(self.env, "runtime_paths", RuntimePaths.legacy())
+            atomic_write_json(runtime_paths.task_list_log, {
+                "agent_states": agent_states,
+                "task_list": [task.assign_json(idx) for idx, task in enumerate(self.task_list)],
+            })
 
             if self.check_task_list_available() == []:
                 # self.logger.info("no available task ...")

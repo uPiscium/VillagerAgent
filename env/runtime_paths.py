@@ -98,6 +98,26 @@ class RuntimePaths:
         return self.data_dir / "action_log.json"
 
     @property
+    def recipe_hint(self) -> Path:
+        return self.data_dir / "recipe_hint.json"
+
+    @property
+    def build_map(self) -> Path:
+        return self.data_dir / "map.json"
+
+    @property
+    def blueprint_descriptions(self) -> Path:
+        return self.data_dir / "blueprint_description_all.json"
+
+    @property
+    def map_description(self) -> Path:
+        return self.data_dir / "map_description.json"
+
+    @property
+    def url_prefix(self) -> Path:
+        return self.data_dir / "url_prefix.json"
+
+    @property
     def tokens(self) -> Path:
         return self.data_dir / "tokens.json"
 
@@ -108,6 +128,10 @@ class RuntimePaths:
     @property
     def history_dir(self) -> Path:
         return self.data_dir / "history"
+
+    @property
+    def task_list_log(self) -> Path:
+        return self.logs_dir / "task_list.json"
 
     def run_result_dir(self, run_id: str) -> Path:
         return self.result_dir / run_id

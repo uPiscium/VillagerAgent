@@ -15,6 +15,7 @@ from pipeline.agent import BaseAgent
 from pipeline.utils import *
 from pipeline.controller_prompt import *
 from env.env import VillagerBench
+from env.runtime_paths import RuntimePaths, atomic_write_json
 import logging
 
 
@@ -497,11 +498,11 @@ class GlobalController:
                                 break
                         agent_states.append({"name": agent.name, "state": "busy", "task": tmp_description})
 
-                with open("logs/task_list.json", "w") as f:
-                    json.dump({
-                        "agent_states": agent_states,
-                        "task_list": [task.assign_json(idx) for idx, task in enumerate(self.task_list)],
-                    }, f, indent=4)
+                runtime_paths = getattr(self.env, "runtime_paths", RuntimePaths.legacy())
+                atomic_write_json(runtime_paths.task_list_log, {
+                    "agent_states": agent_states,
+                    "task_list": [task.assign_json(idx) for idx, task in enumerate(self.task_list)],
+                })
                     
                 if self.check_task_list_available() == []:
                     # self.logger.info("no available task ...")

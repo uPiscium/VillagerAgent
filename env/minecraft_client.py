@@ -290,8 +290,9 @@ class Agent():
 
     @staticmethod
     def get_url_prefix() -> dict:
-        if os.path.exists("data/url_prefix.json"):
-            with open("data/url_prefix.json", "r", encoding='utf-8') as f:
+        url_prefix_path = RuntimePaths.from_environment().url_prefix
+        if url_prefix_path.exists():
+            with url_prefix_path.open("r", encoding='utf-8') as f:
                 url_prefix = json.load(f)
         else:
             url_prefix = {}
@@ -348,8 +349,7 @@ class Agent():
             return
         url_prefix = Agent.get_url_prefix()
         url_prefix[name] = f"http://localhost:{local_port}"
-        with open("data/url_prefix.json", "w", encoding='utf-8') as f:
-            json.dump(url_prefix, f)
+        atomic_write_json(self.runtime_paths.url_prefix, url_prefix)
 
         Agent.name2port[name] = local_port
         if prefix is None:
