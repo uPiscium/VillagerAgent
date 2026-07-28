@@ -35,11 +35,64 @@ class JudgedRuntimeValidationError(RuntimeError):
     pass
 
 
-def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = None, attempt_id: str | None = None, task_name: str | None = None) -> dict:
+def _safe_collect(collector, *, field_name: str, default):
+    try:
+        return collector(), None
+    except Exception as exc:
+        return default, {
+            "field": field_name,
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+
+
+def _controller_snapshot(controller) -> dict:
+    return {
+        "shutdown_complete": bool(getattr(controller, "shutdown_complete", False)),
+        "state": getattr(controller, "controller_state", None),
+        "context": getattr(controller, "shutdown_context", None),
+        "active_assignments": dict(getattr(controller, "assignment", {})),
+    }
+
+
+def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = None, error_type: str | None = None, attempt_id: str | None = None, task_name: str | None = None) -> dict:
     runtime_store = getattr(tm, "runtime_task_store", None) if tm is not None else None
-    runtime_snapshot = runtime_store.snapshot() if runtime_store is not None else {}
-    task_graph_snapshot = _task_graph_snapshot(tm.graph) if tm is not None and hasattr(tm, "graph") else {}
-    score = env.get_score() if env is not None and hasattr(env, "get_score") else {}
+    runtime_snapshot, runtime_error = _safe_collect(
+        runtime_store.snapshot if runtime_store is not None else lambda: {},
+        field_name="runtime_task_dag_snapshot",
+        default={},
+    )
+    task_graph_snapshot, graph_error = _safe_collect(
+        lambda: _task_graph_snapshot(tm.graph) if tm is not None and hasattr(tm, "graph") else {},
+        field_name="task_graph_snapshot",
+        default={},
+    )
+    score, score_error = _safe_collect(
+        env.get_score if env is not None and hasattr(env, "get_score") else lambda: {},
+        field_name="score",
+        default={},
+    )
+    action_log, action_error = _safe_collect(
+        env.get_action_log if env is not None and hasattr(env, "get_action_log") else lambda: {},
+        field_name="action_log",
+        default={},
+    )
+    controller_snapshot, controller_error = _safe_collect(
+        lambda: _controller_snapshot(controller),
+        field_name="controller",
+        default={},
+    )
+    collection_errors = [
+        item
+        for item in (
+            runtime_error,
+            graph_error,
+            score_error,
+            action_error,
+            controller_error,
+        )
+        if item is not None
+    ]
     return {
         "score": score,
         "attempt_id": attempt_id,
@@ -48,23 +101,29 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
             "attempt_id": attempt_id,
             "task_name": task_name,
         },
-        "action_log": env.get_action_log() if env is not None and hasattr(env, "get_action_log") else {},
+        "action_log": action_log,
         "runtime_task_dag_snapshot": runtime_snapshot,
         "task_graph_snapshot": task_graph_snapshot,
-        "controller": {
-            "shutdown_complete": bool(getattr(controller, "shutdown_complete", False)),
-            "state": getattr(controller, "controller_state", None),
-            "context": getattr(controller, "shutdown_context", None),
-            "active_assignments": dict(getattr(controller, "assignment", {})),
-        },
+        "controller": controller_snapshot,
+        "collection_errors": collection_errors,
         "error": error,
+        "error_type": error_type,
     }
 
 
 def _runtime_checkpoint_result(env=None, tm=None, controller=None, *, attempt_id: str | None = None, task_name: str | None = None) -> dict:
     result = _runtime_result(None, tm, controller, attempt_id=attempt_id, task_name=task_name)
     if env is not None and hasattr(env, "get_action_log"):
-        result["action_log"] = env.get_action_log()
+        action_log, action_error = _safe_collect(
+            env.get_action_log,
+            field_name="action_log",
+            default={},
+        )
+        result["action_log"] = action_log
+        if action_error is not None:
+            result["collection_errors"].append(action_error)
+    if result["collection_errors"]:
+        result["checkpoint_collection_error"] = result["collection_errors"][0]
     return result
 
 
@@ -102,12 +161,26 @@ def validate_judged_runtime_result(result: dict) -> None:
         raise JudgedRuntimeValidationError("controller still has active assignments")
     if result.get("error") is not None:
         raise JudgedRuntimeValidationError("judged runtime result contains an error")
+    if result.get("collection_errors"):
+        raise JudgedRuntimeValidationError("judged runtime result contains collection errors")
 
 
 def _write_runtime_result(path: str | None, payload: dict) -> None:
     if not path:
         return
     atomic_write_json(path, payload)
+
+
+def _write_failure_runtime_result(path: str | None, payload: dict) -> dict | None:
+    try:
+        _write_runtime_result(path, payload)
+    except Exception as exc:
+        return {
+            "field": "runtime_result",
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        }
+    return None
 
 print(f"pipeline Time taken: {time.time() - start_time}")
 start_time = time.time()
@@ -366,10 +439,11 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             runtime_tm,
             runtime_ctrl,
             error=str(exc),
+            error_type=type(exc).__name__,
             attempt_id=attempt_id,
             task_name=task_name,
         )
-        _write_runtime_result(runtime_result_path, result)
+        _write_failure_runtime_result(runtime_result_path, result)
         raise
 
 

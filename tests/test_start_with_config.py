@@ -212,6 +212,78 @@ def test_judged_runtime_validator_rejects_unverified_score_identity(score, messa
         start_with_config.validate_judged_runtime_result(result)
 
 
+def test_runtime_result_collects_secondary_errors_without_overwriting_primary():
+    class BrokenStore:
+        @staticmethod
+        def snapshot():
+            raise RuntimeError("snapshot unavailable")
+
+    class BrokenEnvironment:
+        @staticmethod
+        def get_score():
+            raise ValueError("score unavailable")
+
+        @staticmethod
+        def get_action_log():
+            raise OSError("action log unavailable")
+
+    manager = SimpleNamespace(
+        runtime_task_store=BrokenStore(),
+        graph=SimpleNamespace(vertex=[], edge=[]),
+    )
+
+    result = start_with_config._runtime_result(
+        BrokenEnvironment(),
+        manager,
+        error="primary controller failure",
+        error_type="ControllerShutdownError",
+        attempt_id="attempt-a",
+        task_name="runtime-task-a",
+    )
+
+    assert result["error"] == "primary controller failure"
+    assert result["error_type"] == "ControllerShutdownError"
+    assert result["score"] == {}
+    assert result["action_log"] == {}
+    assert result["runtime_task_dag_snapshot"] == {}
+    assert [item["field"] for item in result["collection_errors"]] == [
+        "runtime_task_dag_snapshot",
+        "score",
+        "action_log",
+    ]
+
+
+def test_failure_result_write_error_is_non_throwing(monkeypatch):
+    monkeypatch.setattr(
+        start_with_config,
+        "_write_runtime_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    error = start_with_config._write_failure_runtime_result(
+        "runtime-result.json",
+        {"error": "primary failure"},
+    )
+
+    assert error == {
+        "field": "runtime_result",
+        "error": "disk unavailable",
+        "error_type": "OSError",
+    }
+
+
+def test_judged_runtime_validator_rejects_collection_errors():
+    result = _judged_runtime_result()
+    result["collection_errors"] = [{
+        "field": "action_log",
+        "error": "unavailable",
+        "error_type": "RuntimeError",
+    }]
+
+    with pytest.raises(start_with_config.JudgedRuntimeValidationError, match="collection errors"):
+        start_with_config.validate_judged_runtime_result(result)
+
+
 def _judged_runtime_result():
     return {
         "attempt_id": "attempt-a",
