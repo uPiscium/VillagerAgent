@@ -440,7 +440,10 @@ def test_minecraft_agent_does_not_retry_terminal_blocked_tool(monkeypatch):
 
 
 @pytest.mark.parametrize("timeout_error", [requests.ConnectTimeout, requests.ReadTimeout])
-def test_minecraft_request_converts_transport_timeout(monkeypatch, timeout_error):
+def test_minecraft_request_converts_transport_timeout(tmp_path, monkeypatch, timeout_error):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    atomic_write_json(paths.url_prefix, {"Alice": "http://localhost:5000"})
+    monkeypatch.setattr(MinecraftAgent, "runtime_paths_by_name", {"Alice": paths})
     monkeypatch.setattr(
         "env.minecraft_client.requests.request",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(timeout_error("blocked")),
@@ -450,7 +453,12 @@ def test_minecraft_request_converts_transport_timeout(monkeypatch, timeout_error
     with pytest.raises(MinecraftToolTimeoutError, match="post_action"):
         _minecraft_request("POST", "http://localhost:5000/post_action")
 
-    assert MinecraftAgent.last_tool_timeout == {"tool": "post_action"}
+    assert MinecraftAgent.last_tool_timeout == {
+        "agent": "Alice",
+        "tool": "post_action",
+        "outcome_certainty": "unknown",
+        "retry_safe": False,
+    }
 
 
 def test_minecraft_request_passes_connect_and_read_timeout(monkeypatch):
@@ -474,7 +482,8 @@ def test_minecraft_client_has_no_direct_unbounded_http_calls():
     assert "requests.post(" not in source
 
 
-def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch):
+@pytest.mark.parametrize("method_name", ["run", "step"])
+def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch, method_name):
     attempts = []
     agent = object.__new__(MinecraftAgent)
     agent.name = "Alice"
@@ -482,6 +491,7 @@ def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch):
     agent.api_key_list = ["test-key"]
     agent.llm = object()
     agent.tools = []
+    agent.all_tools = []
     monkeypatch.setattr(MinecraftAgent, "provider", "ollama")
     monkeypatch.setattr(MinecraftAgent, "api_key_list", ["test-key"])
     monkeypatch.setattr(
@@ -502,7 +512,7 @@ def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch):
     )
 
     with pytest.raises(MinecraftToolTimeoutError, match="bridge timed out"):
-        agent.run("move", max_try_turn=10)
+        getattr(agent, method_name)("move", max_try_turn=10)
     assert attempts == [True]
 
 

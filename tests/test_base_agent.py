@@ -3,6 +3,7 @@ import threading
 import pytest
 
 from pipeline.agent import BaseAgent
+from env.minecraft_client import MinecraftToolTimeoutError
 from model.vllm_model import VLLMLanguageModel
 from type_define.graph import Task
 
@@ -128,6 +129,51 @@ def test_base_agent_normal_step_updates_database_after_success(monkeypatch):
     assert len(dm.updated) == 1
     assert dm.updated[0]["detail"] == detail
     assert agent.IDLE is True
+
+
+def test_base_agent_normal_step_does_not_retry_minecraft_timeout(monkeypatch):
+    env = FakeEnv()
+    dm = FakeDataManager()
+    agent = BaseAgent(llm=object(), env=env, data_manager=dm, name="Alice", silent=True)
+    task = Task("Place block", {"document": "public"})
+    task._agent = ["Alice"]
+    sleep_calls = []
+
+    def timeout_step(*_args, **_kwargs):
+        env.step_calls += 1
+        raise MinecraftToolTimeoutError(
+            "response timed out",
+            agent="Alice",
+            tool="post_place",
+        )
+
+    env.step = timeout_step
+    monkeypatch.setattr("pipeline.agent.time.sleep", sleep_calls.append)
+
+    with pytest.raises(MinecraftToolTimeoutError, match="response timed out") as raised:
+        agent.normal_step(task)
+
+    assert env.step_calls == 1
+    assert sleep_calls == []
+    assert raised.value.failure_detail["outcome_certainty"] == "unknown"
+    assert raised.value.failure_detail["retry_safe"] is False
+    assert agent.IDLE is True
+
+
+def test_local_step_records_minecraft_timeout_as_retry_unsafe():
+    tool = FakeTool(error=MinecraftToolTimeoutError("response timed out"))
+    agent, task, _llm, _dm = make_local_agent(
+        ["Action: {'tool': 'inspect', 'tool_input': {}}"],
+        tools=[tool],
+    )
+
+    feedback, detail = agent.local_step(task)
+
+    assert tool.calls == 1
+    assert feedback["status"] is False
+    assert detail["failure"]["reason"] == "minecraft_tool_timeout"
+    assert detail["failure"]["outcome_certainty"] == "unknown"
+    assert detail["failure"]["retry_safe"] is False
 
 
 def test_base_agent_normal_step_truncates_long_task_content(monkeypatch):
