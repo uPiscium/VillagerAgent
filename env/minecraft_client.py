@@ -1038,6 +1038,16 @@ class Agent():
             self.action_history,
         )
 
+    def _save_interaction_history(self, response, action_list, final_answer):
+        atomic_write_json(
+            self.runtime_paths.history_dir / f"{hash(response['input'])}.json",
+            {
+                "input": response["input"],
+                "action_list": action_list,
+                "final_answer": final_answer,
+            },
+        )
+
     def step(self, instruction: str, actions=[], observations=[], player_name_list=[], max_try_turn=2, max_iterations=1, tools=[], recommended_actions=[]):
         # return the (action, observation), details.
         if not self.api_key_list:
@@ -1142,9 +1152,7 @@ class Agent():
         final_answer = response["output"]
         # save the action_list and final_answer
 
-        with open(f"data/history/{hash(response['input'])}.json", "w", encoding='utf-8') as f:
-            json.dump({"input": response["input"], "action_list": action_list, "final_answer": final_answer}, f,
-                      indent=4)
+        self._save_interaction_history(response, action_list, final_answer)
         action = action_list[0]
         return (action['action'], action["feedback"]), {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
 
@@ -1273,9 +1281,7 @@ class Agent():
         #     print("-" * 40)
         # print("========= End ========")
 
-        with open(f"data/history/{hash(response['input'])}.json", "w", encoding='utf-8') as f:
-            json.dump({"input": response["input"], "action_list": action_list, "final_answer": final_answer}, f,
-                      indent=4)
+        self._save_interaction_history(response, action_list, final_answer)
         self.update_history({"input": response["input"], "action_list": action_list, "final_answer": final_answer})
         return final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
 
