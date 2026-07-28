@@ -6,6 +6,7 @@ import sys
 import time
 import inspect
 from functools import wraps
+from pathlib import Path
 from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
@@ -169,6 +170,15 @@ def _write_runtime_result(path: str | None, payload: dict) -> None:
     if not path:
         return
     atomic_write_json(path, payload)
+
+
+def _resolve_runtime_document_path(document_file: str, runtime_paths: RuntimePaths) -> Path:
+    document_path = Path(document_file.replace("\\", "/"))
+    if document_path.name == "recipe_hint.json":
+        return runtime_paths.recipe_hint
+    if document_path.name == "map_description.json":
+        return runtime_paths.map_description
+    return document_path
 
 
 def _write_failure_runtime_result(path: str | None, payload: dict) -> dict | None:
@@ -418,8 +428,10 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
                     task_goal += f"brown_mushroom: {task_data['brown_mushroom']}\n"
                     task_goal += f"bowl: {task_data['bowl']}\n"
                 
-            if os.path.exists(document_file):
-                document["recipe"] = json.load((open(document_file)))
+            document_path = _resolve_runtime_document_path(document_file, runtime_paths)
+            if document_path.exists():
+                with document_path.open("r", encoding="utf-8") as stream:
+                    document["recipe"] = json.load(stream)
             tm.init_task(description=task_goal, document=document)
             _write_runtime_result(
                 runtime_result_path,

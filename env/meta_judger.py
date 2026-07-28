@@ -240,8 +240,7 @@ def handleViewer(*args):
             for recipe in recipes:
                 if recipe["result"]["name"] in goal_item:
                     recipe_hint.append(recipe)
-        with open("data/recipe_hint.json", "w") as f:
-            json.dump(recipe_hint, f, indent=4)        
+        atomic_write_json(runtime_paths.recipe_hint, recipe_hint)
 
     def set_chest(invalid_position, items, chest_num = 3):
         for _ in range(chest_num):
@@ -446,8 +445,7 @@ def handleViewer(*args):
                             break
             if rm_flag:
                 ingredients_list.remove(rm_ingredient)
-        with open("data/recipe_hint.json", "w") as f:
-            json.dump(hint_recipes, f, indent=4)
+        atomic_write_json(runtime_paths.recipe_hint, hint_recipes)
         # generate_recipe_hint(hint_recipes)
         craft_num = 3
         craft_pos = []

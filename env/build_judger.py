@@ -71,9 +71,8 @@ last_update_time = time.time()
 wait_interval = 600
 max_block_hit_rate = 0
 
-if not os.path.exists('data/blueprint_description_all.json'):
-    with open('data/blueprint_description_all.json', 'w') as f:
-        json.dump({}, f, indent=4)
+if not runtime_paths.blueprint_descriptions.exists():
+    atomic_write_json(runtime_paths.blueprint_descriptions, {})
 
 def calculate_balance():
     # 计算每个agent的时间
@@ -250,29 +249,26 @@ def handleViewer(*args):
             b["position"][1] += y_b
             blocks_list.append(b)
         task_data["blocks"] = blocks_list
-        with open("data/map.json", 'w') as f:
-            json.dump(task_data, f, indent=4)
+        atomic_write_json(runtime_paths.build_map, task_data)
 
         if dig_needed:
-            material_pairs = material_factory_load('data/map.json', bot, Vec3, mcData, center_pos=(-12, -60, -12), rate=.5)
+            material_pairs = material_factory_load(str(runtime_paths.build_map), bot, Vec3, mcData, center_pos=(-12, -60, -12), rate=.5)
         time.sleep(2)
         # building_material_load('data/map.json', bot, dig_needed=dig_needed)
-        building_material_load('data/map.json', bot, dig_needed=dig_needed, inventory_load=True, agent_names=agent_names)
+        building_material_load(str(runtime_paths.build_map), bot, dig_needed=dig_needed, inventory_load=True, agent_names=agent_names)
         bot.chat(f"/time set 0")
 
-        with open("data/blueprint_description_all.json", 'r') as f:
+        with runtime_paths.blueprint_descriptions.open('r', encoding="utf-8") as f:
             blueprint_description_all = json.load(f)
 
         if "task_" + str(select_idx) not in blueprint_description_all.keys():
             map_data = split_structure(task_data.copy())
             map_description = describe_map(map_data)
             blueprint_description_all["task_" + str(select_idx)] = json_to_string_list(map_description)
-            with open('data/blueprint_description_all.json', 'w') as f:
-                json.dump(blueprint_description_all, f, indent=4)
+            atomic_write_json(runtime_paths.blueprint_descriptions, blueprint_description_all)
 
         string_list = blueprint_description_all["task_" + str(select_idx)]
-        with open('data/map_description.json', 'w') as f:
-            json.dump(string_list, f, indent=4)
+        atomic_write_json(runtime_paths.map_description, string_list)
         global complexity, max_action_time, max_time
         complexity = measure_complexity(task_data, dig_needed=dig_needed)
         bot.chat(f" complexity {complexity}") # 1 - 1000

@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,7 @@ from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
 from env.minecraft_client import Agent as MinecraftAgent, ToolActionBlockedError
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
-from start_with_config import _with_runtime_paths
+from start_with_config import _resolve_runtime_document_path, _with_runtime_paths
 
 
 def test_default_runtime_paths_preserve_legacy_layout(tmp_path):
@@ -28,6 +29,56 @@ def test_isolated_runtime_paths_stay_under_attempt_root(tmp_path):
     assert paths.cache_dir == tmp_path / "attempt-a" / "cache"
     assert paths.score == tmp_path / "attempt-a" / "data" / "score.json"
     assert paths.meta_judger_phase == tmp_path / "attempt-a" / "cache" / "meta_judger_phase.cache"
+    assert paths.task_list_log == tmp_path / "attempt-a" / "logs" / "task_list.json"
+    assert paths.recipe_hint == tmp_path / "attempt-a" / "data" / "recipe_hint.json"
+    assert paths.build_map == tmp_path / "attempt-a" / "data" / "map.json"
+    assert paths.map_description == tmp_path / "attempt-a" / "data" / "map_description.json"
+
+
+def test_runtime_generated_documents_do_not_cross_attempt_roots(tmp_path):
+    first = RuntimePaths.isolated(tmp_path / "attempt-a")
+    second = RuntimePaths.isolated(tmp_path / "attempt-b")
+
+    atomic_write_json(first.recipe_hint, [{"result": "first"}])
+    atomic_write_json(second.recipe_hint, [{"result": "second"}])
+    atomic_write_json(first.task_list_log, {"task_list": ["first"]})
+    atomic_write_json(second.task_list_log, {"task_list": ["second"]})
+
+    assert read_json_artifact(first.recipe_hint).value == [{"result": "first"}]
+    assert read_json_artifact(second.recipe_hint).value == [{"result": "second"}]
+    assert read_json_artifact(first.task_list_log).value == {"task_list": ["first"]}
+    assert read_json_artifact(second.task_list_log).value == {"task_list": ["second"]}
+
+
+def test_generated_document_paths_resolve_under_runtime_root(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+
+    assert _resolve_runtime_document_path("data\\recipe_hint.json", paths) == paths.recipe_hint
+    assert _resolve_runtime_document_path("data/map_description.json", paths) == paths.map_description
+    assert _resolve_runtime_document_path("data/recipes.json", paths) == Path("data/recipes.json")
+
+
+def test_runtime_write_audit_has_no_known_global_judger_outputs():
+    repository_root = Path(__file__).resolve().parents[1]
+    sources = [
+        repository_root / "pipeline" / "controller_tiny.py",
+        repository_root / "pipeline" / "controller.py",
+        repository_root / "env" / "meta_judger.py",
+        repository_root / "env" / "farm_craft_judger.py",
+        repository_root / "env" / "build_judger.py",
+        repository_root / "env" / "env.py",
+    ]
+    forbidden = (
+        'open("logs/task_list.json", "w")',
+        'open("data/recipe_hint.json", "w")',
+        "open('data/blueprint_description_all.json', 'w')",
+        'open("data/map.json", \'w\')',
+        "open('data/map_description.json', 'w')",
+    )
+
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+    assert all(pattern not in combined for pattern in forbidden)
+    assert 'open("data/recipes.json", "r")' in combined
 
 
 def test_atomic_json_reader_ignores_temporary_file(tmp_path):
@@ -80,6 +131,16 @@ def test_environment_reads_injected_score_and_status_paths(tmp_path):
     assert environment.is_task_complete() is True
 
 
+def test_environment_reads_construction_metadata_from_runtime_root(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    atomic_write_json(paths.map_description, ["isolated map"])
+    environment = object.__new__(VillagerBench)
+    environment.env_type = env_type.construction
+    environment.runtime_paths = paths
+
+    assert environment.get_metadata() == ["isolated map"]
+
+
 def test_minecraft_interaction_history_uses_injected_runtime_path(tmp_path):
     paths = RuntimePaths.isolated(tmp_path / "attempt")
     agent = object.__new__(MinecraftAgent)
@@ -101,6 +162,18 @@ def test_minecraft_interaction_history_uses_injected_runtime_path(tmp_path):
         "final_answer": "arrived",
     }
     assert not (tmp_path / "data" / "history").exists()
+
+
+def test_minecraft_url_prefix_uses_injected_runtime_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+
+    with paths.activated():
+        MinecraftAgent("Alice", runtime_paths=paths)
+        assert MinecraftAgent.get_url_prefix() == {"Alice": "http://localhost:5000"}
+
+    assert read_json_artifact(paths.url_prefix).value == {"Alice": "http://localhost:5000"}
+    assert not (tmp_path / "data" / "url_prefix.json").exists()
 
 
 def test_judger_terminal_artifact_cannot_be_overwritten(tmp_path):

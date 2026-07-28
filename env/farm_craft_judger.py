@@ -310,8 +310,7 @@ if __name__ == '__main__':
                 if c["name"] == "chest":
                     items_in_chest += c.get("items", [])
             recipe_hint = generate_recipe_hint(recipes, target, items_in_chest)
-            with open("data/recipe_hint.json", "w") as f:
-                json.dump(recipe_hint, f, indent=4)
+            atomic_write_json(runtime_paths.recipe_hint, recipe_hint)
 
             bot.chat("task_setting:")
             if "cake" in task_data["name"]:
