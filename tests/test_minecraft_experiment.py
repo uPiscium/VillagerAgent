@@ -1003,6 +1003,40 @@ def test_runtime_process_group_cleanup_tolerates_group_exit_race(monkeypatch):
     assert metadata["killed"] is False
 
 
+def test_runtime_process_group_cleanup_waits_for_delayed_exit(monkeypatch):
+    class ExitedLeader:
+        pid = 779
+        exitcode = 0
+
+        @staticmethod
+        def join(timeout=None):
+            return None
+
+        @staticmethod
+        def is_alive():
+            return False
+
+    checks = 0
+
+    def kill_group(_process_group_id, sent_signal):
+        nonlocal checks
+        if sent_signal == 0:
+            checks += 1
+            if checks >= 3:
+                raise ProcessLookupError()
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.killpg", kill_group)
+
+    metadata = _terminate_runtime_process(
+        ExitedLeader(),
+        grace_seconds=0.1,
+        process_group_id=ExitedLeader.pid,
+    )
+
+    assert metadata["process_group_alive_after_kill"] is False
+    assert checks >= 3
+
+
 def test_runtime_process_group_cleanup_falls_back_to_direct_termination(monkeypatch):
     process = _StubbornProcess()
     process.pid = 778
