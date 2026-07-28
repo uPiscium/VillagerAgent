@@ -193,7 +193,7 @@ def timeit(func):
         if system_type != "linux":
             emotion = []
 
-        url = Agent.get_url_prefix()[agent_name] + "/post_emojimurmur"
+        url = Agent.get_agent_url(agent_name) + "/post_emojimurmur"
         data = {
             "emotion": emotion,
             "murmur": murmur,
@@ -310,6 +310,8 @@ class Agent():
     name2port = {}
     agent_process = {}
     url_prefix = {}
+    runtime_paths_by_name: dict[str, RuntimePaths] = {}
+    _url_registry_lock = threading.Lock()
     minecraft_connect_timeout_seconds = DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS
     minecraft_read_timeout_seconds = DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS
     last_tool_timeout = None
@@ -325,14 +327,33 @@ class Agent():
         }
 
     @staticmethod
-    def get_url_prefix() -> dict:
-        url_prefix_path = RuntimePaths.from_environment().url_prefix
+    def get_url_prefix(runtime_paths: RuntimePaths) -> dict:
+        url_prefix_path = runtime_paths.url_prefix
         if url_prefix_path.exists():
             with url_prefix_path.open("r", encoding='utf-8') as f:
                 url_prefix = json.load(f)
         else:
             url_prefix = {}
         return url_prefix
+
+    @classmethod
+    def runtime_paths_for(cls, player_name: str) -> RuntimePaths:
+        try:
+            return cls.runtime_paths_by_name[player_name]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"No runtime paths registered for agent {player_name}"
+            ) from exc
+
+    @classmethod
+    def get_agent_url(cls, player_name: str) -> str:
+        registry = cls.get_url_prefix(cls.runtime_paths_for(player_name))
+        try:
+            return registry[player_name]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"No bridge URL registered for agent {player_name}"
+            ) from exc
 
     def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model="", runtime_paths: RuntimePaths | None = None):
         self.name = name
@@ -383,16 +404,18 @@ class Agent():
 
         if name == "nobody":
             return
-        url_prefix = Agent.get_url_prefix()
-        url_prefix[name] = f"http://localhost:{local_port}"
-        atomic_write_json(self.runtime_paths.url_prefix, url_prefix)
+        with Agent._url_registry_lock:
+            Agent.runtime_paths_by_name[name] = self.runtime_paths
+            url_prefix = Agent.get_url_prefix(self.runtime_paths)
+            url_prefix[name] = f"http://localhost:{local_port}"
+            atomic_write_json(self.runtime_paths.url_prefix, url_prefix)
 
         Agent.name2port[name] = local_port
         if prefix is None:
             self.prefix = "You are a helpful friendly assistant.\n"
 
     def render(self, structure_idx, center_pos):
-        url = Agent.get_url_prefix()[self.name] + "/post_render"
+        url = Agent.get_agent_url(self.name) + "/post_render"
         data = {
             "id": structure_idx,
             "center_pos": center_pos,
@@ -402,20 +425,20 @@ class Agent():
 
     def env(self, prompt):
         """Get the Environment Information"""
-        url = Agent.get_url_prefix()[self.name] + "/post_environment"
+        url = Agent.get_agent_url(self.name) + "/post_environment"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return str(response.json())
     
     def get_environment_info_dict(player_name: str):
         """Get the Environment Information, return string contains time of day, weather"""
-        url = Agent.get_url_prefix()[player_name] + "/post_environment_dict"
+        url = Agent.get_agent_url(player_name) + "/post_environment_dict"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
     
     def ping(player_name: str):
         """Ping the Server"""
         try:
-            url = Agent.get_url_prefix()[player_name] + "/post_ping"
+            url = Agent.get_agent_url(player_name) + "/post_ping"
             response = _minecraft_request("GET", url)
             return response.json()
         except MinecraftToolTimeoutError:
@@ -456,12 +479,17 @@ class Agent():
     def kill():
         for value in Agent.agent_process.values():
             value.terminate()
+        with Agent._url_registry_lock:
+            for name in set(Agent.runtime_paths_by_name) | set(Agent.name2port):
+                Agent.runtime_paths_by_name.pop(name, None)
+                Agent.name2port.pop(name, None)
+            Agent.agent_process.clear()
 
     # @tool
     # @timeit
     # def getMsg(player_name: str):
     #     """Get the Message from the Server"""
-    #     url = Agent.get_url_prefix()[player_name] + "/post_msg"
+    #     url = Agent.get_agent_url(player_name) + "/post_msg"
     #     response = _minecraft_request("POST", url, headers=Agent.headers)
     #     return response.json()
 
@@ -469,7 +497,7 @@ class Agent():
     @timeit
     def erectDirtLadder(player_name: str, top_x, top_y, top_z, emotion: list, murmur: str):
         """Helpful to place item at higher place Erect a Dirt Ladder Structure at Specific Position x y z, remember to dismantle it after use"""
-        url = Agent.get_url_prefix()[player_name] + "/post_erect"
+        url = Agent.get_agent_url(player_name) + "/post_erect"
         data = {
             "top_x": top_x,
             "top_y": top_y,
@@ -482,7 +510,7 @@ class Agent():
     @timeit
     def dismantleDirtLadder(player_name: str, top_x, top_y, top_z, emotion: list, murmur: str):
         """Dismantle a Dirt Ladder Structure from ground to top at Specific Position x y z"""
-        url = Agent.get_url_prefix()[player_name] + "/post_dismantle"
+        url = Agent.get_agent_url(player_name) + "/post_dismantle"
         data = {
             "top_x": top_x,
             "top_y": top_y,
@@ -495,7 +523,7 @@ class Agent():
     @timeit
     def layDirtBeam(player_name: str, x_1, y_1, z_1, x_2, y_2, z_2, emotion: list, murmur: str):
         """Lay a Dirt Beam from Position x1 y1 z1 to Position x2 y2 z2"""
-        url = Agent.get_url_prefix()[player_name] + "/post_lay"
+        url = Agent.get_agent_url(player_name) + "/post_lay"
         data = {
             "x_1": x_1,
             "y_1": y_1,
@@ -511,7 +539,7 @@ class Agent():
     @timeit
     def removeDirtBeam(player_name: str, x_1, y_1, z_1, x_2, y_2, z_2, emotion: list, murmur: str):
         """Remove a Dirt Beam from Position x1 y1 z1 to Position x2 y2 z2"""
-        url = Agent.get_url_prefix()[player_name] + "/post_remove"
+        url = Agent.get_agent_url(player_name) + "/post_remove"
         data = {
             "x_1": x_1,
             "y_1": y_1,
@@ -528,7 +556,7 @@ class Agent():
     @timeit
     def scanNearbyEntities(player_name: str, item_name: str, radius: int, item_num: int, emotion: list, murmur: str):
         """Find minecraft item blocks chests creatures in a radius, return ('message': msg, 'status': True/False, 'data':[('x':x,'y':y,'z':z),...]) This function can not find items in the chest, container,or player's inventory."""
-        url = Agent.get_url_prefix()[player_name] + "/post_find"
+        url = Agent.get_agent_url(player_name) + "/post_find"
         data = {
             "name": item_name.lower().replace(" ", "_"),
             "distance": radius,
@@ -541,7 +569,7 @@ class Agent():
     @timeit
     def handoverBlock(player_name: str, target_player_name: str, item_name: str, item_count: int, emotion: list, murmur: str):
         """Hand Item to a target player you work with, return ('message': msg, 'status': True/False), item num will be automatically checked and player will automatically move to the target player"""
-        url = Agent.get_url_prefix()[player_name] + "/post_hand"
+        url = Agent.get_agent_url(player_name) + "/post_hand"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "from_name": player_name, 
@@ -555,7 +583,7 @@ class Agent():
     @timeit
     def navigateToPlayer(player_name: str, target_name: str, emotion: list, murmur: str):
         """Move to a target Player,return ('message': msg, 'status': True/False)"""
-        url = Agent.get_url_prefix()[player_name] + "/post_move_to"
+        url = Agent.get_agent_url(player_name) + "/post_move_to"
         data = {
             "name": target_name,
         }
@@ -566,7 +594,7 @@ class Agent():
     @timeit
     def navigateToBuilding(player_name: str, building_name: str, emotion: list, murmur: str):
         """Move to a building by name, return string result"""
-        url = Agent.get_url_prefix()[player_name] + "/post_move_to"
+        url = Agent.get_agent_url(player_name) + "/post_move_to"
         data = {
             "name": building_name,
         }
@@ -577,7 +605,7 @@ class Agent():
     @timeit
     def navigateToAnimal(player_name: str, animal_name: str, emotion: list, murmur: str):
         """Move to an animal by name, return string result"""
-        url = Agent.get_url_prefix()[player_name] + "/post_move_to"
+        url = Agent.get_agent_url(player_name) + "/post_move_to"
         data = {
             "name": animal_name,
         }
@@ -588,7 +616,7 @@ class Agent():
     @timeit
     def navigateTo(player_name: str, x: int, y: int, z: int, emotion: list, murmur: str):
         """Move to a Specific Position x y z, return string result"""
-        url = Agent.get_url_prefix()[player_name] + "/post_move_to_pos"
+        url = Agent.get_agent_url(player_name) + "/post_move_to_pos"
         data = {
             "x": x,
             "y": y,
@@ -599,7 +627,7 @@ class Agent():
     
     def _navigateTo(player_name: str, x: int, y: int, z: int):
         """Move to a Specific Position x y z, return string result"""
-        url = Agent.get_url_prefix()[player_name] + "/post_move_to_pos"
+        url = Agent.get_agent_url(player_name) + "/post_move_to_pos"
         data = {
             "x": x,
             "y": y,
@@ -612,7 +640,7 @@ class Agent():
     @timeit
     def useItemOnEntity(player_name: str, item_name: str, entity_name: str, emotion: list, murmur: str):
         """Use a Specific Item on a Specific Entity, return string result (bone on dog, bucket on cow, shears on sheep, saddle on horse, etc)"""
-        url = Agent.get_url_prefix()[player_name] + "/post_use_on"
+        url = Agent.get_agent_url(player_name) + "/post_use_on"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "entity_name": entity_name,
@@ -624,7 +652,7 @@ class Agent():
     @timeit
     def useItemOnBlock(player_name: str, item_name: str, x: int, y: int, z: int, emotion: list, murmur: str):
         """Use a Specific Item on a Specific block at x y z, return string result (minecaft on rail, hoe on dirt, seeds on farmland, bucket on water, etc)"""
-        url = Agent.get_url_prefix()[player_name] + "/post_use_on_block"
+        url = Agent.get_agent_url(player_name) + "/post_use_on_block"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "x": x,
@@ -638,7 +666,7 @@ class Agent():
     @timeit
     def sleep(player_name: str, emotion: list, murmur: str):
         """Go to Sleep"""
-        url = Agent.get_url_prefix()[player_name] + "/post_sleep"
+        url = Agent.get_agent_url(player_name) + "/post_sleep"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
@@ -646,7 +674,7 @@ class Agent():
     @timeit
     def wake(player_name: str, emotion: list, murmur: str):
         """Wake Up"""
-        url = Agent.get_url_prefix()[player_name] + "/post_wake"
+        url = Agent.get_agent_url(player_name) + "/post_wake"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
@@ -654,7 +682,7 @@ class Agent():
     @timeit
     def MineBlock(player_name: str, x: int, y: int, z: int, emotion: list, murmur: str):
         """Dig Block at Specific Position x y z"""
-        url = Agent.get_url_prefix()[player_name] + "/post_dig"
+        url = Agent.get_agent_url(player_name) + "/post_dig"
         data = {
             "x": x,
             "y": y,
@@ -667,7 +695,7 @@ class Agent():
     @timeit
     def placeBlock(player_name: str, item_name: str, x: int, y: int, z: int, facing: str, emotion: list, murmur: str):
         """Place a Specific Item at Specific Position x y z with Specific facing in one of [W, E, S, N, x, y, z, A] default is 'A'., return ('message': msg, 'status': True/False)"""
-        url = Agent.get_url_prefix()[player_name] + "/post_place"
+        url = Agent.get_agent_url(player_name) + "/post_place"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "x": x,
@@ -681,7 +709,7 @@ class Agent():
     @timeit
     def attackTarget(player_name: str, target_name: str, emotion: list = ['😢'], murmur: str=""):
         """Attack the Nearest Entity with a Specific Name"""
-        url = Agent.get_url_prefix()[player_name] + "/post_attack"
+        url = Agent.get_agent_url(player_name) + "/post_attack"
         data = {
             "name": target_name.lower().replace(" ", "_"),
         }
@@ -692,7 +720,7 @@ class Agent():
     @timeit
     def equipItem(player_name: str, slot: str, item_name: str, emotion: list, murmur: str):
         """Equip a Specific Item on a Specific Slot | to equip item on hand,head,torso,legs,feet."""
-        url = Agent.get_url_prefix()[player_name] + "/post_equip"
+        url = Agent.get_agent_url(player_name) + "/post_equip"
         data = {
             "slot": slot,
             "item_name": item_name.lower().replace(" ", "_"),
@@ -704,7 +732,7 @@ class Agent():
     @timeit
     def tossItem(player_name: str, item_name: str, count: int, emotion: list, murmur: str):
         """Throw a Specific Item Out with a Specific Count"""
-        url = Agent.get_url_prefix()[player_name] + "/post_toss"
+        url = Agent.get_agent_url(player_name) + "/post_toss"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
@@ -716,7 +744,7 @@ class Agent():
     @timeit
     def get_environment_info(player_name: str, emotion: list, murmur: str):
         """Get the Environment Information, return string contains time of day, weather"""
-        url = Agent.get_url_prefix()[player_name] + "/post_environment"
+        url = Agent.get_agent_url(player_name) + "/post_environment"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
@@ -724,7 +752,7 @@ class Agent():
     @timeit
     def get_entity_info(player_name: str, target_name: str, emotion: list, murmur: str):
         """Get the Entity Information, return string contains entity name, entity pos x y z, entity held item"""
-        url = Agent.get_url_prefix()[player_name] + "/post_entity"
+        url = Agent.get_agent_url(player_name) + "/post_entity"
         data = {
             "name": target_name.lower().replace(" ", "_"),
         }
@@ -735,7 +763,7 @@ class Agent():
     @timeit
     def withdrawItem(player_name: str, item_name: str, from_name: str, item_count: int, emotion: list, murmur: str):
         """Take out Item from nearest 'chest' | 'container' | 'furnace' return string result"""
-        url = Agent.get_url_prefix()[player_name] + "/post_get"
+        url = Agent.get_agent_url(player_name) + "/post_get"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "from_name": from_name.lower().replace(" ", "_"),
@@ -748,7 +776,7 @@ class Agent():
     @timeit
     def storeItem(player_name: str, item_name: str, to_name: str, item_count: int, emotion: list, murmur: str):
         """Put in Item to One Chest, Container, etc, return string result"""
-        url = Agent.get_url_prefix()[player_name] + "/post_put"
+        url = Agent.get_agent_url(player_name) + "/post_put"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "to_name": to_name.lower().replace(" ", "_"),
@@ -761,7 +789,7 @@ class Agent():
     @timeit
     def SmeltingCooking(player_name: str, item_name: str, item_count: int, fuel_item_name: str, emotion: list, murmur: str):
         """Smelt or Cook Item in the Furnace, item_name is the item to be smelted, item_count is the number of items to be smelted, fuel_item_name is the fuel item."""
-        url = Agent.get_url_prefix()[player_name] + "/post_smelt"
+        url = Agent.get_agent_url(player_name) + "/post_smelt"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "item_count": item_count,
@@ -774,7 +802,7 @@ class Agent():
     @timeit
     def craftBlock(player_name: str, item_name: str, count: int, emotion: list, murmur: str):
         """Craft Item in the Crafting Table"""
-        url = Agent.get_url_prefix()[player_name] + "/post_craft"
+        url = Agent.get_agent_url(player_name) + "/post_craft"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
@@ -786,7 +814,7 @@ class Agent():
     @timeit
     def enchantItem(player_name: str, item_name: str, count: int, emotion: list, murmur: str):
         """Enchant Item in the Enchanting Table"""
-        url = Agent.get_url_prefix()[player_name] + "/post_enchant"
+        url = Agent.get_agent_url(player_name) + "/post_enchant"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
@@ -798,7 +826,7 @@ class Agent():
     @timeit
     def trade(player_name: str, item_name: str, with_name: str, count: int, emotion: list, murmur: str):
         """Trade Item with the villager npc, return the details of trade items and num."""
-        url = Agent.get_url_prefix()[player_name] + "/post_trade"
+        url = Agent.get_agent_url(player_name) + "/post_trade"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "with_name": with_name,
@@ -811,7 +839,7 @@ class Agent():
     @timeit
     def repairItem(player_name: str, item_name: str, material: str, emotion: list, murmur: str):
         """Repair Item in the Anvil"""
-        url = Agent.get_url_prefix()[player_name] + "/post_repair"
+        url = Agent.get_agent_url(player_name) + "/post_repair"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "material": material.lower().replace(" ", "_"),
@@ -823,7 +851,7 @@ class Agent():
     @timeit
     def eat(player_name: str, item_name: str, emotion: list, murmur: str):
         """Eat Item"""
-        url = Agent.get_url_prefix()[player_name] + "/post_eat"
+        url = Agent.get_agent_url(player_name) + "/post_eat"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
         }
@@ -834,7 +862,7 @@ class Agent():
     @timeit
     def drink(player_name: str, item_name: str, count: int, emotion: list, murmur: str):
         """Drink Item"""
-        url = Agent.get_url_prefix()[player_name] + "/post_drink"
+        url = Agent.get_agent_url(player_name) + "/post_drink"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
@@ -846,7 +874,7 @@ class Agent():
     @timeit
     def wear(player_name: str, slot: str, item_name: str, emotion: list, murmur: str):
         """Wear Item on Specific Slot"""
-        url = Agent.get_url_prefix()[player_name] + "/post_wear"
+        url = Agent.get_agent_url(player_name) + "/post_wear"
         data = {
             "slot": slot,
             "item_name": item_name.lower().replace(" ", "_"),
@@ -862,7 +890,7 @@ class Agent():
             response = Agent._navigateTo(player_name, position[0], position[1], position[2])
             if response["status"] == False:
                 return response
-        url = Agent.get_url_prefix()[player_name] + "/post_open"
+        url = Agent.get_agent_url(player_name) + "/post_open"
         data = {
             "item_name": container_name,
         }
@@ -880,7 +908,7 @@ class Agent():
             response = Agent._navigateTo(player_name, position[0], position[1], position[2])
             if response["status"] == False:
                 return response
-        url = Agent.get_url_prefix()[player_name] + "/post_open"
+        url = Agent.get_agent_url(player_name) + "/post_open"
         data = {
             "item_name": item_name,
         }
@@ -895,7 +923,7 @@ class Agent():
             response = Agent._navigateTo(player_name, position[0], position[1], position[2])
             if response["status"] == False:
                 return response
-        url = Agent.get_url_prefix()[player_name] + "/post_close"
+        url = Agent.get_agent_url(player_name) + "/post_close"
         data = {
             "item_name": item_name,
         }
@@ -908,7 +936,7 @@ class Agent():
         """open/close Gate, Lever, Press Button (pressure_plate need to stand on it, iron door need to be powered, they are not included), at Specific Position x y z"""
         if "plate" in item_name:
             return {'message': "pressure_plate need to stand on it", 'status': False}
-        url = Agent.get_url_prefix()[player_name] + "/post_activate"
+        url = Agent.get_agent_url(player_name) + "/post_activate"
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
             "x": x,
@@ -922,7 +950,7 @@ class Agent():
     @timeit
     def mountEntity(player_name: str, entity_name: str, emotion: list = ['🏇','😊'], murmur: str=""):
         """Mount the Entity"""
-        url = Agent.get_url_prefix()[player_name] + "/post_mount"
+        url = Agent.get_agent_url(player_name) + "/post_mount"
         data = {
             "entity_name": entity_name,
         }
@@ -933,7 +961,7 @@ class Agent():
     @timeit
     def dismountEntity(player_name: str, emotion: list, murmur: str):
         """Dismount the Entity"""
-        url = Agent.get_url_prefix()[player_name] + "/post_dismount"
+        url = Agent.get_agent_url(player_name) + "/post_dismount"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
@@ -941,7 +969,7 @@ class Agent():
     @timeit
     def rideEntity(player_name: str, entity_name: str, emotion: list, murmur: str):
         """Ride the Entity"""
-        url = Agent.get_url_prefix()[player_name] + "/post_ride"
+        url = Agent.get_agent_url(player_name) + "/post_ride"
         data = {
             "entity_name": entity_name,
         }
@@ -952,7 +980,7 @@ class Agent():
     @timeit
     def disrideEntity(player_name: str, emotion: list, murmur: str):
         """Disride the Entity"""
-        url = Agent.get_url_prefix()[player_name] + "/post_disride"
+        url = Agent.get_agent_url(player_name) + "/post_disride"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
@@ -967,7 +995,7 @@ class Agent():
             or entity_name == "somebody" or entity_name == "some" or entity_name == "any" or entity_name == ""\
             or entity_name == "none" or entity_name == "everybody" or entity_name == "someone" or entity_name == "anybody":
             return {'message': 'You need to specify the other player name.', 'status': False, 'new_events': []}
-        url = Agent.get_url_prefix()[player_name] + "/post_talk_to"
+        url = Agent.get_agent_url(player_name) + "/post_talk_to"
         data = {
             "entity_name": entity_name,
             "message": message,
@@ -980,7 +1008,7 @@ class Agent():
     @timeit
     def waitForFeedback(player_name: str, entity_name: str, seconds: int=10, emotion: list = ["⏱️"], murmur: str=""):
         """Wait for other player's reply, except you or others are expecting to end the conversation."""
-        url = Agent.get_url_prefix()[player_name] + "/post_wait_for_feedback"
+        url = Agent.get_agent_url(player_name) + "/post_wait_for_feedback"
         data = {
             "entity_name": entity_name,
             "seconds": seconds,
@@ -992,7 +1020,7 @@ class Agent():
     @timeit
     def performMovement(player_name: str, action_name: str, seconds: int, emotion: list, murmur: str):
         """Perform Action jump forward back left right for Seconds"""
-        url = Agent.get_url_prefix()[player_name] + "/post_action"
+        url = Agent.get_agent_url(player_name) + "/post_action"
         data = {
             "action_name": action_name,
             "seconds": seconds,
@@ -1004,7 +1032,7 @@ class Agent():
     @timeit
     def lookAt(player_name: str, name: str, emotion: list, murmur: str):
         """Look at Someone or Something"""
-        url = Agent.get_url_prefix()[player_name] + "/post_look_at"
+        url = Agent.get_agent_url(player_name) + "/post_look_at"
         data = {
             "name": name,
         }
@@ -1013,7 +1041,7 @@ class Agent():
 
     def _lookAt(player_name: str, name: str):
         """Look at Someone or Something"""
-        url = Agent.get_url_prefix()[player_name] + "/post_look_at"
+        url = Agent.get_agent_url(player_name) + "/post_look_at"
         data = {
             "name": name,
         }
@@ -1024,7 +1052,7 @@ class Agent():
     @timeit
     def startFishing(player_name: str, fish_name: str, emotion: list, murmur: str):
         """Start Fishing"""
-        url = Agent.get_url_prefix()[player_name] + "/post_start_fishing"
+        url = Agent.get_agent_url(player_name) + "/post_start_fishing"
         data = {
             "fish_name": fish_name,
         }
@@ -1035,7 +1063,7 @@ class Agent():
     @timeit
     def stopFishing(player_name: str, emotion: list, murmur: str):
         """Stop Fishing"""
-        url = Agent.get_url_prefix()[player_name] + "/post_stop_fishing"
+        url = Agent.get_agent_url(player_name) + "/post_stop_fishing"
         response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
@@ -1043,7 +1071,7 @@ class Agent():
     @timeit
     def read(player_name: str, item_name: str, emotion: list, murmur: str):
         """Read Book or Sign neaby, return string details"""
-        url = Agent.get_url_prefix()[player_name] + "/post_read"
+        url = Agent.get_agent_url(player_name) + "/post_read"
         data = {
             "name": item_name,
         }
@@ -1054,7 +1082,7 @@ class Agent():
     @timeit
     def readPage(player_name: str, item_name: str, page: int, emotion: list, murmur: str):
         """Read Content from Book Page"""
-        url = Agent.get_url_prefix()[player_name] + "/post_read_page"
+        url = Agent.get_agent_url(player_name) + "/post_read_page"
         data = {
             "name": item_name,
             "page": page,
@@ -1066,7 +1094,7 @@ class Agent():
     @timeit
     def write(player_name: str, item_name: str, content: str, emotion: list, murmur: str):
         """Write Content on Writable Book or Sign"""
-        url = Agent.get_url_prefix()[player_name] + "/post_write"
+        url = Agent.get_agent_url(player_name) + "/post_write"
         data = {
             "name": item_name,
             "content": content,
@@ -1337,7 +1365,7 @@ class Agent():
         return final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
 
     def chat(self, msg, async_tag=False):
-        url = Agent.get_url_prefix()[self.name] + "/post_chat"
+        url = Agent.get_agent_url(self.name) + "/post_chat"
         data = {
             "msg": msg,
         }
@@ -1370,7 +1398,7 @@ if __name__ == "__main__":
     Agent.launch(host="10.214.180.148", port=25565)
     time.sleep(5)
     start_time = time.time()
-    url = Agent.get_url_prefix()["Alice"] + "/post_use_on"
+    url = Agent.get_agent_url("Alice") + "/post_use_on"
     data = {
         "item_name": "saddle",
         "entity_name": "horse",
@@ -1379,7 +1407,7 @@ if __name__ == "__main__":
     print(response.json())
     print(time.time() - start_time)
     # # print(Agent.ping("Alice"))
-    # url = Agent.get_url_prefix()["Alice"] + "/post_use_on"
+    # url = Agent.get_agent_url("Alice") + "/post_use_on"
     # response = _minecraft_request("POST", url, headers=Agent.headers)
     # data = {
     #     "item_name": "bucket",
