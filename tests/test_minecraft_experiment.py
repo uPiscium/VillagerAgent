@@ -2,12 +2,14 @@ import json
 import signal
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from benchmarks.common.run_artifacts import (
     COMPLETION_MARKER_FILE,
     RunDirectoryExistsError,
+    validate_run_attempt,
 )
 from benchmarks.minecraft.experiment import (
     MinecraftExecuteTimeoutError,
@@ -21,7 +23,7 @@ from benchmarks.minecraft.experiment import (
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.common.report import summarize_inputs
-from pipeline.runtime_events import InMemoryRuntimeEventRecorder
+from pipeline.runtime_events import InMemoryRuntimeEventRecorder, JsonlRuntimeEventRecorder
 
 
 @pytest.mark.parametrize("dependency_key", ["required_subtasks", "required subtasks"])
@@ -337,6 +339,34 @@ def test_minecraft_experiment_emits_one_terminal_event_when_finalization_raises(
         if event["event_type"] in {"run_completed", "run_failed", "run_timed_out"}
     ]
     assert terminal_events == ["run_failed"]
+
+
+def test_minecraft_manifest_captures_final_event_artifacts(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_minecraft_config("manifest_terminal")), encoding="utf-8")
+    build_calls = 0
+
+    def build_events(**_kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return SimpleNamespace(
+            events=[{"event_type": f"event-{index}"} for index in range(build_calls)],
+            warnings=[],
+        )
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment.build_normalized_events", build_events)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        event_sink=JsonlRuntimeEventRecorder(tmp_path / "runtime_events.jsonl", run_id="test"),
+    )
+
+    output_dir = tmp_path / "result" / "manifest_terminal"
+    validate_run_attempt(output_dir, attempt_id=summary["attempt_id"])
+    events = [json.loads(line) for line in (output_dir / "events.jsonl").read_text().splitlines()]
+    assert build_calls == 2
+    assert [event["event_type"] for event in events] == ["event-0", "event-1"]
 
 
 def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, monkeypatch):

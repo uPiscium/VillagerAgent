@@ -543,6 +543,12 @@ def _run_minecraft_experiment_attempt(
             _write_json(output_dir / "summary.json", summary)
         except Exception as exc:
             summary["event_artifact_error"] = type(exc).__name__
+    finalize_run_directory(
+        output_dir,
+        attempt_id=attempt_id,
+        producer="benchmarks.minecraft.experiment",
+        status="failed" if error else "completed",
+    )
     return summary
 
 
