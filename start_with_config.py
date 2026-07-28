@@ -5,8 +5,10 @@ import os
 import sys
 import time
 import inspect
+from dataclasses import dataclass
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import Literal
 from uuid import uuid4
 from env.env import VillagerBench, env_type, Agent
 from model.init_model import init_language_model
@@ -173,18 +175,48 @@ def _write_runtime_result(path: str | None, payload: dict) -> None:
     atomic_write_json(path, payload)
 
 
+@dataclass(frozen=True)
+class RuntimeDocumentResolution:
+    path: Path | None
+    source: Literal["none", "generated", "external"]
+
+
 def _resolve_runtime_document_path(
-    document_file: str,
+    document_file: str | None,
     runtime_paths: RuntimePaths,
-) -> Path | None:
-    if not document_file.strip():
+) -> RuntimeDocumentResolution:
+    if document_file is None:
+        return RuntimeDocumentResolution(None, "none")
+    if not isinstance(document_file, str):
+        raise ValueError("document_file must be a string or null")
+    value = document_file.strip()
+    if not value:
+        return RuntimeDocumentResolution(None, "none")
+    normalized = PurePosixPath(value.replace("\\", "/"))
+    if normalized == PurePosixPath("data/recipe_hint.json"):
+        return RuntimeDocumentResolution(runtime_paths.recipe_hint, "generated")
+    if normalized == PurePosixPath("data/map_description.json"):
+        return RuntimeDocumentResolution(runtime_paths.map_description, "generated")
+    return RuntimeDocumentResolution(Path(value), "external")
+
+
+def _load_runtime_document(resolution: RuntimeDocumentResolution):
+    path = resolution.path
+    if path is None:
         return None
-    document_path = Path(document_file.replace("\\", "/"))
-    if document_path.name == "recipe_hint.json":
-        return runtime_paths.recipe_hint
-    if document_path.name == "map_description.json":
-        return runtime_paths.map_description
-    return document_path
+    if not path.exists():
+        if resolution.source == "generated":
+            return None
+        raise FileNotFoundError(f"document_file does not exist: {path}")
+    if path.is_symlink():
+        raise ValueError(f"document_file must not be a symbolic link: {path}")
+    if not path.is_file():
+        raise ValueError(f"document_file must be a regular file: {path}")
+    with path.open("r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    if not isinstance(payload, (dict, list)):
+        raise ValueError("document_file JSON must contain an object or list")
+    return payload
 
 
 def _resolve_attempt_id(value: str | None) -> str:
@@ -228,7 +260,7 @@ def _with_runtime_paths(function):
 
 
 @_with_runtime_paths
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None):
     start_time = time.time()
 
     if task_type == "meta" and not task_scenario:
@@ -443,10 +475,13 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
                     task_goal += f"brown_mushroom: {task_data['brown_mushroom']}\n"
                     task_goal += f"bowl: {task_data['bowl']}\n"
                 
-            document_path = _resolve_runtime_document_path(document_file, runtime_paths)
-            if document_path is not None and document_path.is_file():
-                with document_path.open("r", encoding="utf-8") as stream:
-                    document["recipe"] = json.load(stream)
+            document_resolution = _resolve_runtime_document_path(
+                document_file,
+                runtime_paths,
+            )
+            runtime_document = _load_runtime_document(document_resolution)
+            if runtime_document is not None:
+                document["recipe"] = runtime_document
             tm.init_task(description=task_goal, document=document)
             _write_runtime_result(
                 runtime_result_path,

@@ -17,7 +17,12 @@ from env.minecraft_client import (
 )
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
-from start_with_config import _resolve_runtime_document_path, _with_runtime_paths
+from start_with_config import (
+    RuntimeDocumentResolution,
+    _load_runtime_document,
+    _resolve_runtime_document_path,
+    _with_runtime_paths,
+)
 
 
 def test_default_runtime_paths_preserve_legacy_layout(tmp_path):
@@ -59,11 +64,80 @@ def test_runtime_generated_documents_do_not_cross_attempt_roots(tmp_path):
 def test_generated_document_paths_resolve_under_runtime_root(tmp_path):
     paths = RuntimePaths.isolated(tmp_path / "attempt")
 
-    assert _resolve_runtime_document_path("data\\recipe_hint.json", paths) == paths.recipe_hint
-    assert _resolve_runtime_document_path("data/map_description.json", paths) == paths.map_description
-    assert _resolve_runtime_document_path("data/recipes.json", paths) == Path("data/recipes.json")
-    assert _resolve_runtime_document_path("", paths) is None
-    assert _resolve_runtime_document_path("   ", paths) is None
+    assert _resolve_runtime_document_path("data\\recipe_hint.json", paths) == RuntimeDocumentResolution(
+        paths.recipe_hint, "generated"
+    )
+    assert _resolve_runtime_document_path("data/map_description.json", paths) == RuntimeDocumentResolution(
+        paths.map_description, "generated"
+    )
+    assert _resolve_runtime_document_path("data/recipes.json", paths) == RuntimeDocumentResolution(
+        Path("data/recipes.json"), "external"
+    )
+    assert _resolve_runtime_document_path(None, paths) == RuntimeDocumentResolution(None, "none")
+    assert _resolve_runtime_document_path("", paths) == RuntimeDocumentResolution(None, "none")
+    assert _resolve_runtime_document_path("   ", paths) == RuntimeDocumentResolution(None, "none")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/opt/custom/recipe_hint.json",
+        "./fixtures/recipe_hint.json",
+        "custom/recipe_hint.json",
+        r"C:\external\recipe_hint.json",
+    ],
+)
+def test_custom_same_basename_document_is_not_substituted(tmp_path, value):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+
+    assert _resolve_runtime_document_path(value, paths) == RuntimeDocumentResolution(
+        Path(value.strip()), "external"
+    )
+
+
+@pytest.mark.parametrize("value", [0, False, [], {}])
+def test_runtime_document_resolution_rejects_non_string(value, tmp_path):
+    with pytest.raises(ValueError, match="string or null"):
+        _resolve_runtime_document_path(value, RuntimePaths.isolated(tmp_path / "attempt"))
+
+
+def test_runtime_document_loader_distinguishes_generated_and_external_missing(tmp_path):
+    generated = RuntimeDocumentResolution(tmp_path / "generated.json", "generated")
+    external = RuntimeDocumentResolution(tmp_path / "external.json", "external")
+
+    assert _load_runtime_document(generated) is None
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        _load_runtime_document(external)
+
+
+def test_runtime_document_loader_reads_custom_same_basename_file(tmp_path):
+    custom = tmp_path / "custom" / "recipe_hint.json"
+    custom.parent.mkdir()
+    custom.write_text('[{"custom": true}]', encoding="utf-8")
+
+    assert _load_runtime_document(RuntimeDocumentResolution(custom, "external")) == [
+        {"custom": True}
+    ]
+
+
+def test_runtime_document_loader_rejects_directory_and_invalid_json(tmp_path):
+    with pytest.raises(ValueError, match="regular file"):
+        _load_runtime_document(RuntimeDocumentResolution(tmp_path, "external"))
+
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        _load_runtime_document(RuntimeDocumentResolution(invalid, "external"))
+
+
+def test_runtime_document_loader_rejects_symbolic_link(tmp_path):
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        _load_runtime_document(RuntimeDocumentResolution(link, "external"))
 
 
 def test_runtime_write_audit_has_no_known_global_judger_outputs():

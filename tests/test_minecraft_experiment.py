@@ -273,6 +273,15 @@ def test_minecraft_meta_execute_requires_non_empty_task_scenario(tmp_path):
     assert not (tmp_path / "result").exists()
 
 
+@pytest.mark.parametrize("document_file", [0, False, [], {}])
+def test_minecraft_config_rejects_non_string_document_file(document_file):
+    config = _minecraft_config("invalid_document")
+    config["document_file"] = document_file
+
+    with pytest.raises(ValueError, match="document_file must be a string or null"):
+        validate_minecraft_config(config)
+
+
 @pytest.mark.parametrize("timeout", [None, 0, -1, float("nan"), float("inf"), True])
 def test_minecraft_execute_requires_positive_finite_timeout(tmp_path, timeout):
     config_path = _write_minecraft_config(tmp_path)

@@ -203,7 +203,7 @@ def test_start_with_config_run_uses_ollama_defaults_without_api_key_list(monkeyp
         dig_needed=False,
         max_task_num=1,
         task_goal="build a hut",
-        document_file="missing_document.json",
+        document_file="",
         host="127.0.0.1",
         port=40000,
         task_name="ollama_no_key_smoke",
