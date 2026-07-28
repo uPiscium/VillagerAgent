@@ -92,6 +92,10 @@ def test_build_bundle_sanitizes_and_accounts_for_source_runs(tmp_path, monkeypat
     assert provenance["environment_notes"] == (
         "sanitized_derivative=true; bundle_id=comparison-bundle; full_comparison=true"
     )
+    assert str(tmp_path) not in (output / "command.txt").read_text(encoding="utf-8")
+    assert str(tmp_path) not in (output / "provenance.json").read_text(encoding="utf-8")
+    public_input = json.loads((output / "evidence/input.json").read_text(encoding="utf-8"))
+    assert public_input["observations"][0]["run_manifest"] == "runs/source/artifact_manifest.json"
     public_diagnostics = json.loads((output / "evidence/diagnostics.json").read_text(encoding="utf-8"))
     assert public_diagnostics["run_manifest"] == "runs/source/artifact_manifest.json"
 

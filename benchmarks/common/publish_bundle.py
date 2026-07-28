@@ -38,6 +38,8 @@ DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_BUNDLE_BYTES = 500 * 1024 * 1024
 _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _PUBLIC_SUFFIXES = {".csv", ".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"}
+_RUNTIME_TASK_SNAPSHOT = Path("runtime_dual_dag_snapshot.json")
+_PUBLIC_TASK_SNAPSHOT = Path("task_lifecycle_snapshot.json")
 _FORBIDDEN_PATH_PARTS = {
     ".git",
     ".runtime",
@@ -86,6 +88,9 @@ _SECRET_PATTERNS = (
 )
 _INLINE_CREDENTIAL = re.compile(
     r"(?i)((?:--api[-_]?key|--authorization|--password|--secret|--token)(?:=|\s+))(?!\[REDACTED\])\S+"
+)
+_LOCAL_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9_:/.-])/(?:etc|home|nix|opt|root|tmp|usr|var|workspace|Users)(?:/[^\s\"']*)?"
 )
 _PAPER_RESULT = re.compile(r"<!--\s*paper-result:\s*([A-Za-z0-9_.-]+)\s*-->")
 _BENCHMARK_RESULT = re.compile(r"<!--\s*benchmark-result:\s*([A-Za-z0-9_.-]+)\s*-->")
@@ -403,11 +408,25 @@ def _validate_minecraft_judged_summaries(paths: list[Path]) -> None:
             raise PublicBundleValidationError(
                 f"Judged success controller still has active assignments: {summary_path}"
             )
-        if score.get("attempt_id") != summary.get("attempt_id"):
+        expected_score_attempt_id = summary.get("attempt_id")
+        publication_source_path = summary_path.parent / "publication_source.json"
+        if publication_source_path.exists():
+            try:
+                publication_source = json.loads(
+                    publication_source_path.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                raise PublicBundleValidationError(
+                    f"Judged success publication source is unavailable: {summary_path}"
+                ) from exc
+            expected_score_attempt_id = publication_source.get("source_attempt_id")
+        if score.get("attempt_id") != expected_score_attempt_id:
             raise PublicBundleValidationError(
                 f"Judged success score attempt mismatch: {summary_path}"
             )
-        snapshot_path = summary_path.parent / "runtime_dual_dag_snapshot.json"
+        snapshot_path = summary_path.parent / _PUBLIC_TASK_SNAPSHOT
+        if not snapshot_path.exists():
+            snapshot_path = summary_path.parent / _RUNTIME_TASK_SNAPSHOT
         try:
             snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -495,6 +514,8 @@ def derive_public_bundle(source_dir: Path, destination_dir: Path) -> BundleValid
             environment_notes="sanitized_derivative=true",
         )
         finalize_provenance(destination_dir, status="success")
+        provenance_path = destination_dir / "provenance.json"
+        sanitize_public_artifact(provenance_path)
         finalize_run_directory(
             destination_dir,
             attempt_id=attempt_id,
@@ -512,6 +533,11 @@ def derive_public_bundle(source_dir: Path, destination_dir: Path) -> BundleValid
         )
         raise
     return validate_public_bundle(destination_dir)
+
+
+def sanitize_public_artifact(path: Path) -> None:
+    """Remove non-public values from a generated text artifact in place."""
+    _write_sanitized_artifact(path, path)
 
 
 def build_deterministic_archive(
@@ -714,6 +740,8 @@ def check_paper_result_archives(
 
 
 def _is_private_source_path(relative: Path) -> bool:
+    if relative == _RUNTIME_TASK_SNAPSHOT:
+        return False
     if relative.name in {ARTIFACT_MANIFEST_FILE, COMPLETION_MARKER_FILE}:
         return True
     lowered = {part.lower() for part in relative.parts}
@@ -726,6 +754,8 @@ def _is_private_source_path(relative: Path) -> bool:
 
 
 def _derived_relative_path(relative: Path) -> Path:
+    if relative == _RUNTIME_TASK_SNAPSHOT:
+        return _PUBLIC_TASK_SNAPSHOT
     if len(relative.parts) == 1 and relative.name == "provenance.json":
         return Path("source_provenance.json")
     if len(relative.parts) == 1 and relative.name == "command.txt":
@@ -783,6 +813,8 @@ def _sanitize_value(value: Any) -> Any:
     if isinstance(value, list):
         sanitized = [_sanitize_value(item) for item in value]
         return [item for item in sanitized if item is not None]
+    if isinstance(value, str):
+        return _LOCAL_ABSOLUTE_PATH.sub("[LOCAL_PATH]", value)
     return value
 
 
@@ -806,6 +838,7 @@ def _sanitize_scalar_for_key(key: str, value: Any) -> Any:
 
 
 def _sanitize_text(text: str) -> str:
+    text = _LOCAL_ABSOLUTE_PATH.sub("[LOCAL_PATH]", text)
     text = _INLINE_CREDENTIAL.sub(lambda match: match.group(1) + "[REDACTED]", text)
     lines = []
     assignment = re.compile(r"^(\s*)([A-Za-z0-9_-]+)(\s*[:=]\s*)(.*)$")
@@ -865,6 +898,10 @@ def _scan_public_file(path: Path, relative: Path) -> None:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise PublicBundleValidationError(f"Binary public artifact is not allowed: {relative}") from exc
+    if _LOCAL_ABSOLUTE_PATH.search(text):
+        raise PublicBundleValidationError(
+            f"Absolute local path detected in public artifact: {relative}"
+        )
     for pattern in _SECRET_PATTERNS:
         if pattern.search(text):
             raise PublicBundleValidationError(f"credential pattern detected in {relative}")
