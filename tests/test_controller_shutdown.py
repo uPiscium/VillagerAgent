@@ -192,7 +192,7 @@ def test_worker_does_not_pop_queue_after_terminal_observation():
 
     worker.start()
     deadline = time.monotonic() + 1
-    while not controller._judger_terminal_observed and time.monotonic() < deadline:
+    while not controller._judger_terminal_pending and time.monotonic() < deadline:
         time.sleep(0.01)
     controller._request_shutdown()
     worker.join(1)
@@ -218,15 +218,61 @@ def test_terminal_detection_closes_tool_barrier_before_waiting_for_active_action
 
     assert controller._judger_terminal_pending is True
     assert controller._judger_terminal_observed is False
+    observation.join(1)
+    assert not observation.is_alive()
+    assert observation_result == [True]
     with pytest.raises(ToolActionBlockedError, match="after judger terminal"):
         controller._begin_tool_action()
 
     controller._end_tool_action()
-    observation.join(1)
-
-    assert not observation.is_alive()
-    assert observation_result == [True]
+    assert controller.reconcile_judger_terminal() is True
     assert controller._judger_terminal_observed is True
+
+
+def test_terminal_pending_blocks_assignment_queue_handoff_and_submission():
+    controller, _, _, task = _judged_reconciliation_controller()
+    agent = SimpleNamespace(name="Alice", supports_cooperative_cancellation=lambda: False)
+    queued = TaskExecutionGroup(task=task, agents=[agent])
+    controller.task_queue.append(queued)
+    controller.observe_judger_terminal()
+
+    assert controller.execute_assignments([{
+        "task_instance": task,
+        "agent_instances": [agent],
+    }]) == 0
+    assert controller._take_and_start_next_execution_group() is False
+    with pytest.raises(ControllerShutdownError, match="after judger terminal"):
+        controller.start_execution_group(queued)
+
+    assert controller.task_queue == [queued]
+    assert controller.result_queue == []
+    assert queued.futures == {}
+
+
+def test_active_tool_drain_timeout_does_not_publish_judged_success():
+    controller, manager, _, task = _judged_reconciliation_controller()
+    controller.assignment["Alice"] = task.id
+    controller.judger_tool_drain_grace_period = 0
+    controller._begin_tool_action()
+    controller.observe_judger_terminal()
+
+    try:
+        with pytest.raises(ControllerShutdownError, match="tool action.*remained active"):
+            controller.reconcile_judger_terminal()
+    finally:
+        controller._end_tool_action()
+
+    snapshot = manager.runtime_task_store.snapshot()
+    assert snapshot["summary"]["terminal_state"] == "running"
+    assert snapshot["nodes"][0]["lifecycle"]["active_agents"] == ["Alice"]
+    assert controller.assignment == {"Alice": task.id}
+    assert controller._terminal_barrier_context() == {
+        "pending": True,
+        "observed": False,
+        "detected_at": controller._judger_terminal_detected_at,
+        "active_tool_actions": 0,
+        "tool_drain_timed_out": True,
+    }
 
 
 @pytest.mark.parametrize("task_count", [0, 2])
@@ -736,7 +782,10 @@ def _controller():
     controller._judger_terminal_pending = False
     controller._judger_terminal_observed = False
     controller._judger_terminal_payload = None
+    controller._judger_terminal_detected_at = None
     controller._judger_terminal_observed_at = None
+    controller._tool_drain_timed_out = False
+    controller.judger_tool_drain_grace_period = 0.2
     controller._judger_terminal_reconciled = False
     controller.controller_state = GlobalController.STATE_RUNNING
     controller.shutdown_complete = False

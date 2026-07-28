@@ -62,6 +62,7 @@ class GlobalController:
     - max_workers (int): The maximum number of workers in the thread pool. Default is 4.
     '''
     STATE_RUNNING = "running"
+    STATE_JUDGER_TERMINAL_PENDING = "judger_terminal_pending"
     STATE_JUDGER_TERMINAL_OBSERVED = "judger_terminal_observed"
     STATE_DRAINING = "draining"
     STATE_RECONCILING = "reconciling"
@@ -161,7 +162,10 @@ class GlobalController:
         self.cancellation_grace_period = 5.0
         self._run_started = False
         self._judger_terminal_payload = None
+        self._judger_terminal_detected_at = None
         self._judger_terminal_observed_at = None
+        self._tool_drain_timed_out = False
+        self.judger_tool_drain_grace_period = 120.0
         self._judger_terminal_reconciled = False
         self.controller_state = self.STATE_RUNNING
         self.shutdown_complete = False
@@ -203,31 +207,63 @@ class GlobalController:
     def should_shutdown(self):
         return self.shutdown_event.is_set()
 
+    def _execution_admission_closed(self) -> bool:
+        return bool(
+            getattr(self, "_judger_terminal_pending", False)
+            or getattr(self, "_judger_terminal_observed", False)
+            or self.shutdown_event.is_set()
+        )
+
     def observe_judger_terminal(self) -> bool:
         with self._tool_action_condition:
-            if self._judger_terminal_observed:
+            if self._judger_terminal_pending or self._judger_terminal_observed:
                 return True
             if not hasattr(self.env, "is_task_complete") or not self.env.is_task_complete():
                 return False
             payload = self.env.get_score()
             self._validate_judger_payload_ownership(payload)
-            self._judger_terminal_pending = True
-            while self._active_tool_actions:
-                self._tool_action_condition.wait()
-            self.logger.info("judged task reached terminal score status")
             self._judger_terminal_payload = dict(payload)
+            self._judger_terminal_pending = True
+            self._judger_terminal_detected_at = time.monotonic()
+            self.controller_state = self.STATE_JUDGER_TERMINAL_PENDING
+            self._tool_action_condition.notify_all()
+            return True
+
+    def _drain_active_tool_actions(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        with self._tool_action_condition:
+            if self._active_tool_actions == 0:
+                return True
+            detected_at = self._judger_terminal_detected_at or now
+            grace_period = getattr(
+                self,
+                "judger_tool_drain_grace_period",
+                self.shutdown_grace_period,
+            )
+            if now - detected_at < grace_period:
+                return False
+            self._tool_drain_timed_out = True
+            raise ControllerShutdownError(
+                "judger reached terminal status but "
+                f"{self._active_tool_actions} Minecraft tool action(s) remained active"
+            )
+
+    def _mark_judger_terminal_observed(self) -> None:
+        with self._tool_action_condition:
+            if self._judger_terminal_observed:
+                return
+            if self._active_tool_actions:
+                raise ControllerShutdownError(
+                    "Cannot observe judger terminal status while Minecraft tools remain active"
+                )
+            self.logger.info("judged task reached terminal score status")
             self._judger_terminal_observed = True
             self._judger_terminal_observed_at = time.monotonic()
             self.controller_state = self.STATE_JUDGER_TERMINAL_OBSERVED
-            return True
 
     def _begin_tool_action(self) -> None:
         with self._tool_action_condition:
-            if (
-                self._judger_terminal_pending
-                or self._judger_terminal_observed
-                or self.shutdown_event.is_set()
-            ):
+            if self._execution_admission_closed():
                 from env.minecraft_client import ToolActionBlockedError
                 raise ToolActionBlockedError(
                     "Cannot start Minecraft tool action after judger terminal detection"
@@ -329,7 +365,7 @@ class GlobalController:
     
     def execute_assignments(self, validated_assignments):
         with self._execution_state_lock:
-            if self._judger_terminal_observed or self.shutdown_event.is_set():
+            if self._execution_admission_closed():
                 return 0
             assigned_count = 0
             for assignment in validated_assignments:
@@ -357,16 +393,16 @@ class GlobalController:
 
     def start_execution_group(self, group: TaskExecutionGroup, *, enqueue: bool = True) -> None:
         with self._execution_state_lock:
-            if self._judger_terminal_observed:
+            if self._execution_admission_closed():
                 raise ControllerShutdownError(
-                    "Cannot start execution after judger terminal observation"
+                    "Cannot start execution after judger terminal detection or controller shutdown"
                 )
             with self.result_list_lock:
                 if enqueue:
                     self.result_queue.append(group)
                 group.started_at = time.time()
                 for agent in group.agents:
-                    if self.shutdown_event.is_set():
+                    if self._execution_admission_closed():
                         raise ControllerShutdownError(
                             f"Task {group.task.description} submission interrupted by controller shutdown"
                         )
@@ -388,7 +424,7 @@ class GlobalController:
 
     def _take_and_start_next_execution_group(self) -> bool:
         with self._execution_state_lock:
-            if self._judger_terminal_observed or self.shutdown_event.is_set():
+            if self._execution_admission_closed():
                 return False
             with self.task_list_lock:
                 if not self.task_queue:
@@ -580,6 +616,10 @@ class GlobalController:
         group.completed = True
 
     def reconcile_judger_terminal(self) -> bool:
+        if self._judger_terminal_pending and not self._judger_terminal_observed:
+            if not self._drain_active_tool_actions():
+                return False
+            self._mark_judger_terminal_observed()
         if not self._judger_terminal_observed:
             return False
         if self._judger_terminal_reconciled:
@@ -604,7 +644,11 @@ class GlobalController:
 
         group = matching_groups[0] if matching_groups else None
         now = time.monotonic()
-        observed_at = self._judger_terminal_observed_at or now
+        observed_at = (
+            self._judger_terminal_detected_at
+            or self._judger_terminal_observed_at
+            or now
+        )
         drain_grace = getattr(
             self, "judger_drain_grace_period", self.shutdown_grace_period
         )
@@ -726,6 +770,9 @@ class GlobalController:
         while True:
             if self.should_shutdown():
                 break
+            if self._execution_admission_closed():
+                self.shutdown_event.wait(self.query_interval)
+                continue
             if self.observe_judger_terminal():
                 self.shutdown_event.wait(self.query_interval)
                 continue
@@ -813,7 +860,7 @@ class GlobalController:
 
     def assign_runnable_tasks(self):
         with self._execution_state_lock:
-            if self._judger_terminal_observed or self.shutdown_event.is_set():
+            if self._execution_admission_closed():
                 return 0
             assigned_count = 0
             for task_id, task in enumerate(self.task_list):
@@ -862,6 +909,9 @@ class GlobalController:
         while True:
             if self.should_shutdown():
                 break
+            if self._execution_admission_closed():
+                self.shutdown_event.wait(self.query_interval)
+                continue
             if self.observe_judger_terminal():
                 self.shutdown_event.wait(self.query_interval)
                 continue
@@ -993,6 +1043,7 @@ class GlobalController:
             "active_task_ids": active_task_ids,
             "active_agent_ids": active_agent_ids,
             "incomplete_submission_task_ids": incomplete_submission_task_ids,
+            "terminal_barrier": self._terminal_barrier_context(),
         }
         if not shutdown_complete or interrupted_task_ids:
             message = "Controller shutdown incomplete"
@@ -1010,6 +1061,7 @@ class GlobalController:
                 "active_task_ids": active_task_ids,
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
+                "terminal_barrier": self._terminal_barrier_context(),
             })
             setattr(self._first_failure[0], "controller_shutdown_context", {
                 "shutdown_complete": shutdown_complete,
@@ -1019,6 +1071,7 @@ class GlobalController:
                 "active_task_ids": active_task_ids,
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
+                "terminal_barrier": self._terminal_barrier_context(),
             })
 
         try:
@@ -1047,6 +1100,16 @@ class GlobalController:
                 payload=failure,
             )
         raise exc.with_traceback(exc_traceback)
+
+    def _terminal_barrier_context(self) -> dict:
+        with self._tool_action_condition:
+            return {
+                "pending": self._judger_terminal_pending,
+                "observed": self._judger_terminal_observed,
+                "detected_at": self._judger_terminal_detected_at,
+                "active_tool_actions": self._active_tool_actions,
+                "tool_drain_timed_out": self._tool_drain_timed_out,
+            }
 
     def _finalize_shutdown_groups(self):
         interrupted_task_ids = []
