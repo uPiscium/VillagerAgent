@@ -293,6 +293,27 @@ def test_portable_local_path_detector_and_sanitizer(value):
 @pytest.mark.parametrize(
     "value",
     [
+        "cwd: /tmp",
+        "root=/root",
+        "Generated in /srv",
+        "Copied from /etc",
+        "/mnt",
+    ],
+)
+def test_single_segment_local_path_detector_and_sanitizer(value):
+    assert contains_local_absolute_path(value) is True
+    assert "[LOCAL_PATH]" in sanitize_local_paths(value)
+
+
+@pytest.mark.parametrize("key,value", [("path", "/tmp"), ("root", "/root")])
+def test_single_segment_path_like_values_are_local(key, value):
+    assert contains_local_absolute_path(value, key=key) is True
+    assert sanitize_local_paths(value, key=key) == "[LOCAL_PATH]"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "https://example.com/path",
         "http://example.com/path",
         "s3://bucket/key",
@@ -308,6 +329,23 @@ def test_portable_local_path_detector_and_sanitizer(value):
 def test_portable_local_path_detector_preserves_public_references(value):
     assert contains_local_absolute_path(value, key="path") is False
     assert sanitize_local_paths(value, key="path") == value
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        (None, "GET /health"),
+        (None, "/give"),
+        ("input", "/give Alice stone"),
+        (None, "Run /give Alice stone"),
+        (None, "#/components/schemas/Task"),
+        (None, "/components/schemas/Task under $ref"),
+        (None, "1/2"),
+    ],
+)
+def test_single_segment_detector_preserves_commands_and_references(key, value):
+    assert contains_local_absolute_path(value, key=key) is False
+    assert sanitize_local_paths(value, key=key) == value
 
 
 @pytest.mark.parametrize("value", ["/components/schemas/Task", "#/components/schemas/Task"])
@@ -328,6 +366,24 @@ def test_portable_local_path_detector_preserves_json_pointer(value):
     ],
 )
 def test_validator_rejects_portable_local_paths_in_all_text_formats(tmp_path, name, content):
+    bundle = _bundle(tmp_path, extra={name: content})
+
+    with pytest.raises(PublicBundleValidationError, match="Absolute local path"):
+        validate_public_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("single.json", {"path": "/tmp"}),
+        ("single.jsonl", '{"root":"/root"}\n'),
+        ("single.csv", "event,path\nstep,/root\n"),
+        ("single.yaml", "cwd: /tmp\n"),
+        ("single.md", "Generated in /srv\n"),
+        ("single.txt", "/mnt\n"),
+    ],
+)
+def test_validator_rejects_single_segment_paths_in_all_text_formats(tmp_path, name, content):
     bundle = _bundle(tmp_path, extra={name: content})
 
     with pytest.raises(PublicBundleValidationError, match="Absolute local path"):
