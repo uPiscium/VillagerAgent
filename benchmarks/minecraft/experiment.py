@@ -1154,7 +1154,11 @@ def _terminate_runtime_process(
         killed = True
     process_alive_after_kill = process.is_alive()
     process_group_alive_after_kill = (
-        process_group_id is not None and _process_group_exists(process_group_id)
+        process_group_id is not None
+        and not _wait_for_process_group_exit(
+            process_group_id,
+            timeout_seconds=grace_seconds,
+        )
     )
     return {
         "exit_code": process.exitcode,
@@ -1196,6 +1200,19 @@ def _process_group_exists(process_group_id: int) -> bool:
         return False
     except PermissionError:
         return True
+    return True
+
+
+def _wait_for_process_group_exit(
+    process_group_id: int,
+    *,
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while _process_group_exists(process_group_id):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
     return True
 
 
