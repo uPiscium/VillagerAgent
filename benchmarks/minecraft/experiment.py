@@ -293,6 +293,7 @@ def _run_minecraft_experiment_attempt(
     runtime_process = {}
     runtime_primary_error = {}
     runtime_cleanup_state = {}
+    bridge_cleanup = {}
     child_protocol = {}
     server_lock_acquired = False
     server_lock_released = False
@@ -348,6 +349,7 @@ def _run_minecraft_experiment_attempt(
             )
         runtime_result = runtime_result or persisted_runtime_result
         runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
+        bridge_cleanup = _public_bridge_cleanup(runtime_result.get("bridge_cleanup"))
         child_protocol = child_protocol or runtime_result.get("child_protocol", {})
         action_log_available = isinstance(runtime_result.get("action_log"), dict)
         action_log = runtime_result.get("action_log") if action_log_available else {}
@@ -507,6 +509,7 @@ def _run_minecraft_experiment_attempt(
         ),
         "runtime_primary_error": runtime_primary_error,
         "runtime_cleanup_state": runtime_cleanup_state,
+        "bridge_cleanup": bridge_cleanup,
         "child_protocol": sanitize_public_value(child_protocol),
         "controller_shutdown_complete": bool(
             runtime_result.get("controller", {}).get("shutdown_complete", False)
@@ -1258,6 +1261,25 @@ def _primary_error_metadata(error: BaseException | None) -> dict:
     return {
         "error_type": error.__class__.__name__,
         "message": str(error),
+    }
+
+
+def _public_bridge_cleanup(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    processes = value.get("processes")
+    public_processes = {}
+    if isinstance(processes, dict):
+        for name, metadata in processes.items():
+            if not isinstance(name, str) or not isinstance(metadata, dict):
+                continue
+            public_processes[name] = {
+                key: bool(metadata.get(key, False))
+                for key in ("terminated", "killed", "alive_after_kill")
+            }
+    return {
+        "cleanup_complete": bool(value.get("cleanup_complete", False)),
+        "processes": public_processes,
     }
 
 
