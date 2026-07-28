@@ -2,6 +2,9 @@ import json
 import os
 from types import SimpleNamespace
 
+import pytest
+from langchain.agents import tool
+
 from env.env import VillagerBench, env_type
 from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
 from env.minecraft_client import Agent as MinecraftAgent
@@ -132,6 +135,45 @@ def test_judger_terminal_writer_rejects_missing_identity(tmp_path):
         assert "missing: attempt_id" in str(exc)
     else:
         raise AssertionError("terminal score without explicit ownership must be rejected")
+
+
+def test_environment_guarded_tool_balances_action_barrier():
+    environment = object.__new__(VillagerBench)
+    calls = []
+    environment._tool_action_enter = lambda: calls.append("enter")
+    environment._tool_action_exit = lambda: calls.append("exit")
+
+    @tool
+    def sample_action(value: int) -> dict:
+        """Return the supplied value."""
+        calls.append(("action", value))
+        return {"message": str(value), "status": True}
+
+    guarded = environment.guard_tool_actions([sample_action])[0]
+
+    assert guarded.invoke({"value": 3}) == {"message": "3", "status": True}
+    assert calls == ["enter", ("action", 3), "exit"]
+
+
+def test_environment_guarded_tool_does_not_run_after_barrier_rejection():
+    environment = object.__new__(VillagerBench)
+    calls = []
+    environment._tool_action_enter = lambda: (_ for _ in ()).throw(
+        RuntimeError("barrier closed")
+    )
+    environment._tool_action_exit = lambda: calls.append("exit")
+
+    @tool
+    def sample_action(value: int) -> dict:
+        """Return the supplied value."""
+        calls.append(("action", value))
+        return {"message": str(value), "status": True}
+
+    guarded = environment.guard_tool_actions([sample_action])[0]
+
+    with pytest.raises(RuntimeError, match="barrier closed"):
+        guarded.invoke({"value": 3})
+    assert calls == []
 
 
 def test_environment_escalates_persistently_invalid_status(tmp_path):

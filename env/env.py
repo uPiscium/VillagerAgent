@@ -1,5 +1,7 @@
 from env.minecraft_client import Agent
 from contextlib import contextmanager
+from copy import copy
+from functools import wraps
 import traceback
 import names
 import subprocess
@@ -62,6 +64,8 @@ class VillagerBench:
         self.base_port = 5000
         self.op_path = ""
         self.meta_diagnostics_dir = None
+        self._tool_action_enter = lambda: None
+        self._tool_action_exit = lambda: None
         atomic_write_json(self.runtime_paths.score, {})
         atomic_write_json(self.runtime_paths.action_log, {})
         atomic_write_json(self.runtime_paths.llm_inference, {"time": 0})
@@ -261,7 +265,7 @@ class VillagerBench:
         '''
         register the agent to the environment
         '''
-        agent_tool = list(agent_tool or ())
+        agent_tool = self.guard_tool_actions(agent_tool or ())
         name_list = list(name_list or ())
         if len(name_list) != agent_number:
             self.logger.warning(
@@ -281,6 +285,30 @@ class VillagerBench:
                 agent.tool = agent_tool
             self.agent_pool.append(agent)
             self.log[agent.name] = []
+
+    def configure_tool_action_barrier(self, enter, exit) -> None:
+        self._tool_action_enter = enter
+        self._tool_action_exit = exit
+
+    def guard_tool_actions(self, tools) -> list:
+        return [self._guard_tool_action(tool) for tool in tools]
+
+    def _guard_tool_action(self, tool):
+        original = getattr(tool, "func", None)
+        if not callable(original):
+            return tool
+        guarded_tool = copy(tool)
+
+        @wraps(original)
+        def guarded(*args, **kwargs):
+            self._tool_action_enter()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                self._tool_action_exit()
+
+        guarded_tool.func = guarded
+        return guarded_tool
 
     def launch(self, debug: bool = False, fast_api=False):
         Agent.launch(

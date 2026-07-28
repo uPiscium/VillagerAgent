@@ -23,6 +23,7 @@ from numbers import Integral, Real
 from pathlib import Path
 from model.utils import extract_info
 from env.runtime_paths import RuntimePaths, atomic_write_json
+from env.minecraft_client import ToolActionBlockedError
 
 class AgentFeedback:
     def __init__(self, task:Task, detail, status):
@@ -466,6 +467,9 @@ class BaseAgent:
                 self.IDLE = True
                 self.logger.error("ConnectionRefusedError")
                 raise ConnectionRefusedError
+            except ToolActionBlockedError:
+                self.IDLE = True
+                raise
             except Exception as e:
                 last_error = e
                 self.logger.error(f"Error: {e}")
@@ -648,6 +652,9 @@ class BaseAgent:
 
                 try:
                     tool_feedback = target_tool(tool_input)
+                except ToolActionBlockedError:
+                    fail("cancelled", "Tool action was blocked by judged terminal status.")
+                    break
                 except Exception as error:
                     last_failure = {"reason": "tool_exception", "message": str(error)}
                     fail("tool_exception", f"Tool {func_name} failed: {error}")

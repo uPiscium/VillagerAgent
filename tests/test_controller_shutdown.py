@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from pipeline.controller_tiny import ControllerShutdownError, GlobalController, TaskExecutionGroup
+from env.minecraft_client import ToolActionBlockedError
 from pipeline.runtime_events import InMemoryRuntimeEventRecorder
 from pipeline.task_manager import TaskManager
 from type_define.graph import Task
@@ -200,6 +201,32 @@ def test_worker_does_not_pop_queue_after_terminal_observation():
     assert not worker.is_alive()
     assert controller.task_queue == [group]
     assert controller.result_queue == []
+
+
+def test_terminal_detection_closes_tool_barrier_before_waiting_for_active_action():
+    controller, _, _, _ = _judged_reconciliation_controller()
+    controller._begin_tool_action()
+    observation_result = []
+    observation = threading.Thread(
+        target=lambda: observation_result.append(controller.observe_judger_terminal())
+    )
+
+    observation.start()
+    deadline = time.monotonic() + 1
+    while not controller._judger_terminal_pending and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert controller._judger_terminal_pending is True
+    assert controller._judger_terminal_observed is False
+    with pytest.raises(ToolActionBlockedError, match="after judger terminal"):
+        controller._begin_tool_action()
+
+    controller._end_tool_action()
+    observation.join(1)
+
+    assert not observation.is_alive()
+    assert observation_result == [True]
+    assert controller._judger_terminal_observed is True
 
 
 @pytest.mark.parametrize("task_count", [0, 2])
@@ -704,6 +731,9 @@ def _controller():
     controller._controller_threads = []
     controller._run_started = False
     controller._execution_state_lock = threading.RLock()
+    controller._tool_action_condition = threading.Condition(controller._execution_state_lock)
+    controller._active_tool_actions = 0
+    controller._judger_terminal_pending = False
     controller._judger_terminal_observed = False
     controller._judger_terminal_payload = None
     controller._judger_terminal_observed_at = None
