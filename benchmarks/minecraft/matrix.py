@@ -17,7 +17,12 @@ from benchmarks.experiment_provenance import (
     standard_run_name,
     write_provenance,
 )
-from benchmarks.minecraft.experiment import TASK_SELECTION_POLICIES, run_minecraft_experiment, validate_minecraft_config
+from benchmarks.minecraft.experiment import (
+    TASK_SELECTION_POLICIES,
+    _require_positive_finite_timeout,
+    run_minecraft_experiment,
+    validate_minecraft_config,
+)
 
 
 DEFAULT_MATRIX_OUTPUT_ROOT = Path("result/minecraft_matrix")
@@ -37,6 +42,10 @@ def run_minecraft_matrix(
     command_text: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
+    if execute:
+        execute_timeout_seconds = _require_positive_finite_timeout(
+            execute_timeout_seconds
+        )
     attempt_state: dict = {}
     try:
         return _run_minecraft_matrix_attempt(

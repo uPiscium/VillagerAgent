@@ -31,6 +31,29 @@ class ToolActionBlockedError(RuntimeError):
     pass
 
 
+class MinecraftToolTimeoutError(TimeoutError):
+    pass
+
+
+DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS = 5.0
+DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS = 30.0
+
+
+def _minecraft_request(method: str, url: str, **kwargs):
+    timeout = kwargs.pop("timeout", None) or (
+        Agent.minecraft_connect_timeout_seconds,
+        Agent.minecraft_read_timeout_seconds,
+    )
+    try:
+        return requests.request(method, url, timeout=timeout, **kwargs)
+    except requests.Timeout as exc:
+        tool_name = url.rstrip("/").rsplit("/", 1)[-1]
+        Agent.last_tool_timeout = {"tool": tool_name}
+        raise MinecraftToolTimeoutError(
+            f"Minecraft tool request timed out: {tool_name}"
+        ) from exc
+
+
 def filter_emoji(text: str) -> str:
     ret_str = []
     for c in text:
@@ -175,7 +198,7 @@ def timeit(func):
             "emotion": emotion,
             "murmur": murmur,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         ###
         kwargs_in = kwargs.copy()
         if "emotion" in kwargs:
@@ -287,6 +310,19 @@ class Agent():
     name2port = {}
     agent_process = {}
     url_prefix = {}
+    minecraft_connect_timeout_seconds = DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS
+    minecraft_read_timeout_seconds = DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS
+    last_tool_timeout = None
+
+    @classmethod
+    def tool_runtime_context(cls) -> dict:
+        return {
+            "http_timeout_seconds": {
+                "connect": cls.minecraft_connect_timeout_seconds,
+                "read": cls.minecraft_read_timeout_seconds,
+            },
+            "last_tool_timeout": cls.last_tool_timeout,
+        }
 
     @staticmethod
     def get_url_prefix() -> dict:
@@ -361,27 +397,29 @@ class Agent():
             "id": structure_idx,
             "center_pos": center_pos,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     def env(self, prompt):
         """Get the Environment Information"""
         url = Agent.get_url_prefix()[self.name] + "/post_environment"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return str(response.json())
     
     def get_environment_info_dict(player_name: str):
         """Get the Environment Information, return string contains time of day, weather"""
         url = Agent.get_url_prefix()[player_name] + "/post_environment_dict"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
     
     def ping(player_name: str):
         """Ping the Server"""
         try:
             url = Agent.get_url_prefix()[player_name] + "/post_ping"
-            response = requests.get(url)
+            response = _minecraft_request("GET", url)
             return response.json()
+        except MinecraftToolTimeoutError:
+            raise
         except Exception as e:
             return {'message': 'Exception', 'status': False}
 
@@ -424,7 +462,7 @@ class Agent():
     # def getMsg(player_name: str):
     #     """Get the Message from the Server"""
     #     url = Agent.get_url_prefix()[player_name] + "/post_msg"
-    #     response = requests.post(url, headers=Agent.headers)
+    #     response = _minecraft_request("POST", url, headers=Agent.headers)
     #     return response.json()
 
     @tool
@@ -437,7 +475,7 @@ class Agent():
             "top_y": top_y,
             "top_z": top_z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     
     @tool
@@ -450,7 +488,7 @@ class Agent():
             "top_y": top_y,
             "top_z": top_z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -466,7 +504,7 @@ class Agent():
             "y_2": y_2,
             "z_2": z_2,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     
     @tool
@@ -482,7 +520,7 @@ class Agent():
             "y_2": y_2,
             "z_2": z_2,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
 
@@ -496,7 +534,7 @@ class Agent():
             "distance": radius,
             "count": item_num,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -510,7 +548,7 @@ class Agent():
             "target_name": target_player_name,
             "item_count": item_count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -521,7 +559,7 @@ class Agent():
         data = {
             "name": target_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -532,7 +570,7 @@ class Agent():
         data = {
             "name": building_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -543,7 +581,7 @@ class Agent():
         data = {
             "name": animal_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -556,7 +594,7 @@ class Agent():
             "y": y,
             "z": z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     
     def _navigateTo(player_name: str, x: int, y: int, z: int):
@@ -567,7 +605,7 @@ class Agent():
             "y": y,
             "z": z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -579,7 +617,7 @@ class Agent():
             "item_name": item_name.lower().replace(" ", "_"),
             "entity_name": entity_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     
     @tool
@@ -593,7 +631,7 @@ class Agent():
             "y": y,
             "z": z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -601,7 +639,7 @@ class Agent():
     def sleep(player_name: str, emotion: list, murmur: str):
         """Go to Sleep"""
         url = Agent.get_url_prefix()[player_name] + "/post_sleep"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
     @tool
@@ -609,7 +647,7 @@ class Agent():
     def wake(player_name: str, emotion: list, murmur: str):
         """Wake Up"""
         url = Agent.get_url_prefix()[player_name] + "/post_wake"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
     @tool
@@ -622,7 +660,7 @@ class Agent():
             "y": y,
             "z": z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -637,7 +675,7 @@ class Agent():
             "z": z,
             "facing": facing,
         }            
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     @tool
     @timeit
@@ -647,7 +685,7 @@ class Agent():
         data = {
             "name": target_name.lower().replace(" ", "_"),
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -659,7 +697,7 @@ class Agent():
             "slot": slot,
             "item_name": item_name.lower().replace(" ", "_"),
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -671,7 +709,7 @@ class Agent():
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -679,7 +717,7 @@ class Agent():
     def get_environment_info(player_name: str, emotion: list, murmur: str):
         """Get the Environment Information, return string contains time of day, weather"""
         url = Agent.get_url_prefix()[player_name] + "/post_environment"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
     @tool
@@ -690,7 +728,7 @@ class Agent():
         data = {
             "name": target_name.lower().replace(" ", "_"),
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -703,7 +741,7 @@ class Agent():
             "from_name": from_name.lower().replace(" ", "_"),
             "item_count": item_count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -716,7 +754,7 @@ class Agent():
             "to_name": to_name.lower().replace(" ", "_"),
             "item_count": item_count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -729,7 +767,7 @@ class Agent():
             "item_count": item_count,
             "fuel_item_name": fuel_item_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -741,7 +779,7 @@ class Agent():
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -753,7 +791,7 @@ class Agent():
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -766,7 +804,7 @@ class Agent():
             "with_name": with_name,
             "count": count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -778,7 +816,7 @@ class Agent():
             "item_name": item_name.lower().replace(" ", "_"),
             "material": material.lower().replace(" ", "_"),
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -789,7 +827,7 @@ class Agent():
         data = {
             "item_name": item_name.lower().replace(" ", "_"),
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -801,7 +839,7 @@ class Agent():
             "item_name": item_name.lower().replace(" ", "_"),
             "count": count,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -813,7 +851,7 @@ class Agent():
             "slot": slot,
             "item_name": item_name.lower().replace(" ", "_"),
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     
     @tool
@@ -828,7 +866,7 @@ class Agent():
         data = {
             "item_name": container_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
 
@@ -846,7 +884,7 @@ class Agent():
         data = {
             "item_name": item_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -861,7 +899,7 @@ class Agent():
         data = {
             "item_name": item_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -877,7 +915,7 @@ class Agent():
             "y": y,
             "z": z,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -888,7 +926,7 @@ class Agent():
         data = {
             "entity_name": entity_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -896,7 +934,7 @@ class Agent():
     def dismountEntity(player_name: str, emotion: list, murmur: str):
         """Dismount the Entity"""
         url = Agent.get_url_prefix()[player_name] + "/post_dismount"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
     @tool
@@ -907,7 +945,7 @@ class Agent():
         data = {
             "entity_name": entity_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -915,7 +953,7 @@ class Agent():
     def disrideEntity(player_name: str, emotion: list, murmur: str):
         """Disride the Entity"""
         url = Agent.get_url_prefix()[player_name] + "/post_disride"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
     @tool
@@ -935,7 +973,7 @@ class Agent():
             "message": message,
             "emotion": emotion,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
     
     @tool
@@ -947,7 +985,7 @@ class Agent():
             "entity_name": entity_name,
             "seconds": seconds,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -959,7 +997,7 @@ class Agent():
             "action_name": action_name,
             "seconds": seconds,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -970,7 +1008,7 @@ class Agent():
         data = {
             "name": name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     def _lookAt(player_name: str, name: str):
@@ -979,7 +1017,7 @@ class Agent():
         data = {
             "name": name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -990,7 +1028,7 @@ class Agent():
         data = {
             "fish_name": fish_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -998,7 +1036,7 @@ class Agent():
     def stopFishing(player_name: str, emotion: list, murmur: str):
         """Stop Fishing"""
         url = Agent.get_url_prefix()[player_name] + "/post_stop_fishing"
-        response = requests.post(url, headers=Agent.headers)
+        response = _minecraft_request("POST", url, headers=Agent.headers)
         return response.json()
 
     @tool
@@ -1009,7 +1047,7 @@ class Agent():
         data = {
             "name": item_name,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -1021,7 +1059,7 @@ class Agent():
             "name": item_name,
             "page": page,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     @tool
@@ -1033,7 +1071,7 @@ class Agent():
             "name": item_name,
             "content": content,
         }
-        response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+        response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
         return response.json()
 
     def update_history(self, response):
@@ -1133,6 +1171,8 @@ class Agent():
                 logging.info(filter_emoji(str(e)))
                 raise ConnectionRefusedError
             except ToolActionBlockedError:
+                raise
+            except MinecraftToolTimeoutError:
                 raise
             except Exception as e:
                 print(filter_emoji(str(e)))
@@ -1262,6 +1302,8 @@ class Agent():
                 raise ConnectionRefusedError
             except ToolActionBlockedError:
                 raise
+            except MinecraftToolTimeoutError:
+                raise
             except Exception as e:
                 print(filter_emoji(str(e)))
                 print("retrying...")
@@ -1300,12 +1342,16 @@ class Agent():
             "msg": msg,
         }
         if async_tag:
-            threading.Thread(target=requests.post, args=(url,),
-                             kwargs={"data": json.dumps(data), "headers": Agent.headers}).start()
+            threading.Thread(
+                target=_minecraft_request,
+                args=("POST", url),
+                kwargs={"data": json.dumps(data), "headers": Agent.headers},
+                daemon=True,
+            ).start()
             return {}
         else:
             time.sleep(.05)
-            response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+            response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
             return response.json()
 
 
@@ -1329,17 +1375,17 @@ if __name__ == "__main__":
         "item_name": "saddle",
         "entity_name": "horse",
     }
-    response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+    response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
     print(response.json())
     print(time.time() - start_time)
     # # print(Agent.ping("Alice"))
     # url = Agent.get_url_prefix()["Alice"] + "/post_use_on"
-    # response = requests.post(url, headers=Agent.headers)
+    # response = _minecraft_request("POST", url, headers=Agent.headers)
     # data = {
     #     "item_name": "bucket",
     #     "entity_name": "water",
     #     }
-    # response = requests.post(url, data=json.dumps(data), headers=Agent.headers)
+    # response = _minecraft_request("POST", url, data=json.dumps(data), headers=Agent.headers)
     # print(response.json)
     # response = Agent.attackTarget({"player_name":"Alice", "target_name":"panda"})
     # from langchain.chat_models import ChatOpenAI

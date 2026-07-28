@@ -4,11 +4,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import requests
 from langchain.agents import tool
 
 from env.env import VillagerBench, env_type
 from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
-from env.minecraft_client import Agent as MinecraftAgent, ToolActionBlockedError
+from env.minecraft_client import (
+    Agent as MinecraftAgent,
+    MinecraftToolTimeoutError,
+    ToolActionBlockedError,
+    _minecraft_request,
+)
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
 from start_with_config import _resolve_runtime_document_path, _with_runtime_paths
@@ -279,6 +285,73 @@ def test_minecraft_agent_does_not_retry_terminal_blocked_tool(monkeypatch):
     )
 
     with pytest.raises(ToolActionBlockedError, match="terminal barrier closed"):
+        agent.run("move", max_try_turn=10)
+    assert attempts == [True]
+
+
+@pytest.mark.parametrize("timeout_error", [requests.ConnectTimeout, requests.ReadTimeout])
+def test_minecraft_request_converts_transport_timeout(monkeypatch, timeout_error):
+    monkeypatch.setattr(
+        "env.minecraft_client.requests.request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(timeout_error("blocked")),
+    )
+    monkeypatch.setattr(MinecraftAgent, "last_tool_timeout", None)
+
+    with pytest.raises(MinecraftToolTimeoutError, match="post_action"):
+        _minecraft_request("POST", "http://localhost:5000/post_action")
+
+    assert MinecraftAgent.last_tool_timeout == {"tool": "post_action"}
+
+
+def test_minecraft_request_passes_connect_and_read_timeout(monkeypatch):
+    calls = []
+    response = object()
+    monkeypatch.setattr(
+        "env.minecraft_client.requests.request",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or response,
+    )
+
+    assert _minecraft_request("GET", "http://localhost:5000/post_ping") is response
+    assert calls[0][1]["timeout"] == (5.0, 30.0)
+
+
+def test_minecraft_client_has_no_direct_unbounded_http_calls():
+    source = (Path(__file__).resolve().parents[1] / "env" / "minecraft_client.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "requests.get(" not in source
+    assert "requests.post(" not in source
+
+
+def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch):
+    attempts = []
+    agent = object.__new__(MinecraftAgent)
+    agent.name = "Alice"
+    agent.model = "test"
+    agent.api_key_list = ["test-key"]
+    agent.llm = object()
+    agent.tools = []
+    monkeypatch.setattr(MinecraftAgent, "provider", "ollama")
+    monkeypatch.setattr(MinecraftAgent, "api_key_list", ["test-key"])
+    monkeypatch.setattr(
+        "env.minecraft_client.OllamaReasoningChatOpenAI",
+        lambda **_kwargs: object(),
+    )
+
+    class TimedOutExecutor:
+        handle_parsing_errors = False
+
+        def __call__(self, _input):
+            attempts.append(True)
+            raise MinecraftToolTimeoutError("bridge timed out")
+
+    monkeypatch.setattr(
+        "env.minecraft_client.initialize_agent",
+        lambda **_kwargs: TimedOutExecutor(),
+    )
+
+    with pytest.raises(MinecraftToolTimeoutError, match="bridge timed out"):
         agent.run("move", max_try_turn=10)
     assert attempts == [True]
 

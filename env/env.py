@@ -523,6 +523,9 @@ class VillagerBench:
                 )
             return score_result.value
 
+    def get_tool_runtime_context(self) -> dict:
+        return Agent.tool_runtime_context()
+
     def is_task_complete(self):
         if self.env_type != env_type.meta:
             return False

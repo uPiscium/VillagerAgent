@@ -166,7 +166,7 @@ class GlobalController:
         self._judger_terminal_detected_at = None
         self._judger_terminal_observed_at = None
         self._tool_drain_timed_out = False
-        self.judger_tool_drain_grace_period = 120.0
+        self.judger_tool_drain_grace_period = 45.0
         self._judger_terminal_reconciled = False
         self.controller_state = self.STATE_RUNNING
         self.shutdown_complete = False
@@ -1044,6 +1044,7 @@ class GlobalController:
             "active_agent_ids": active_agent_ids,
             "incomplete_submission_task_ids": incomplete_submission_task_ids,
             "terminal_barrier": self._terminal_barrier_context(),
+            "tool_runtime": self._tool_runtime_context(),
         }
         if not shutdown_complete or interrupted_task_ids:
             message = "Controller shutdown incomplete"
@@ -1062,6 +1063,7 @@ class GlobalController:
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
                 "terminal_barrier": self._terminal_barrier_context(),
+                "tool_runtime": self._tool_runtime_context(),
             })
             setattr(self._first_failure[0], "controller_shutdown_context", {
                 "shutdown_complete": shutdown_complete,
@@ -1072,6 +1074,7 @@ class GlobalController:
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
                 "terminal_barrier": self._terminal_barrier_context(),
+                "tool_runtime": self._tool_runtime_context(),
             })
 
         try:
@@ -1110,6 +1113,20 @@ class GlobalController:
                 "active_tool_actions": self._active_tool_actions,
                 "tool_drain_timed_out": self._tool_drain_timed_out,
             }
+
+    def _tool_runtime_context(self) -> dict:
+        collector = getattr(
+            getattr(self, "env", None),
+            "get_tool_runtime_context",
+            None,
+        )
+        if not callable(collector):
+            return {}
+        try:
+            context = collector()
+        except Exception as exc:
+            return {"collection_error": str(exc)}
+        return context if isinstance(context, dict) else {}
 
     def _finalize_shutdown_groups(self):
         interrupted_task_ids = []
