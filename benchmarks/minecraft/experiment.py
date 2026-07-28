@@ -23,6 +23,7 @@ from benchmarks.minecraft.metrics import build_minecraft_metrics
 from benchmarks.minecraft.events import build_normalized_events
 from benchmarks.minecraft.run_lock import MinecraftTargetLock, minecraft_target_lock_key
 from env.runtime_paths import RuntimePaths
+from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
 from env.minecraft_dual_dag import (
     build_minecraft_dual_dag_artifact,
     build_minecraft_runtime_decision_support,
@@ -314,20 +315,19 @@ def _run_minecraft_experiment_attempt(
         action_log = runtime_result.get("action_log") if action_log_available else {}
         score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
         if score:
-            ownership_error = _score_ownership_error(
-                score,
-                attempt_id=attempt_id,
-                task_name=runtime_launch_config["task_name"],
-            )
-            if ownership_error:
-                error = ownership_error
-                error_type = "ScoreOwnershipError"
+            try:
+                validate_score_identity(
+                    score,
+                    expected_attempt_id=attempt_id,
+                    expected_task_name=runtime_launch_config["task_name"],
+                )
+            except ScoreOwnershipError as exc:
+                if error is None:
+                    error = str(exc)
+                    error_type = "ScoreOwnershipError"
                 score = {}
             else:
-                score_ownership_verified = (
-                    score.get("attempt_id") == attempt_id
-                    and score.get("task_name") == runtime_launch_config["task_name"]
-                )
+                score_ownership_verified = True
 
     effective_settings["runtime"].update({
         "server_lock_acquired": server_lock_acquired,
@@ -443,6 +443,10 @@ def _run_minecraft_experiment_attempt(
         "progress": _progress_from_score(score),
         "score_available": bool(score),
         "score_ownership_verified": score_ownership_verified,
+        "expected_score_identity": {
+            "attempt_id": attempt_id,
+            "task_name": runtime_launch_config.get("task_name", ""),
+        },
         "meta_judger_diagnostics_available": bool(meta_judger_diagnostics),
         "load_status": _last_load_status(meta_judger_diagnostics),
         "error": error,
@@ -807,20 +811,6 @@ def _last_load_status(diagnostics: dict) -> str | None:
         return None
     last = history[-1]
     return last.get("status") if isinstance(last, dict) else None
-
-
-def _score_ownership_error(score: dict, *, attempt_id: str, task_name: str) -> str | None:
-    score_attempt_id = score.get("attempt_id")
-    if score_attempt_id is not None and score_attempt_id != attempt_id:
-        return (
-            f"score belongs to attempt {score_attempt_id!r}, expected {attempt_id!r}"
-        )
-    score_task_name = score.get("task_name")
-    if score_task_name is not None and score_task_name != task_name:
-        return (
-            f"score belongs to task {score_task_name!r}, expected {task_name!r}"
-        )
-    return None
 
 
 def validate_judged_artifact_consistency(

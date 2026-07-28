@@ -157,7 +157,7 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
     assert setting["evaluation_arg"] == evaluation_arg
 
 
-def test_runtime_result_binds_score_to_current_attempt():
+def test_runtime_result_does_not_supplement_score_identity():
     environment = type("Environment", (), {"get_score": lambda self: {"score": 100}, "get_action_log": lambda self: {}})()
 
     result = start_with_config._runtime_result(
@@ -166,8 +166,11 @@ def test_runtime_result_binds_score_to_current_attempt():
         task_name="runtime-task-a",
     )
 
-    assert result["score"]["attempt_id"] == "attempt-a"
-    assert result["score"]["task_name"] == "runtime-task-a"
+    assert result["score"] == {"score": 100}
+    assert result["expected_score_identity"] == {
+        "attempt_id": "attempt-a",
+        "task_name": "runtime-task-a",
+    }
 
 
 def test_judged_runtime_validator_accepts_consistent_success():
@@ -181,12 +184,29 @@ def test_judged_runtime_validator_accepts_consistent_success():
     [
         (lambda result: result["runtime_task_dag_snapshot"]["nodes"][0]["lifecycle"].update(active_agents=["Alice"]), "actively assigned"),
         (lambda result: result["controller"].update(shutdown_complete=False), "shutdown is incomplete"),
-        (lambda result: result["score"].update(attempt_id="stale"), "attempt does not match"),
+        (lambda result: result["score"].update(attempt_id="stale"), "score attempt mismatch"),
     ],
 )
 def test_judged_runtime_validator_rejects_cross_field_mismatch(mutation, message):
     result = _judged_runtime_result()
     mutation(result)
+
+    with pytest.raises(start_with_config.JudgedRuntimeValidationError, match=message):
+        start_with_config.validate_judged_runtime_result(result)
+
+
+@pytest.mark.parametrize(
+    ("score", "message"),
+    [
+        ({"task_name": "runtime-task-a", "status": "success"}, "missing: attempt_id"),
+        ({"attempt_id": "attempt-a", "status": "success"}, "missing: task_name"),
+        ({"attempt_id": "", "task_name": "runtime-task-a", "status": "success"}, "missing: attempt_id"),
+        ({"attempt_id": "attempt-a", "task_name": "runtime-task-a", "status": "running"}, "status must be"),
+    ],
+)
+def test_judged_runtime_validator_rejects_unverified_score_identity(score, message):
+    result = _judged_runtime_result()
+    result["score"] = score
 
     with pytest.raises(start_with_config.JudgedRuntimeValidationError, match=message):
         start_with_config.validate_judged_runtime_result(result)

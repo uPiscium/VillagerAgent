@@ -3,7 +3,7 @@ import os
 from types import SimpleNamespace
 
 from env.env import VillagerBench, env_type
-from env.judger_artifacts import TerminalArtifactWriter
+from env.judger_artifacts import ScoreOwnershipError, TerminalArtifactWriter
 from env.minecraft_client import Agent as MinecraftAgent
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from pipeline.agent import BaseAgent
@@ -103,14 +103,35 @@ def test_minecraft_interaction_history_uses_injected_runtime_path(tmp_path):
 def test_judger_terminal_artifact_cannot_be_overwritten(tmp_path):
     paths = RuntimePaths.isolated(tmp_path / "attempt")
     writer = TerminalArtifactWriter(paths, paths.run_result_dir("run-a"))
-    success = {"status": "success", "score": 100}
+    success = {
+        "attempt_id": "attempt-a",
+        "task_name": "run-a",
+        "status": "success",
+        "score": 100,
+    }
 
-    assert writer.write(success, {"attempt_id": "attempt-a"}) is True
-    assert writer.write({"status": "failure"}, {"attempt_id": "attempt-a"}) is False
+    config = {"attempt_id": "attempt-a", "task_name": "run-a"}
+    assert writer.write(success, config) is True
+    assert writer.write({"status": "failure"}, config) is False
 
     assert read_json_artifact(paths.score).value == success
     assert read_json_artifact(paths.load_status).value == {"status": "end"}
     assert read_json_artifact(paths.run_result_dir("run-a") / "score.json").value == success
+
+
+def test_judger_terminal_writer_rejects_missing_identity(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    writer = TerminalArtifactWriter(paths, paths.run_result_dir("run-a"))
+
+    try:
+        writer.write(
+            {"task_name": "run-a", "status": "success", "score": 100},
+            {"attempt_id": "attempt-a", "task_name": "run-a"},
+        )
+    except ScoreOwnershipError as exc:
+        assert "missing: attempt_id" in str(exc)
+    else:
+        raise AssertionError("terminal score without explicit ownership must be rejected")
 
 
 def test_environment_escalates_persistently_invalid_status(tmp_path):
