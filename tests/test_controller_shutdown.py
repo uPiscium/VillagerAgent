@@ -215,6 +215,40 @@ def test_judger_success_does_not_publish_while_future_can_mutate_environment():
     assert controller.shutdown_event.is_set() is False
 
 
+def test_judger_terminal_uses_dedicated_natural_drain_grace():
+    release = threading.Event()
+    running = threading.Event()
+
+    def active_step():
+        running.set()
+        release.wait()
+        return "done", "detail"
+
+    controller, _, _, task = _judged_reconciliation_controller()
+    future = controller.executor.submit(active_step)
+    assert running.wait(1)
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+        started_at=time.time(),
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller.shutdown_grace_period = 0
+    controller.judger_drain_grace_period = 1
+    controller.observe_judger_terminal()
+
+    try:
+        assert controller.reconcile_judger_terminal() is False
+        assert future.running() is True
+    finally:
+        release.set()
+        future.result(timeout=1)
+        controller.executor.shutdown(wait=True)
+
+
 def test_non_cooperative_controller_thread_has_bounded_incomplete_shutdown():
     controller, _, sink = _controller()
     controller.shutdown_grace_period = 0.05

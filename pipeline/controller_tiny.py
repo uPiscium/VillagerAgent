@@ -143,6 +143,7 @@ class GlobalController:
         self._first_failure = None
         self._controller_threads = []
         self.shutdown_grace_period = 5.0
+        self.judger_drain_grace_period = 120.0
         self.cancellation_grace_period = 5.0
         self._run_started = False
         self._terminal_shutdown_lock = threading.Lock()
@@ -555,7 +556,9 @@ class GlobalController:
         group = matching_groups[0] if matching_groups else None
         now = time.monotonic()
         observed_at = self._judger_terminal_observed_at or now
-        drain_grace = self.shutdown_grace_period
+        drain_grace = getattr(
+            self, "judger_drain_grace_period", self.shutdown_grace_period
+        )
         cancellation_grace = getattr(
             self, "cancellation_grace_period", self.shutdown_grace_period
         )
