@@ -261,6 +261,13 @@ def test_scanners_reject_plural_list_and_general_credential_keys(tmp_path, name,
         validate_public_bundle(bundle)
 
 
+def test_scanner_rejects_absolute_local_path(tmp_path):
+    bundle = _bundle(tmp_path, extra={"local.json": {"path": "/tmp/private/run.json"}})
+
+    with pytest.raises(PublicBundleValidationError, match="Absolute local path"):
+        validate_public_bundle(bundle)
+
+
 def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
     source = tmp_path / "source"
     source_attempt = prepare_run_directory(source, producer="benchmarks.cwah.matrix")
@@ -331,6 +338,56 @@ def test_sanitize_builds_managed_derivative_and_links_failed_source(tmp_path):
     assert source_config["api_key_list"] == "[REDACTED]"
     assert source_config["credentials"] == "[REDACTED]"
     assert list(__import__("csv").DictReader((public / "matrix_metrics.csv").open()))[0]["password"] == "[REDACTED]"
+
+
+def test_sanitize_preserves_judged_score_ownership_and_lifecycle(tmp_path):
+    source = tmp_path / "source"
+    source_attempt = prepare_run_directory(source, producer="benchmarks.minecraft.experiment")
+    files = {
+        "provenance.json": {"benchmark": "minecraft"},
+        "config.resolved.json": {"model": "test"},
+        "metrics.json": {"score": 100},
+        "summary.json": {
+            "attempt_id": source_attempt,
+            "execute_real_environment": True,
+            "task_type": "meta",
+            "final_score": {
+                "attempt_id": source_attempt,
+                "status": "success",
+                "score": 100,
+            },
+            "error": None,
+            "timed_out": False,
+            "score_available": True,
+            "score_ownership_verified": True,
+            "controller_shutdown_complete": True,
+            "controller_active_assignments": {},
+        },
+        "runtime_dual_dag_snapshot.json": {
+            "attempt_id": source_attempt,
+            "summary": {"terminal_state": "success"},
+            "nodes": [{"lifecycle": {"status": "success", "active_agents": []}}],
+        },
+    }
+    for name, payload in files.items():
+        (source / name).write_text(json.dumps(payload), encoding="utf-8")
+    finalize_run_directory(
+        source,
+        attempt_id=source_attempt,
+        producer="benchmarks.minecraft.experiment",
+        status="completed",
+    )
+
+    public = tmp_path / "public"
+    validation = derive_public_bundle(source, public)
+
+    summary = json.loads((public / "summary.json").read_text())
+    assert validation.attempt_id != source_attempt
+    assert summary["attempt_id"] == validation.attempt_id
+    assert summary["final_score"]["attempt_id"] == source_attempt
+    assert (public / "task_lifecycle_snapshot.json").exists()
+    assert not (public / "runtime_dual_dag_snapshot.json").exists()
+    assert str(tmp_path) not in (public / "provenance.json").read_text()
 
 
 def test_validates_finalized_failed_bundle_with_explicit_status(tmp_path):

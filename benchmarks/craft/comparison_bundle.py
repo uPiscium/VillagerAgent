@@ -10,7 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from benchmarks.common.publish_bundle import derive_public_bundle, validate_public_bundle
+from benchmarks.common.publish_bundle import (
+    derive_public_bundle,
+    sanitize_public_artifact,
+    validate_public_bundle,
+)
 from benchmarks.common.run_artifacts import (
     finalize_run_directory,
     prepare_run_directory,
@@ -46,6 +50,7 @@ def build_bundle(config_path: Path, output_dir: Path, *, overwrite: bool = False
                 _write_json(destination, _public_manifest_references(payload))
             else:
                 shutil.copy2(source, destination)
+            sanitize_public_artifact(destination)
 
         source_records = []
         for source_dir in source_dirs:
@@ -123,6 +128,8 @@ def build_bundle(config_path: Path, output_dir: Path, *, overwrite: bool = False
             ),
         )
         finalize_provenance(output_dir, status="success")
+        sanitize_public_artifact(output_dir / "command.txt")
+        sanitize_public_artifact(output_dir / "provenance.json")
         finalize_run_directory(
             output_dir,
             attempt_id=attempt_id,
@@ -268,6 +275,13 @@ def _public_manifest_references(value: Any) -> Any:
         return [_public_manifest_references(item) for item in value]
     if isinstance(value, str):
         path = Path(value)
+        if path.is_absolute() and path.name == "artifact_manifest.json":
+            try:
+                path.resolve().relative_to(repo_root().resolve())
+            except ValueError:
+                pass
+            else:
+                return str(Path("runs") / path.parent.name / path.name)
         if (
             len(path.parts) >= 4
             and path.parts[:2] == ("result", "craft")
