@@ -38,7 +38,7 @@ from env.minecraft_dual_dag import (
     sanitize_public_value,
 )
 from pipeline.dual_dag_task_store import RuntimeTaskDAGStore
-from pipeline.runtime_events import JsonlRuntimeEventRecorder, NoOpRuntimeEventSink, RuntimeEventSink, safe_emit_runtime_event
+from pipeline.runtime_events import NoOpRuntimeEventSink, RuntimeEventSink, safe_emit_runtime_event
 from type_define.graph import Graph, Task
 
 
@@ -198,11 +198,7 @@ def _run_minecraft_experiment_attempt(
         runtime_paths.ensure_directories()
     runtime_result_path = runtime_root / "runtime_result.json"
     child_runtime_event_path = runtime_root / "runtime_events.jsonl"
-    runtime_event_path = (
-        child_runtime_event_path
-        if execute
-        else event_sink.path if isinstance(event_sink, JsonlRuntimeEventRecorder) else None
-    )
+    runtime_event_path = child_runtime_event_path if execute else None
     lock_root = Path(
         os.environ.get(
             "VILLAGER_MINECRAFT_LOCK_ROOT",
@@ -578,7 +574,13 @@ def _run_minecraft_experiment_attempt(
         action_log=action_log,
         required_artifacts=non_event_required_artifacts,
     )
-    if not pre_event_admission["passed"] and error is None:
+    pre_event_guard_errors = validate_experiment_runtime_guards(
+        summary=summary,
+        enabled=bool(required_artifacts),
+    )
+    if (
+        not pre_event_admission["passed"] or pre_event_guard_errors
+    ) and error is None:
         error = "required experiment artifact admission failed"
         error_type = "RequiredArtifactError"
         summary["error"] = error
@@ -681,6 +683,79 @@ def _run_minecraft_experiment_attempt(
         error_type = "RequiredArtifactError"
         summary["error"] = error
         summary["error_type"] = error_type
+        reconciled_terminal_event_type = (
+            "run_timed_out" if timed_out else "run_failed"
+        )
+        event_admission_failed = "events" in (
+            artifact_admission["missing"] + artifact_admission["invalid"]
+        )
+        if event_admission_failed:
+            (output_dir / "events.jsonl").unlink(missing_ok=True)
+            final_normalized_events = None
+            terminal_event_type = reconciled_terminal_event_type
+            summary.update({
+                "terminal_event_type": terminal_event_type,
+                "events_available": False,
+                "event_count": None,
+                "event_artifact_error": (
+                    summary.get("event_artifact_error")
+                    or "EventLifecycleConsistencyError"
+                ),
+                "event_artifact_error_detail": (
+                    summary.get("event_artifact_error_detail")
+                    or "final artifact admission rejected the event artifact"
+                ),
+                "event_lifecycle_valid": False,
+                "event_terminal_count": 0,
+            })
+        elif final_normalized_events is not None:
+            try:
+                reconciled_events = finalize_attempt_events(
+                    final_normalized_events.events,
+                    run_id=selected_run_name,
+                    attempt_id=attempt_id,
+                    mode=summary["mode"],
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    terminal_event_type=reconciled_terminal_event_type,
+                    error=error,
+                    error_type=error_type,
+                    warnings=final_normalized_events.warnings,
+                )
+                reconciled_events = type(reconciled_events)(
+                    events=tuple(sanitize_artifact_value(
+                        reconciled_events.events,
+                        secret_values=secret_values,
+                    )),
+                    warnings=reconciled_events.warnings,
+                )
+                validate_attempt_event_lifecycle(
+                    reconciled_events.events,
+                    expected_run_id=selected_run_name,
+                    expected_attempt_id=attempt_id,
+                    expected_terminal_event_type=reconciled_terminal_event_type,
+                )
+                _write_jsonl(output_dir / "events.jsonl", reconciled_events.events)
+                final_normalized_events = reconciled_events
+                terminal_event_type = reconciled_terminal_event_type
+                summary.update({
+                    "terminal_event_type": terminal_event_type,
+                    "event_count": len(reconciled_events.events),
+                    "event_warnings": list(reconciled_events.warnings),
+                    "event_terminal_count": 1,
+                })
+            except Exception as exc:
+                final_normalized_events = None
+                terminal_event_type = reconciled_terminal_event_type
+                summary.update({
+                    "terminal_event_type": terminal_event_type,
+                    "events_available": False,
+                    "event_count": None,
+                    "event_artifact_error": type(exc).__name__,
+                    "event_artifact_error_detail": str(exc),
+                    "event_lifecycle_valid": False,
+                    "event_terminal_count": 0,
+                })
     metrics = build_minecraft_metrics(
         summary=summary,
         action_log=action_log,
@@ -846,19 +921,36 @@ def validate_experiment_artifact_admission(
         ):
             invalid.append("child_protocol")
 
-    if required:
-        if summary.get("runtime_collection_errors"):
-            invalid.append("runtime_collection_errors")
-        if summary.get("controller_shutdown_complete") is not True or summary.get("controller_active_assignments"):
-            invalid.append("controller")
-        if summary.get("runtime_target_safe_to_reuse") is not True:
-            invalid.append("runtime_target")
+    invalid.extend(validate_experiment_runtime_guards(
+        summary=summary,
+        enabled=bool(required),
+    ))
     return {
         "passed": not missing and not invalid,
         "required": required,
         "missing": list(dict.fromkeys(missing)),
         "invalid": list(dict.fromkeys(invalid)),
     }
+
+
+def validate_experiment_runtime_guards(
+    *,
+    summary: dict,
+    enabled: bool,
+) -> list[str]:
+    if not enabled:
+        return []
+    invalid = []
+    if summary.get("runtime_collection_errors"):
+        invalid.append("runtime_collection_errors")
+    if (
+        summary.get("controller_shutdown_complete") is not True
+        or summary.get("controller_active_assignments")
+    ):
+        invalid.append("controller")
+    if summary.get("runtime_target_safe_to_reuse") is not True:
+        invalid.append("runtime_target")
+    return invalid
 
 
 def _emit_attempt_terminal_event(attempt_state: dict, event_type: str, *, payload: dict) -> None:
