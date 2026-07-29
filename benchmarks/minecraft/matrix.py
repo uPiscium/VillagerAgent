@@ -207,6 +207,14 @@ def _run_minecraft_matrix_attempt(
                 summary.get("server_lock_quarantine_detected", False)
             ),
             "runtime_started": bool(summary.get("runtime_started", False)),
+            "runtime_target_lock_admission": summary.get("runtime_target_lock_admission"),
+            "runtime_target_lock_unavailable": (
+                summary.get("runtime_target_lock_unavailable") is True
+            ),
+            "runtime_target_lock_unavailable_reason": summary.get(
+                "runtime_target_lock_unavailable_reason"
+            ),
+            "runtime_target_lock_owner": summary.get("runtime_target_lock_owner", {}),
             "runtime_target_lock_metadata_valid": summary.get(
                 "runtime_target_lock_metadata_valid"
             ),
@@ -304,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _runtime_target_is_safe(summary: dict) -> bool:
+    if summary.get("runtime_target_lock_unavailable") is True:
+        return False
     if summary.get("runtime_target_lock_metadata_valid") is False:
         return False
     if summary.get("runtime_target_quarantined") is True:
@@ -334,6 +344,8 @@ def _runtime_target_abort_reason(summary: dict) -> str | None:
         return "target_lock_metadata_invalid"
     if summary.get("runtime_target_quarantined") is True:
         return "target_quarantined"
+    if summary.get("runtime_target_lock_unavailable") is True:
+        return "target_lock_unavailable"
     if not _runtime_target_is_safe(summary):
         return "unsafe_runtime_target"
     return None

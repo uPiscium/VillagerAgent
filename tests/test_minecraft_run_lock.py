@@ -1,14 +1,17 @@
 import json
 import multiprocessing
 import os
+import threading
 import time
 
 import pytest
 
 from benchmarks.minecraft.run_lock import (
     MinecraftTargetLock,
+    MinecraftTargetLockBusyError,
     MinecraftTargetLockError,
     MinecraftTargetLockMetadataError,
+    MinecraftTargetLockUnavailableError,
     MinecraftTargetQuarantinedError,
     clear_minecraft_target_quarantine,
     minecraft_target_lock_key,
@@ -27,12 +30,78 @@ def _lock(tmp_path, attempt_id, *, port=25565):
 
 
 def test_same_minecraft_target_rejects_second_owner(tmp_path):
-    first = _lock(tmp_path, "attempt-a").acquire()
+    first = _lock(tmp_path, "attempt-owner").acquire()
+    contender = _lock(tmp_path, "attempt-contender")
     try:
-        with pytest.raises(MinecraftTargetLockError, match="attempt attempt-a"):
-            _lock(tmp_path, "attempt-b").acquire()
+        with pytest.raises(MinecraftTargetLockBusyError, match="attempt attempt-owner") as raised:
+            contender.acquire()
+        assert raised.value.reason == "busy"
+        assert raised.value.owner == {
+            "status": "acquired",
+            "attempt_id": "attempt-owner",
+        }
+        assert contender.acquired is False
+        assert contender._stream is None
     finally:
         first.release()
+
+
+@pytest.mark.parametrize("content", ["", "{", "[]", '{"status": "acquired"}'])
+def test_contention_owner_metadata_is_best_effort(tmp_path, content):
+    owner = _lock(tmp_path, "attempt-owner").acquire()
+    original_content = owner.path.read_text(encoding="utf-8")
+    owner.path.write_text(content, encoding="utf-8")
+    contender = _lock(tmp_path, "attempt-contender")
+    try:
+        with pytest.raises(MinecraftTargetLockBusyError):
+            contender.acquire()
+        assert contender._stream is None
+        assert owner.path.read_text(encoding="utf-8") == content
+    finally:
+        owner.path.write_text(original_content, encoding="utf-8")
+        owner.release()
+
+
+def test_contender_acquires_after_owner_releases_within_timeout(tmp_path):
+    owner = _lock(tmp_path, "attempt-owner").acquire()
+    contender = MinecraftTargetLock(
+        lock_root=tmp_path / "locks",
+        host="127.0.0.1",
+        port=25565,
+        world_id="world-a",
+        attempt_id="attempt-contender",
+        timeout_seconds=1,
+        poll_interval_seconds=0.01,
+    )
+
+    def release_owner():
+        time.sleep(0.05)
+        owner.release()
+
+    release_thread = threading.Thread(target=release_owner)
+    release_thread.start()
+    try:
+        contender.acquire()
+        assert contender.acquired is True
+    finally:
+        contender.release()
+        release_thread.join(timeout=1)
+
+
+def test_non_contention_flock_error_is_unavailable(tmp_path, monkeypatch):
+    lock = _lock(tmp_path, "attempt-a")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.run_lock.fcntl.flock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("flock failed")),
+    )
+
+    with pytest.raises(MinecraftTargetLockUnavailableError) as raised:
+        lock.acquire()
+
+    assert raised.value.reason == "io_error"
+    assert str(lock.path) not in str(raised.value)
+    assert lock.acquired is False
+    assert lock._stream is None
 
 
 def test_different_minecraft_targets_can_be_locked(tmp_path):

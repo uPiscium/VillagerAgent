@@ -30,7 +30,9 @@ from benchmarks.minecraft.events import (
 )
 from benchmarks.minecraft.run_lock import (
     MinecraftTargetLock,
+    MinecraftTargetLockBusyError,
     MinecraftTargetLockMetadataError,
+    MinecraftTargetLockUnavailableError,
     MinecraftTargetQuarantinedError,
     minecraft_target_lock_key,
 )
@@ -322,6 +324,10 @@ def _run_minecraft_experiment_attempt(
     server_lock_stale_owner_detected = False
     server_lock_quarantine_detected = False
     runtime_started = False
+    runtime_target_lock_admission = "not_applicable" if not execute else "pending"
+    runtime_target_lock_unavailable = False
+    runtime_target_lock_unavailable_reason = None
+    runtime_target_lock_owner = {}
     runtime_target_lock_metadata_valid = None if not execute else True
     runtime_target_quarantined = False
     runtime_target_quarantine = {}
@@ -343,6 +349,8 @@ def _run_minecraft_experiment_attempt(
         )
         try:
             with target_lock:
+                runtime_target_lock_admission = "granted"
+                runtime_target_lock_metadata_valid = True
                 server_lock_acquired = True
                 server_lock_stale_owner_detected = target_lock.stale_owner_detected
                 try:
@@ -408,6 +416,8 @@ def _run_minecraft_experiment_attempt(
         except MinecraftTargetQuarantinedError as exc:
             error = str(exc)
             error_type = "MinecraftTargetQuarantinedError"
+            runtime_target_lock_admission = "quarantined"
+            runtime_target_lock_metadata_valid = True
             server_lock_quarantine_detected = True
             runtime_target_quarantined = True
             runtime_target_quarantine = _public_target_quarantine(
@@ -417,7 +427,23 @@ def _run_minecraft_experiment_attempt(
         except MinecraftTargetLockMetadataError as exc:
             error = str(exc)
             error_type = "MinecraftTargetLockMetadataError"
+            runtime_target_lock_admission = "metadata_invalid"
             runtime_target_lock_metadata_valid = False
+        except MinecraftTargetLockBusyError as exc:
+            error = str(exc)
+            error_type = "MinecraftTargetLockBusyError"
+            runtime_target_lock_admission = "busy"
+            runtime_target_lock_unavailable = True
+            runtime_target_lock_unavailable_reason = exc.reason
+            runtime_target_lock_owner = _public_target_lock_owner(exc.owner)
+            runtime_target_lock_metadata_valid = None
+        except MinecraftTargetLockUnavailableError as exc:
+            error = str(exc)
+            error_type = "MinecraftTargetLockUnavailableError"
+            runtime_target_lock_admission = "unavailable"
+            runtime_target_lock_unavailable = True
+            runtime_target_lock_unavailable_reason = exc.reason
+            runtime_target_lock_metadata_valid = None
         except Exception as exc:
             error = str(exc)
             error_type = exc.__class__.__name__
@@ -581,9 +607,15 @@ def _run_minecraft_experiment_attempt(
         "runtime_process_group_alive_after_kill": public_runtime_process[
             "process_group_alive_after_kill"
         ],
+        "runtime_target_lock_admission": runtime_target_lock_admission,
+        "runtime_target_lock_unavailable": runtime_target_lock_unavailable,
+        "runtime_target_lock_unavailable_reason": runtime_target_lock_unavailable_reason,
+        "runtime_target_lock_owner": runtime_target_lock_owner,
         "runtime_target_lock_metadata_valid": runtime_target_lock_metadata_valid,
         "runtime_target_safe_to_reuse": bool(
-            runtime_target_lock_metadata_valid is not False
+            runtime_target_lock_admission
+            not in {"busy", "unavailable", "quarantined", "metadata_invalid"}
+            and runtime_target_lock_metadata_valid is not False
             and target_safety.safe
             and not runtime_target_quarantined
         ),
@@ -1726,6 +1758,16 @@ def _public_target_quarantine(record: dict, *, status: str) -> dict:
         "source_run_name": record.get("run_name", ""),
         "reasons": list(record.get("reasons", [])),
         "diagnostics": dict(record.get("diagnostics", {})),
+    }
+
+
+def _public_target_lock_owner(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        field: value[field]
+        for field in ("status", "attempt_id", "run_name")
+        if isinstance(value.get(field), str) and value[field]
     }
 
 

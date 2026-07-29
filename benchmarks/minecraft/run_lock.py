@@ -27,6 +27,17 @@ class MinecraftTargetLockMetadataError(MinecraftTargetLockError):
     pass
 
 
+class MinecraftTargetLockUnavailableError(MinecraftTargetLockError):
+    def __init__(self, message: str, *, reason: str, owner: dict | None = None):
+        super().__init__(message)
+        self.reason = reason
+        self.owner = dict(owner or {})
+
+
+class MinecraftTargetLockBusyError(MinecraftTargetLockUnavailableError):
+    pass
+
+
 def minecraft_target_lock_key(*, host: str, port: int) -> str:
     identity = f"{host.casefold()}:{int(port)}"
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -62,8 +73,12 @@ class MinecraftTargetLock:
         self._stream = None
 
     def acquire(self) -> "MinecraftTargetLock":
-        self.lock_root.mkdir(parents=True, exist_ok=True)
-        self._stream = self.path.open("a+", encoding="utf-8")
+        try:
+            self.lock_root.mkdir(parents=True, exist_ok=True)
+            self._stream = self.path.open("a+", encoding="utf-8")
+        except OSError as exc:
+            self._close_failed_acquire(unlock=False)
+            raise self._unavailable_error() from exc
         deadline = time.monotonic() + self.timeout_seconds
         while True:
             try:
@@ -71,14 +86,20 @@ class MinecraftTargetLock:
                 break
             except BlockingIOError as exc:
                 if time.monotonic() >= deadline:
-                    owner = self._read_metadata()
-                    self._stream.close()
-                    self._stream = None
-                    raise MinecraftTargetLockError(
-                        f"Minecraft target {self.host}:{self.port} is locked by "
-                        f"attempt {owner.get('attempt_id', 'unknown')}"
+                    owner = self._read_contention_owner_snapshot()
+                    message = f"Minecraft target {self.host}:{self.port} is busy"
+                    if owner.get("attempt_id"):
+                        message += f" with attempt {owner['attempt_id']}"
+                    self._close_failed_acquire(unlock=False)
+                    raise MinecraftTargetLockBusyError(
+                        message,
+                        reason="busy",
+                        owner=owner,
                     ) from exc
                 time.sleep(self.poll_interval_seconds)
+            except OSError as exc:
+                self._close_failed_acquire(unlock=False)
+                raise self._unavailable_error() from exc
 
         try:
             previous = self._read_metadata()
@@ -112,10 +133,11 @@ class MinecraftTargetLock:
                     "previous_status": previous["status"],
                 })
             self._write_metadata(acquired_metadata)
+        except OSError as exc:
+            self._close_failed_acquire(unlock=True)
+            raise self._unavailable_error() from exc
         except BaseException:
-            fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
-            self._stream.close()
-            self._stream = None
+            self._close_failed_acquire(unlock=True)
             raise
         self.acquired = True
         return self
@@ -204,6 +226,42 @@ class MinecraftTargetLock:
         self._stream.flush()
         os.fsync(self._stream.fileno())
 
+    def _read_contention_owner_snapshot(self) -> dict:
+        if self._stream is None:
+            return {}
+        try:
+            self._stream.seek(0)
+            content = self._stream.read()
+        except (OSError, UnicodeError):
+            return {}
+        if not content.strip():
+            return {}
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return {}
+        return _public_lock_owner_snapshot(payload) if isinstance(payload, dict) else {}
+
+    def _close_failed_acquire(self, *, unlock: bool) -> None:
+        if self._stream is None:
+            return
+        if unlock:
+            try:
+                fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        try:
+            self._stream.close()
+        except OSError:
+            pass
+        self._stream = None
+
+    def _unavailable_error(self) -> MinecraftTargetLockUnavailableError:
+        return MinecraftTargetLockUnavailableError(
+            f"Minecraft target lock is unavailable for {self.host}:{self.port}",
+            reason="io_error",
+        )
+
     def __enter__(self) -> "MinecraftTargetLock":
         return self.acquire()
 
@@ -219,6 +277,15 @@ def _pid_exists(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _public_lock_owner_snapshot(payload: dict) -> dict:
+    snapshot = {}
+    for field in ("status", "attempt_id", "run_name"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            snapshot[field] = value.strip()
+    return snapshot
 
 
 def read_minecraft_target_lock_metadata(

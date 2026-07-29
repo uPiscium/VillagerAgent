@@ -108,6 +108,7 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert summary["task_selection_mutates_order"] is True
     assert summary["task_order_changed"] is False
     assert summary["mutates_runtime"] is False
+    assert summary["runtime_target_lock_admission"] == "not_applicable"
     assert summary["runtime_target_lock_metadata_valid"] is None
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
@@ -1010,6 +1011,7 @@ def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
     assert summary["runtime_process_killed"] is False
     assert summary["runtime_process_alive_after_kill"] is False
     assert summary["runtime_process_group_alive_after_kill"] is False
+    assert summary["runtime_target_lock_admission"] == "granted"
 
 
 def test_runtime_task_snapshot_adapter_restores_tasks_edges_and_lifecycle_metadata():
@@ -1619,6 +1621,7 @@ def test_quarantine_blocks_next_command_until_explicit_clear(tmp_path, monkeypat
     assert first["runtime_target_quarantined"] is True
     assert first["runtime_target_quarantine"]["reasons"] == ["bridge_cleanup_incomplete"]
     assert blocked["error_type"] == "MinecraftTargetQuarantinedError"
+    assert blocked["runtime_target_lock_admission"] == "quarantined"
     assert blocked["runtime_started"] is False
     assert blocked["server_lock_quarantine_detected"] is True
     assert blocked["runtime_target_quarantine"]["status"] == "preexisting"
@@ -1648,6 +1651,103 @@ def test_quarantine_blocks_next_command_until_explicit_clear(tmp_path, monkeypat
     assert calls == ["runtime", "runtime"]
     assert resumed["runtime_started"] is True
     assert resumed["runtime_target_quarantined"] is False
+
+
+def test_busy_target_fails_closed_and_runs_after_owner_release(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    owner = MinecraftTargetLock(
+        lock_root=tmp_path / "target-locks",
+        host="127.0.0.1",
+        port=25565,
+        world_id="",
+        attempt_id="attempt-owner",
+    ).acquire()
+    calls = []
+
+    def safe_runtime(*_args, **_kwargs):
+        calls.append("runtime")
+        return {
+            "action_log": {},
+            "runtime_process": _safe_runtime_process_metadata(),
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+        }
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        safe_runtime,
+    )
+    try:
+        summary = run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            run_name="busy_target",
+            execute=True,
+            execute_timeout_seconds=30,
+        )
+    finally:
+        owner.release()
+
+    run_dir = Path(summary["output_dir"])
+    owner_summary = summary["runtime_target_lock_owner"]
+    assert calls == []
+    assert summary["error_type"] == "MinecraftTargetLockBusyError"
+    assert summary["runtime_started"] is False
+    assert summary["runtime_target_lock_admission"] == "busy"
+    assert summary["runtime_target_lock_unavailable"] is True
+    assert summary["runtime_target_lock_unavailable_reason"] == "busy"
+    assert summary["runtime_target_lock_metadata_valid"] is None
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is False
+    assert owner_summary == {"status": "acquired", "attempt_id": "attempt-owner"}
+    assert "pid" not in json.dumps(owner_summary).lower()
+    assert "path" not in json.dumps(owner_summary).lower()
+    assert summary["terminal_event_type"] == "run_failed"
+    assert json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))["lifecycle"]["status"] == "failure"
+    assert json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+    resumed = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="after_owner_release",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+    assert calls == ["runtime"]
+    assert resumed["runtime_started"] is True
+    assert resumed["runtime_target_lock_admission"] == "granted"
+    assert resumed["runtime_target_quarantined"] is False
+
+
+def test_lock_io_error_is_unavailable_without_starting_runtime(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: calls.append("runtime"),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.run_lock.fcntl.flock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("flock failed")),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="lock_unavailable",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == []
+    assert summary["error_type"] == "MinecraftTargetLockUnavailableError"
+    assert summary["runtime_started"] is False
+    assert summary["runtime_target_lock_admission"] == "unavailable"
+    assert summary["runtime_target_lock_unavailable"] is True
+    assert summary["runtime_target_lock_unavailable_reason"] == "io_error"
+    assert summary["runtime_target_lock_metadata_valid"] is None
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is False
 
 
 def test_generic_runtime_error_quarantines_unverified_cleanup(tmp_path, monkeypatch):
@@ -1728,6 +1828,7 @@ def test_invalid_lock_metadata_is_not_reported_as_safe(tmp_path, monkeypatch):
     manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
     assert calls == []
     assert summary["error_type"] == "MinecraftTargetLockMetadataError"
+    assert summary["runtime_target_lock_admission"] == "metadata_invalid"
     assert summary["runtime_started"] is False
     assert summary["runtime_target_lock_metadata_valid"] is False
     assert summary["runtime_target_safe_to_reuse"] is False
