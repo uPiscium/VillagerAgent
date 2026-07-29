@@ -30,6 +30,11 @@ from benchmarks.minecraft.real_smoke import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_minecraft_lock_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("VILLAGER_MINECRAFT_LOCK_ROOT", str(tmp_path / "target-locks"))
+
+
 def test_real_smoke_is_disabled_without_explicit_opt_in(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("VILLAGER_OLLAMA_REAL_SMOKE", raising=False)
 

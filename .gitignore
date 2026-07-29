@@ -70,5 +70,6 @@ dm_info_compression/*
 env_gen/*
 
 .direnv
+/.venv
 uv.lock
 .worktrees/

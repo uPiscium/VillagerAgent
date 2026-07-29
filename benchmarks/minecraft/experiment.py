@@ -28,7 +28,13 @@ from benchmarks.minecraft.events import (
     finalize_attempt_events,
     validate_attempt_event_lifecycle,
 )
-from benchmarks.minecraft.run_lock import MinecraftTargetLock, minecraft_target_lock_key
+from benchmarks.minecraft.run_lock import (
+    MinecraftTargetLock,
+    MinecraftTargetLockMetadataError,
+    MinecraftTargetQuarantinedError,
+    minecraft_target_lock_key,
+)
+from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
 from env.runtime_paths import RuntimePaths
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
 from env.minecraft_dual_dag import (
@@ -306,7 +312,7 @@ def _run_minecraft_experiment_attempt(
     error = None
     error_type = ""
     timed_out = False
-    runtime_process = {}
+    runtime_process: object = None
     runtime_primary_error = {}
     runtime_cleanup_state = {}
     bridge_cleanup = {}
@@ -314,6 +320,16 @@ def _run_minecraft_experiment_attempt(
     server_lock_acquired = False
     server_lock_released = False
     server_lock_stale_owner_detected = False
+    server_lock_quarantine_detected = False
+    runtime_started = False
+    runtime_target_lock_metadata_valid = None if not execute else True
+    runtime_target_quarantined = False
+    runtime_target_quarantine = {}
+    target_safety = assess_minecraft_target_safety(
+        runtime_started=False,
+        runtime_process={},
+        bridge_cleanup={},
+    )
 
     if execute:
         _remove_runtime_result(runtime_result_path)
@@ -329,44 +345,84 @@ def _run_minecraft_experiment_attempt(
             with target_lock:
                 server_lock_acquired = True
                 server_lock_stale_owner_detected = target_lock.stale_owner_detected
-                runtime_result = _execute_real_runtime_bounded(
-                    runtime_launch_config,
-                    dual_dag_config=dual_dag_config,
-                    timeout_seconds=execute_timeout_seconds,
-                    runtime_result_path=runtime_result_path,
-                    runtime_event_path=runtime_event_path,
-                    runtime_root=runtime_root,
-                    attempt_id=attempt_id,
-                ) or {}
-        except MinecraftExecuteTimeoutError as exc:
+                try:
+                    runtime_started = True
+                    runtime_result = _execute_real_runtime_bounded(
+                        runtime_launch_config,
+                        dual_dag_config=dual_dag_config,
+                        timeout_seconds=execute_timeout_seconds,
+                        runtime_result_path=runtime_result_path,
+                        runtime_event_path=runtime_event_path,
+                        runtime_root=runtime_root,
+                        attempt_id=attempt_id,
+                    ) or {}
+                except MinecraftExecuteTimeoutError as exc:
+                    error = str(exc)
+                    error_type = "timeout"
+                    timed_out = True
+                    runtime_process = exc.process_metadata
+                except MinecraftRuntimeChildError as exc:
+                    error = str(exc)
+                    error_type = exc.error_type
+                    timed_out = exc.timed_out
+                    runtime_process = exc.process_metadata
+                    child_protocol = exc.child_protocol
+                    runtime_primary_error = exc.primary_error
+                    runtime_cleanup_state = exc.cleanup_state
+                except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
+                    error = str(exc)
+                    error_type = exc.__class__.__name__
+                finally:
+                    persisted_runtime_result, persisted_result_error = _read_partial_runtime_result(
+                        runtime_result_path
+                    )
+                    if persisted_result_error is not None:
+                        runtime_result.setdefault("collection_errors", []).append(
+                            persisted_result_error
+                        )
+                    runtime_result = runtime_result or persisted_runtime_result
+                    if runtime_process is None:
+                        runtime_process = runtime_result.pop("runtime_process", {})
+                    raw_bridge_cleanup = runtime_result.get("bridge_cleanup")
+                    child_protocol = child_protocol or runtime_result.get("child_protocol", {})
+                    target_safety = assess_minecraft_target_safety(
+                        runtime_started=runtime_started,
+                        runtime_process=runtime_process,
+                        bridge_cleanup=raw_bridge_cleanup,
+                    )
+                    if not target_safety.safe:
+                        quarantine_record = target_lock.quarantine(
+                            run_name=selected_run_name,
+                            reasons=target_safety.reasons,
+                            diagnostics=target_safety.diagnostics,
+                        )
+                        runtime_target_quarantined = True
+                        runtime_target_quarantine = _public_target_quarantine(
+                            quarantine_record,
+                            status="created",
+                        )
+                        if error is None:
+                            error = "Minecraft target cleanup could not be verified as safe"
+                            error_type = "MinecraftTargetCleanupError"
+                    bridge_cleanup = _public_bridge_cleanup(raw_bridge_cleanup)
+        except MinecraftTargetQuarantinedError as exc:
             error = str(exc)
-            error_type = "timeout"
-            timed_out = True
-            runtime_process = exc.process_metadata
-        except MinecraftRuntimeChildError as exc:
+            error_type = "MinecraftTargetQuarantinedError"
+            server_lock_quarantine_detected = True
+            runtime_target_quarantined = True
+            runtime_target_quarantine = _public_target_quarantine(
+                exc.quarantine,
+                status="preexisting",
+            )
+        except MinecraftTargetLockMetadataError as exc:
             error = str(exc)
-            error_type = exc.error_type
-            timed_out = exc.timed_out
-            runtime_process = exc.process_metadata
-            child_protocol = exc.child_protocol
-            runtime_primary_error = exc.primary_error
-            runtime_cleanup_state = exc.cleanup_state
-        except Exception as exc:  # Preserve partial artifacts for failed smoke runs.
+            error_type = "MinecraftTargetLockMetadataError"
+            runtime_target_lock_metadata_valid = False
+        except Exception as exc:
             error = str(exc)
             error_type = exc.__class__.__name__
         finally:
             server_lock_released = not target_lock.acquired
-        persisted_runtime_result, persisted_result_error = _read_partial_runtime_result(
-            runtime_result_path
-        )
-        if persisted_result_error is not None:
-            runtime_result.setdefault("collection_errors", []).append(
-                persisted_result_error
-            )
-        runtime_result = runtime_result or persisted_runtime_result
-        runtime_process = runtime_process or runtime_result.pop("runtime_process", {})
-        bridge_cleanup = _public_bridge_cleanup(runtime_result.get("bridge_cleanup"))
-        child_protocol = child_protocol or runtime_result.get("child_protocol", {})
         action_log_available = isinstance(runtime_result.get("action_log"), dict)
         action_log = runtime_result.get("action_log") if action_log_available else {}
         score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
@@ -385,10 +441,12 @@ def _run_minecraft_experiment_attempt(
             else:
                 score_ownership_verified = True
 
+    public_runtime_process = _public_runtime_process(runtime_process)
     effective_settings["runtime"].update({
         "server_lock_acquired": server_lock_acquired,
         "server_lock_released": server_lock_released,
         "server_lock_stale_owner_detected": server_lock_stale_owner_detected,
+        "server_lock_quarantine_detected": server_lock_quarantine_detected,
     })
     update_provenance_settings(output_dir, effective_settings)
 
@@ -467,6 +525,7 @@ def _run_minecraft_experiment_attempt(
         "server_lock_acquired": server_lock_acquired,
         "server_lock_released": server_lock_released,
         "server_lock_stale_owner_detected": server_lock_stale_owner_detected,
+        "server_lock_quarantine_detected": server_lock_quarantine_detected,
         "task_type": launch_config.get("task_type", ""),
         "task_idx": launch_config.get("task_idx"),
         "dual_dag_runtime_enabled": True,
@@ -512,19 +571,24 @@ def _run_minecraft_experiment_attempt(
         "timed_out": timed_out,
         "runtime_result_retained": bool(execute and retain_runtime_result and runtime_result_path.exists()),
         "runtime_process_isolated": bool(execute),
-        "runtime_process_exit_code": runtime_process.get("exit_code"),
-        "runtime_process_terminated": bool(runtime_process.get("terminated", False)),
-        "runtime_process_killed": bool(runtime_process.get("killed", False)),
-        "runtime_process_alive_after_kill": bool(
-            runtime_process.get("process_alive_after_kill", False)
+        "runtime_started": runtime_started,
+        "runtime_process_exit_code": public_runtime_process["exit_code"],
+        "runtime_process_terminated": public_runtime_process["terminated"],
+        "runtime_process_killed": public_runtime_process["killed"],
+        "runtime_process_alive_after_kill": public_runtime_process[
+            "process_alive_after_kill"
+        ],
+        "runtime_process_group_alive_after_kill": public_runtime_process[
+            "process_group_alive_after_kill"
+        ],
+        "runtime_target_lock_metadata_valid": runtime_target_lock_metadata_valid,
+        "runtime_target_safe_to_reuse": bool(
+            runtime_target_lock_metadata_valid is not False
+            and target_safety.safe
+            and not runtime_target_quarantined
         ),
-        "runtime_process_group_alive_after_kill": bool(
-            runtime_process.get("process_group_alive_after_kill", False)
-        ),
-        "runtime_target_safe_to_reuse": not bool(
-            runtime_process.get("process_alive_after_kill", False)
-            or runtime_process.get("process_group_alive_after_kill", False)
-        ),
+        "runtime_target_quarantined": runtime_target_quarantined,
+        "runtime_target_quarantine": runtime_target_quarantine,
         "runtime_primary_error": runtime_primary_error,
         "runtime_cleanup_state": runtime_cleanup_state,
         "bridge_cleanup": bridge_cleanup,
@@ -1612,15 +1676,56 @@ def _public_bridge_cleanup(value: object) -> dict:
     public_processes = {}
     if isinstance(processes, dict):
         for name, metadata in processes.items():
-            if not isinstance(name, str) or not isinstance(metadata, dict):
+            if not isinstance(name, str) or not name:
+                continue
+            if not isinstance(metadata, dict):
+                public_processes[name] = {
+                    "terminated": None,
+                    "killed": None,
+                    "alive_after_kill": None,
+                }
                 continue
             public_processes[name] = {
-                key: bool(metadata.get(key, False))
+                key: _public_optional_bool(metadata, key)
                 for key in ("terminated", "killed", "alive_after_kill")
             }
     return {
-        "cleanup_complete": bool(value.get("cleanup_complete", False)),
+        "cleanup_complete": _public_optional_bool(value, "cleanup_complete"),
         "processes": public_processes,
+    }
+
+
+def _public_runtime_process(value: object) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        "exit_code": value.get("exit_code"),
+        "terminated": _public_optional_bool(value, "terminated"),
+        "killed": _public_optional_bool(value, "killed"),
+        "process_alive_after_kill": _public_optional_bool(
+            value,
+            "process_alive_after_kill",
+        ),
+        "process_group_alive_after_kill": _public_optional_bool(
+            value,
+            "process_group_alive_after_kill",
+        ),
+    }
+
+
+def _public_optional_bool(mapping: dict, field: str) -> bool | None:
+    value = mapping.get(field)
+    return value if isinstance(value, bool) else None
+
+
+def _public_target_quarantine(record: dict, *, status: str) -> dict:
+    return {
+        "status": status,
+        "lock_key": record.get("lock_key", ""),
+        "source_attempt_id": record.get("attempt_id", ""),
+        "source_run_name": record.get("run_name", ""),
+        "reasons": list(record.get("reasons", [])),
+        "diagnostics": dict(record.get("diagnostics", {})),
     }
 
 

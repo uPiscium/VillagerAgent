@@ -4,6 +4,12 @@ import pytest
 
 from benchmarks.common.report import summarize_inputs
 from benchmarks.minecraft.matrix import main, run_minecraft_matrix
+from benchmarks.minecraft.run_lock import MinecraftTargetLock
+
+
+@pytest.fixture(autouse=True)
+def _isolate_minecraft_lock_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("VILLAGER_MINECRAFT_LOCK_ROOT", str(tmp_path / "target-locks"))
 
 
 def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
@@ -238,6 +244,123 @@ def test_minecraft_matrix_continues_after_safe_task_failure(tmp_path, monkeypatc
     assert summary["completed_runs"] == 1
 
 
+def test_minecraft_matrix_rejects_unknown_runtime_process_evidence(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        summary["runtime_process_alive_after_kill"] = None
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["first"]
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "unsafe_runtime_target"
+    assert summary["skipped_runs"] == 1
+    assert summary["runs"][1]["reason"] == "unsafe_runtime_target"
+
+
+def test_minecraft_matrix_classifies_preexisting_quarantine_and_never_starts_runtime(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1)]),
+        encoding="utf-8",
+    )
+    lock = MinecraftTargetLock(
+        lock_root=tmp_path / "target-locks",
+        host="127.0.0.1",
+        port=25565,
+        world_id="",
+        attempt_id="unsafe-attempt",
+    )
+    with lock:
+        lock.quarantine(
+            run_name="unsafe-run",
+            reasons=["bridge_cleanup_incomplete"],
+            diagnostics={"runtime_started": True},
+        )
+    calls = []
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: calls.append("runtime"),
+    )
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == []
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "target_quarantined"
+    assert summary["runs"][0]["runtime_started"] is False
+    assert summary["runs"][0]["runtime_target_quarantined"] is True
+    assert summary["runs"][1]["status"] == "skipped"
+    assert summary["runs"][1]["reason"] == "target_quarantined"
+
+
+def test_minecraft_matrix_aborts_after_target_lock_metadata_error(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1), _config("third", 2)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        summary.update({
+            "error": "lock metadata is invalid",
+            "error_type": "MinecraftTargetLockMetadataError",
+            "runtime_target_lock_metadata_valid": False,
+            "runtime_target_safe_to_reuse": False,
+            "runtime_target_quarantined": False,
+        })
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second", "third"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["first"]
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "target_lock_metadata_invalid"
+    assert summary["unsafe_run"]["error_type"] == "MinecraftTargetLockMetadataError"
+    assert summary["skipped_runs"] == 2
+    assert all(
+        run["reason"] == "target_lock_metadata_invalid"
+        for run in summary["runs"][1:]
+    )
+
+
 def test_minecraft_matrix_dry_run_does_not_require_cleanup_metadata(tmp_path, monkeypatch):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(
@@ -363,6 +486,11 @@ def _matrix_run_summary(tmp_path, run_name):
         "error": None,
         "artifact_admission": {"passed": True},
         "runtime_target_safe_to_reuse": True,
+        "runtime_started": True,
+        "runtime_process_alive_after_kill": False,
+        "runtime_process_group_alive_after_kill": False,
+        "runtime_target_lock_metadata_valid": True,
+        "runtime_target_quarantined": False,
         "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
     }
 
