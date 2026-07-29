@@ -3,7 +3,7 @@ import json
 import pytest
 
 from benchmarks.common.report import summarize_inputs
-from benchmarks.minecraft.matrix import run_minecraft_matrix
+from benchmarks.minecraft.matrix import main, run_minecraft_matrix
 
 
 def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
@@ -115,8 +115,12 @@ def test_minecraft_matrix_finalizes_failed_attempt_on_unexpected_error(tmp_path)
 
 def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path, monkeypatch):
     config_path = tmp_path / "minecraft_config.json"
+    configs = [
+        dict(_config("first", 0), required_artifacts=[]),
+        dict(_config("second", 1), required_artifacts=[]),
+    ]
     config_path.write_text(
-        json.dumps([_config("first", 0), _config("second", 1)]),
+        json.dumps(configs),
         encoding="utf-8",
     )
     def runtime_result(*args, **kwargs):
@@ -125,7 +129,9 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
             str(runtime_result_path),
             encoding="utf-8",
         )
-        return {}
+        return {
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+        }
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_result)
 
@@ -152,6 +158,123 @@ def test_minecraft_matrix_execute_assigns_distinct_runtime_result_paths(tmp_path
         ).read_text(encoding="utf-8")
         for run in summary["runs"]
     ] == [str(path) for path in expected_paths]
+
+
+@pytest.mark.parametrize(
+    "unsafe_update",
+    [
+        {"runtime_target_safe_to_reuse": False},
+        {"bridge_cleanup": {}},
+        {"bridge_cleanup": {"cleanup_complete": False, "processes": {}}},
+        {"bridge_cleanup": {"cleanup_complete": True, "processes": {"Alice": {"alive_after_kill": True}}}},
+    ],
+)
+def test_minecraft_matrix_aborts_and_skips_remaining_unsafe_target_runs(
+    tmp_path,
+    monkeypatch,
+    unsafe_update,
+):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1), _config("third", 2)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        summary.update(unsafe_update)
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second", "third"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["first"]
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "unsafe_runtime_target"
+    assert summary["unsafe_run"]["matrix_index"] == 0
+    assert summary["skipped_runs"] == 2
+    assert [run["status"] for run in summary["runs"][1:]] == ["skipped", "skipped"]
+    assert all(run["reason"] == "unsafe_runtime_target" for run in summary["runs"][1:])
+
+
+def test_minecraft_matrix_continues_after_safe_task_failure(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        if len(calls) == 1:
+            summary["error"] = "task failed"
+            summary["artifact_admission"] = {"passed": False}
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["first", "second"]
+    assert summary["aborted"] is False
+    assert summary["failed_runs"] == 1
+    assert summary["completed_runs"] == 1
+
+
+def test_minecraft_matrix_dry_run_does_not_require_cleanup_metadata(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        summary.pop("runtime_target_safe_to_reuse")
+        summary.pop("bridge_cleanup")
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second"],
+    )
+
+    assert calls == ["first", "second"]
+    assert summary["aborted"] is False
+    assert summary["completed_runs"] == 2
+
+
+def test_minecraft_matrix_cli_returns_failure_when_aborted(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_config("first", 0)), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.matrix.run_minecraft_matrix",
+        lambda **_kwargs: {"aborted": True, "failed_runs": 1},
+    )
+
+    assert main(["--config", str(config_path)]) == 1
 
 
 def test_minecraft_matrix_can_compare_task_selection_policies(tmp_path):
@@ -229,6 +352,42 @@ def test_minecraft_matrix_rejects_missing_required_fields(tmp_path):
 
     with pytest.raises(ValueError, match=r"config\[0\] missing required field\(s\): host"):
         run_minecraft_matrix(config_path=config_path, output_dir=tmp_path / "matrix")
+
+
+def _matrix_run_summary(tmp_path, run_name):
+    return {
+        "output_dir": str(tmp_path / "single-runs" / run_name),
+        "attempt_id": f"attempt-{run_name}",
+        "run_name": run_name,
+        "mode": "execute",
+        "error": None,
+        "artifact_admission": {"passed": True},
+        "runtime_target_safe_to_reuse": True,
+        "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+    }
+
+
+def _mock_matrix_run_dependencies(monkeypatch, run_single):
+    monkeypatch.setattr(
+        "benchmarks.minecraft.matrix.run_minecraft_experiment",
+        run_single,
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.matrix.validate_run_attempt",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.matrix.summarize_minecraft_run",
+        lambda _run_dir, summary: {
+            "benchmark": "minecraft",
+            "run_name": summary["run_name"],
+            "status": "failed" if summary.get("error") else "success",
+        },
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.matrix._read_json",
+        lambda path: {} if path.name == "metrics.json" else json.loads(path.read_text(encoding="utf-8")),
+    )
 
 
 def _config(task_name, task_idx):
