@@ -8,7 +8,22 @@ import os
 import time
 from pathlib import Path
 
+
+LOCK_METADATA_SCHEMA_VERSION = 2
+LOCK_METADATA_STATUSES = frozenset({"acquired", "released", "quarantined", "cleared"})
+
+
 class MinecraftTargetLockError(RuntimeError):
+    pass
+
+
+class MinecraftTargetQuarantinedError(MinecraftTargetLockError):
+    def __init__(self, message: str, *, quarantine: dict):
+        super().__init__(message)
+        self.quarantine = quarantine
+
+
+class MinecraftTargetLockMetadataError(MinecraftTargetLockError):
     pass
 
 
@@ -41,6 +56,8 @@ class MinecraftTargetLock:
         self.timeout_seconds = float(timeout_seconds)
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.acquired = False
+        self.quarantined = False
+        self.quarantine_record = None
         self.stale_owner_detected = False
         self._stream = None
 
@@ -63,35 +80,82 @@ class MinecraftTargetLock:
                     ) from exc
                 time.sleep(self.poll_interval_seconds)
 
-        previous = self._read_metadata()
-        previous_pid = previous.get("pid")
-        self.stale_owner_detected = (
-            isinstance(previous_pid, int)
-            and previous_pid != os.getpid()
-            and not _pid_exists(previous_pid)
-        )
-        self._write_metadata({
-            "schema_version": 1,
-            "status": "acquired",
-            "attempt_id": self.attempt_id,
-            "pid": os.getpid(),
-            "host": self.host,
-            "port": self.port,
-            "world_id": self.world_id,
-            "lock_key": self.key,
-            "acquired_at": time.time(),
-            "stale_owner_detected": self.stale_owner_detected,
-        })
+        try:
+            previous = self._read_metadata()
+            if previous.get("status") == "quarantined":
+                raise MinecraftTargetQuarantinedError(
+                    f"Minecraft target {self.host}:{self.port} is quarantined",
+                    quarantine=previous,
+                )
+            previous_pid = previous.get("pid")
+            self.stale_owner_detected = (
+                previous.get("status") == "acquired"
+                and isinstance(previous_pid, int)
+                and previous_pid != os.getpid()
+                and not _pid_exists(previous_pid)
+            )
+            self._write_metadata({
+                "schema_version": LOCK_METADATA_SCHEMA_VERSION,
+                "status": "acquired",
+                "attempt_id": self.attempt_id,
+                "pid": os.getpid(),
+                "host": self.host,
+                "port": self.port,
+                "world_id": self.world_id,
+                "lock_key": self.key,
+                "acquired_at": time.time(),
+                "stale_owner_detected": self.stale_owner_detected,
+            })
+        except BaseException:
+            fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
+            self._stream.close()
+            self._stream = None
+            raise
         self.acquired = True
         return self
+
+    def quarantine(
+        self,
+        *,
+        run_name: str,
+        reasons: tuple[str, ...] | list[str],
+        diagnostics: dict,
+    ) -> dict:
+        if not self.acquired or self._stream is None:
+            raise MinecraftTargetLockError("Minecraft target must be acquired before quarantine")
+        normalized_reasons = tuple(dict.fromkeys(
+            reason for reason in reasons if isinstance(reason, str) and reason
+        ))
+        if not normalized_reasons:
+            raise ValueError("quarantine reasons must contain at least one non-empty string")
+        if not isinstance(diagnostics, dict):
+            raise ValueError("quarantine diagnostics must be an object")
+        acquired = self._read_metadata()
+        if acquired.get("status") != "acquired" or acquired.get("attempt_id") != self.attempt_id:
+            raise MinecraftTargetLockMetadataError(
+                "Minecraft target acquired metadata does not match the current owner"
+            )
+        record = {
+            **acquired,
+            "status": "quarantined",
+            "run_name": run_name,
+            "quarantined_at": time.time(),
+            "reasons": list(normalized_reasons),
+            "diagnostics": diagnostics,
+        }
+        self._write_metadata(record)
+        self.quarantined = True
+        self.quarantine_record = record
+        return dict(record)
 
     def release(self) -> None:
         if self._stream is None:
             return
         if self.acquired:
-            metadata = self._read_metadata()
-            metadata.update({"status": "released", "released_at": time.time()})
-            self._write_metadata(metadata)
+            if not self.quarantined:
+                metadata = self._read_metadata()
+                metadata.update({"status": "released", "released_at": time.time()})
+                self._write_metadata(metadata)
             fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
         self._stream.close()
         self._stream = None
@@ -106,9 +170,16 @@ class MinecraftTargetLock:
             return {}
         try:
             payload = json.loads(content)
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError as exc:
+            raise MinecraftTargetLockMetadataError(
+                f"Minecraft target lock metadata is invalid JSON: {exc}"
+            ) from exc
+        return _validate_metadata(
+            payload,
+            expected_key=self.key,
+            expected_host=self.host,
+            expected_port=self.port,
+        )
 
     def _write_metadata(self, payload: dict) -> None:
         if self._stream is None:
@@ -135,3 +206,148 @@ def _pid_exists(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def read_minecraft_target_lock_metadata(
+    *,
+    lock_root: str | Path,
+    host: str,
+    port: int,
+) -> dict:
+    key = minecraft_target_lock_key(host=host, port=port)
+    path = Path(lock_root) / f"{key}.lock"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as stream:
+        content = stream.read()
+    if not content.strip():
+        return {}
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise MinecraftTargetLockMetadataError(
+            f"Minecraft target lock metadata is invalid JSON: {exc}"
+        ) from exc
+    return _validate_metadata(
+        payload,
+        expected_key=key,
+        expected_host=host,
+        expected_port=int(port),
+    )
+
+
+def clear_minecraft_target_quarantine(
+    *,
+    lock_root: str | Path,
+    host: str,
+    port: int,
+    reason: str,
+    acknowledge_target_safe: bool,
+    force_corrupt: bool = False,
+) -> dict:
+    if not acknowledge_target_safe:
+        raise ValueError("clearing quarantine requires acknowledge_target_safe")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("clearing quarantine requires a non-empty reason")
+    key = minecraft_target_lock_key(host=host, port=port)
+    root = Path(lock_root)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{key}.lock"
+    stream = path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise MinecraftTargetLockError(
+                f"Minecraft target {host}:{int(port)} is actively locked"
+            ) from exc
+        stream.seek(0)
+        content = stream.read()
+        previous = {}
+        if content.strip():
+            try:
+                previous = _validate_metadata(
+                    json.loads(content),
+                    expected_key=key,
+                    expected_host=host,
+                    expected_port=int(port),
+                )
+            except (json.JSONDecodeError, MinecraftTargetLockMetadataError) as exc:
+                if not force_corrupt:
+                    raise MinecraftTargetLockMetadataError(
+                        "corrupt Minecraft target metadata requires force_corrupt"
+                    ) from exc
+        if previous and previous.get("status") != "quarantined" and not force_corrupt:
+            raise MinecraftTargetLockError("Minecraft target is not quarantined")
+        last_quarantine = _public_quarantine_history(previous)
+        cleared = {
+            "schema_version": LOCK_METADATA_SCHEMA_VERSION,
+            "status": "cleared",
+            "lock_key": key,
+            "host": host,
+            "port": int(port),
+            "cleared_at": time.time(),
+            "cleared_by_pid": os.getpid(),
+            "clear_reason": reason.strip(),
+            "last_quarantine": last_quarantine,
+        }
+        _write_stream_metadata(stream, cleared)
+        return cleared
+    finally:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+
+
+def _validate_metadata(
+    payload: object,
+    *,
+    expected_key: str,
+    expected_host: str,
+    expected_port: int,
+) -> dict:
+    if not isinstance(payload, dict):
+        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata must be an object")
+    if payload.get("schema_version") != LOCK_METADATA_SCHEMA_VERSION:
+        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata schema is unsupported")
+    if payload.get("status") not in LOCK_METADATA_STATUSES:
+        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata status is invalid")
+    if (
+        payload.get("lock_key") != expected_key
+        or not isinstance(payload.get("host"), str)
+        or payload["host"].casefold() != expected_host.casefold()
+        or payload.get("port") != int(expected_port)
+    ):
+        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata identity mismatch")
+    if payload["status"] == "quarantined":
+        if (
+            not isinstance(payload.get("attempt_id"), str)
+            or not isinstance(payload.get("run_name"), str)
+            or not isinstance(payload.get("reasons"), list)
+            or not payload["reasons"]
+            or not all(isinstance(reason, str) and reason for reason in payload["reasons"])
+            or not isinstance(payload.get("diagnostics"), dict)
+        ):
+            raise MinecraftTargetLockMetadataError("Minecraft target quarantine metadata is invalid")
+    return dict(payload)
+
+
+def _write_stream_metadata(stream, payload: dict) -> None:
+    stream.seek(0)
+    stream.truncate()
+    json.dump(payload, stream, indent=2)
+    stream.write("\n")
+    stream.flush()
+    os.fsync(stream.fileno())
+
+
+def _public_quarantine_history(metadata: dict) -> dict:
+    if metadata.get("status") != "quarantined":
+        return {}
+    return {
+        "attempt_id": metadata.get("attempt_id"),
+        "run_name": metadata.get("run_name"),
+        "quarantined_at": metadata.get("quarantined_at"),
+        "reasons": list(metadata.get("reasons", [])),
+    }
