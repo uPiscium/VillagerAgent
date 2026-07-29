@@ -30,6 +30,7 @@ from benchmarks.minecraft.experiment import (
     validate_minecraft_config,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
+from benchmarks.minecraft.run_lock import clear_minecraft_target_quarantine
 from benchmarks.minecraft.events import (
     ATTEMPT_TERMINAL_EVENT_TYPES,
     finalize_attempt_events,
@@ -40,6 +41,11 @@ from pipeline.runtime_events import (
     JsonlRuntimeEventRecorder,
     read_runtime_events,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_minecraft_lock_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("VILLAGER_MINECRAFT_LOCK_ROOT", str(tmp_path / "target-locks"))
 
 
 @pytest.mark.parametrize("dependency_key", ["required_subtasks", "required subtasks"])
@@ -744,7 +750,9 @@ def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, mon
     config_path.write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.setattr(
         "benchmarks.minecraft.experiment._execute_real_runtime",
-        lambda *args, **kwargs: {},
+        lambda *args, **kwargs: {
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+        },
     )
 
     summary = run_minecraft_experiment(
@@ -1239,6 +1247,7 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
                 "score": 1,
             },
             "action_log": {},
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
         }
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_with_diagnostics)
@@ -1368,8 +1377,77 @@ def test_cleanup_failure_summary_keeps_timeout_and_marks_target_unsafe(tmp_path,
     assert summary["timed_out"] is True
     assert summary["runtime_primary_error"] == primary_error
     assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is True
+    assert summary["runtime_target_quarantine"]["status"] == "created"
+    assert "runtime_process_group_alive_after_kill" in summary["runtime_target_quarantine"]["reasons"]
     assert summary["score_available"] is False
     assert summary["child_protocol"].get("status") != "completed"
+
+
+def test_quarantine_blocks_next_command_until_explicit_clear(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    calls = []
+
+    def unsafe_then_safe(*_args, **_kwargs):
+        calls.append("runtime")
+        return {
+            "action_log": {},
+            "bridge_cleanup": {"cleanup_complete": len(calls) > 1, "processes": {}},
+        }
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        unsafe_then_safe,
+    )
+
+    first = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="creates_quarantine",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+    blocked = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="blocked_by_quarantine",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["runtime"]
+    assert first["runtime_target_quarantined"] is True
+    assert first["runtime_target_quarantine"]["reasons"] == ["bridge_cleanup_incomplete"]
+    assert blocked["error_type"] == "MinecraftTargetQuarantinedError"
+    assert blocked["runtime_started"] is False
+    assert blocked["server_lock_quarantine_detected"] is True
+    assert blocked["runtime_target_quarantine"]["status"] == "preexisting"
+    assert blocked["terminal_event_type"] == "run_failed"
+    assert _read_public_events(Path(blocked["output_dir"]))[-1]["event_type"] == "run_failed"
+    assert "pid" not in json.dumps(blocked["runtime_target_quarantine"]).lower()
+    assert "path" not in json.dumps(blocked["runtime_target_quarantine"]).lower()
+    blocked_dir = Path(blocked["output_dir"])
+    assert json.loads((blocked_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
+    assert not (blocked_dir / COMPLETION_MARKER_FILE).exists()
+
+    clear_minecraft_target_quarantine(
+        lock_root=tmp_path / "target-locks",
+        host="127.0.0.1",
+        port=25565,
+        reason="operator verified all processes stopped",
+        acknowledge_target_safe=True,
+    )
+    resumed = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="after_clear",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["runtime", "runtime"]
+    assert resumed["runtime_started"] is True
+    assert resumed["runtime_target_quarantined"] is False
 
 
 def test_public_bridge_cleanup_omits_process_ids():
@@ -1723,6 +1801,7 @@ def test_minecraft_execute_rejects_score_owned_by_another_attempt(tmp_path, monk
                 "score": 100,
             },
             "action_log": {},
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
         }
 
     monkeypatch.setattr(
@@ -1758,7 +1837,11 @@ def test_minecraft_execute_rejects_score_with_missing_ownership(
             "score": 100,
         }
         score.pop(missing_field)
-        return {"score": score, "action_log": {}}
+        return {
+            "score": score,
+            "action_log": {},
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+        }
 
     monkeypatch.setattr(
         "benchmarks.minecraft.experiment._execute_real_runtime",
@@ -2180,6 +2263,7 @@ def _runtime_result_snapshot(status="success"):
             "edges": [],
         },
         "error": None,
+        "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
     }
 
 

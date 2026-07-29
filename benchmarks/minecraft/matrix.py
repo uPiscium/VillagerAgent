@@ -23,6 +23,7 @@ from benchmarks.minecraft.experiment import (
     run_minecraft_experiment,
     validate_minecraft_config,
 )
+from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
 
 
 DEFAULT_MATRIX_OUTPUT_ROOT = Path("result/minecraft_matrix")
@@ -144,6 +145,7 @@ def _run_minecraft_matrix_attempt(
     results = []
     common_rows = []
     aborted = False
+    abort_reason = None
     unsafe_run = None
     for matrix_index, config_index in enumerate(selected_indices):
         if config_index < 0 or config_index >= len(configs):
@@ -201,7 +203,15 @@ def _run_minecraft_matrix_attempt(
             "load_status_path": summary.get("load_status_path", ""),
             "server_lock_key": summary.get("server_lock_key", ""),
             "server_lock_acquired": bool(summary.get("server_lock_acquired", False)),
+            "server_lock_quarantine_detected": bool(
+                summary.get("server_lock_quarantine_detected", False)
+            ),
+            "runtime_started": bool(summary.get("runtime_started", False)),
             "runtime_target_safe_to_reuse": summary.get("runtime_target_safe_to_reuse"),
+            "runtime_target_quarantined": bool(
+                summary.get("runtime_target_quarantined", False)
+            ),
+            "runtime_target_quarantine": summary.get("runtime_target_quarantine", {}),
             "bridge_cleanup": summary.get("bridge_cleanup", {}),
             "artifact_admission_passed": summary.get("artifact_admission", {}).get("passed") is True,
             "metrics": metrics,
@@ -211,6 +221,11 @@ def _run_minecraft_matrix_attempt(
         common_rows.append(common_row)
         if execute and not _runtime_target_is_safe(summary):
             aborted = True
+            abort_reason = (
+                "target_quarantined"
+                if summary.get("runtime_target_quarantined") is True
+                else "unsafe_runtime_target"
+            )
             unsafe_run = {
                 "matrix_index": matrix_index,
                 "run_name": result["run_name"],
@@ -223,7 +238,7 @@ def _run_minecraft_matrix_attempt(
                     "config_index": remaining["config_index"],
                     "run_name": remaining["run_name"],
                     "status": "skipped",
-                    "reason": "unsafe_runtime_target",
+                    "reason": abort_reason,
                     "passed": False,
                 })
             break
@@ -243,7 +258,7 @@ def _run_minecraft_matrix_attempt(
         "skipped_runs": len(skipped_runs),
         "aborted_runs": 1 if aborted else 0,
         "aborted": aborted,
-        "abort_reason": "unsafe_runtime_target" if aborted else None,
+        "abort_reason": abort_reason,
         "unsafe_run": unsafe_run,
         "dual_dag_runtime_enabled": True,
         "dual_dag_task_selection_enabled": any(
@@ -288,18 +303,21 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _runtime_target_is_safe(summary: dict) -> bool:
+    if summary.get("runtime_target_quarantined") is True:
+        return False
     if summary.get("runtime_target_safe_to_reuse") is not True:
         return False
-    cleanup = summary.get("bridge_cleanup")
-    if not isinstance(cleanup, dict) or cleanup.get("cleanup_complete") is not True:
-        return False
-    processes = cleanup.get("processes")
-    if not isinstance(processes, dict):
-        return False
-    return not any(
-        not isinstance(item, dict) or item.get("alive_after_kill") is True
-        for item in processes.values()
+    assessment = assess_minecraft_target_safety(
+        runtime_started=summary.get("runtime_started") is True,
+        runtime_process={
+            "process_alive_after_kill": summary.get("runtime_process_alive_after_kill"),
+            "process_group_alive_after_kill": summary.get(
+                "runtime_process_group_alive_after_kill"
+            ),
+        },
+        bridge_cleanup=summary.get("bridge_cleanup", {}),
     )
+    return assessment.safe
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
