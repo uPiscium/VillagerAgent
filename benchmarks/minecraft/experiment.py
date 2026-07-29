@@ -441,7 +441,7 @@ def _run_minecraft_experiment_attempt(
             else:
                 score_ownership_verified = True
 
-    public_runtime_process = runtime_process if isinstance(runtime_process, dict) else {}
+    public_runtime_process = _public_runtime_process(runtime_process)
     effective_settings["runtime"].update({
         "server_lock_acquired": server_lock_acquired,
         "server_lock_released": server_lock_released,
@@ -572,15 +572,15 @@ def _run_minecraft_experiment_attempt(
         "runtime_result_retained": bool(execute and retain_runtime_result and runtime_result_path.exists()),
         "runtime_process_isolated": bool(execute),
         "runtime_started": runtime_started,
-        "runtime_process_exit_code": public_runtime_process.get("exit_code"),
-        "runtime_process_terminated": public_runtime_process.get("terminated") is True,
-        "runtime_process_killed": public_runtime_process.get("killed") is True,
-        "runtime_process_alive_after_kill": (
-            public_runtime_process.get("process_alive_after_kill") is True
-        ),
-        "runtime_process_group_alive_after_kill": (
-            public_runtime_process.get("process_group_alive_after_kill") is True
-        ),
+        "runtime_process_exit_code": public_runtime_process["exit_code"],
+        "runtime_process_terminated": public_runtime_process["terminated"],
+        "runtime_process_killed": public_runtime_process["killed"],
+        "runtime_process_alive_after_kill": public_runtime_process[
+            "process_alive_after_kill"
+        ],
+        "runtime_process_group_alive_after_kill": public_runtime_process[
+            "process_group_alive_after_kill"
+        ],
         "runtime_target_lock_metadata_valid": runtime_target_lock_metadata_valid,
         "runtime_target_safe_to_reuse": bool(
             runtime_target_lock_metadata_valid is not False
@@ -1692,6 +1692,24 @@ def _public_bridge_cleanup(value: object) -> dict:
     return {
         "cleanup_complete": _public_optional_bool(value, "cleanup_complete"),
         "processes": public_processes,
+    }
+
+
+def _public_runtime_process(value: object) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        "exit_code": value.get("exit_code"),
+        "terminated": _public_optional_bool(value, "terminated"),
+        "killed": _public_optional_bool(value, "killed"),
+        "process_alive_after_kill": _public_optional_bool(
+            value,
+            "process_alive_after_kill",
+        ),
+        "process_group_alive_after_kill": _public_optional_bool(
+            value,
+            "process_group_alive_after_kill",
+        ),
     }
 
 

@@ -244,6 +244,37 @@ def test_minecraft_matrix_continues_after_safe_task_failure(tmp_path, monkeypatc
     assert summary["completed_runs"] == 1
 
 
+def test_minecraft_matrix_rejects_unknown_runtime_process_evidence(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        summary["runtime_process_alive_after_kill"] = None
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["first"]
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "unsafe_runtime_target"
+    assert summary["skipped_runs"] == 1
+    assert summary["runs"][1]["reason"] == "unsafe_runtime_target"
+
+
 def test_minecraft_matrix_classifies_preexisting_quarantine_and_never_starts_runtime(
     tmp_path,
     monkeypatch,

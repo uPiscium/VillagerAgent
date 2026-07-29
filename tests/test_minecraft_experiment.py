@@ -19,6 +19,7 @@ from benchmarks.minecraft.experiment import (
     _execute_real_runtime_bounded,
     _read_completed_runtime_result,
     _public_bridge_cleanup,
+    _public_runtime_process,
     _task_graph_from_config,
     _terminate_runtime_process,
     _cleanup_exited_runtime_process_group,
@@ -995,7 +996,7 @@ def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
         output_root=tmp_path / "result",
         run_name="execute_real_snapshot",
         execute=True,
-            execute_timeout_seconds=30,
+        execute_timeout_seconds=30,
     )
 
     output_dir = tmp_path / "result" / "execute_real_snapshot"
@@ -1006,6 +1007,9 @@ def test_minecraft_execute_uses_real_runtime_snapshot(tmp_path, monkeypatch):
     assert summary["runtime_process_isolated"] is True
     assert summary["runtime_process_exit_code"] == 0
     assert summary["runtime_process_terminated"] is False
+    assert summary["runtime_process_killed"] is False
+    assert summary["runtime_process_alive_after_kill"] is False
+    assert summary["runtime_process_group_alive_after_kill"] is False
 
 
 def test_runtime_task_snapshot_adapter_restores_tasks_edges_and_lifecycle_metadata():
@@ -1550,6 +1554,35 @@ def test_malformed_runtime_process_metadata_quarantines_without_breaking_finaliz
     assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 
 
+def test_missing_runtime_process_cleanup_field_is_publicly_unknown(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: {
+            "action_log": {},
+            "runtime_process": {"process_alive_after_kill": False},
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+        },
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="missing_process_group_cleanup",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert summary["runtime_process_alive_after_kill"] is False
+    assert summary["runtime_process_group_alive_after_kill"] is None
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is True
+    assert (
+        "runtime_process_metadata_invalid"
+        in summary["runtime_target_quarantine"]["reasons"]
+    )
+
+
 def test_quarantine_blocks_next_command_until_explicit_clear(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
     calls = []
@@ -1652,6 +1685,10 @@ def test_generic_runtime_error_quarantines_unverified_cleanup(tmp_path, monkeypa
     assert summary["runtime_started"] is True
     assert summary["runtime_target_safe_to_reuse"] is False
     assert summary["runtime_target_quarantined"] is True
+    assert summary["runtime_process_alive_after_kill"] is None
+    assert summary["runtime_process_group_alive_after_kill"] is None
+    assert summary["runtime_process_terminated"] is None
+    assert summary["runtime_process_killed"] is None
     assert "runtime_process_metadata_invalid" in reasons
     assert "bridge_cleanup_missing" in reasons
     assert summary["terminal_event_type"] == "run_failed"
@@ -1767,6 +1804,41 @@ def test_public_bridge_cleanup_preserves_invalid_process_booleans_as_unknown():
             },
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_public"),
+    [
+        ("false", None),
+        (0, None),
+        (1, None),
+        (None, None),
+        (False, False),
+        (True, True),
+    ],
+)
+def test_public_runtime_process_preserves_only_real_booleans(raw_value, expected_public):
+    result = _public_runtime_process({
+        "process_alive_after_kill": raw_value,
+        "process_group_alive_after_kill": raw_value,
+        "terminated": raw_value,
+        "killed": raw_value,
+    })
+
+    assert result["process_alive_after_kill"] is expected_public
+    assert result["process_group_alive_after_kill"] is expected_public
+    assert result["terminated"] is expected_public
+    assert result["killed"] is expected_public
+
+
+@pytest.mark.parametrize("value", [None, [], "invalid"])
+def test_public_runtime_process_reports_non_objects_as_unknown(value):
+    result = _public_runtime_process(value)
+
+    assert result["terminated"] is None
+    assert result["killed"] is None
+    assert result["process_alive_after_kill"] is None
+    assert result["process_group_alive_after_kill"] is None
 
 
 def test_runtime_process_termination_targets_isolated_process_group(monkeypatch):
