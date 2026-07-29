@@ -48,6 +48,12 @@ class ControllerShutdownError(RuntimeError):
     pass
 
 
+class JudgedEvidenceConsistencyError(ControllerShutdownError):
+    def __init__(self, message: str, *, agent_failures: dict):
+        super().__init__(message)
+        self.agent_failures = agent_failures
+
+
 class GlobalController:
     '''
     Global Controller for Minecraft game agents. The task is to assign tasks to agents. Create a plan that assigns tasks to suitable agents and return a list of task-assignment JSON objects.
@@ -698,6 +704,36 @@ class GlobalController:
 
         self.controller_state = self.STATE_RECONCILING
         payload = dict(self._judger_terminal_payload)
+        agent_execution = self._validate_reconciled_agent_execution(group)
+        if payload["status"] == "success" and not agent_execution["valid"]:
+            feedback = {
+                "terminal_source": "external_judger",
+                "judger_status": payload["status"],
+                "score": payload.get("score"),
+                "progress": payload.get("progress", payload.get("score")),
+                "attempt_id": payload.get("attempt_id"),
+                "task_name": payload.get("task_name"),
+                "evidence_consistency": "failed",
+                "agent_failures": agent_execution["agent_failures"],
+                "agent_execution": agent_execution,
+            }
+            self.task_manager.mark_task_status(task_id, Task.failure, feedback)
+            if group is not None:
+                group.task.status = Task.failure
+                group.terminal_state_persisted = True
+                self._complete_reconciled_group(group)
+            else:
+                self._release_task_assignments(task_id)
+            self._remove_completed_groups()
+            self._judger_terminal_reconciled = True
+            self.controller_state = self.STATE_SHUTDOWN
+            error = JudgedEvidenceConsistencyError(
+                "external judger success conflicts with failed agent evidence",
+                agent_failures=agent_execution["agent_failures"],
+            )
+            self._record_failure("judged_evidence_consistency", error)
+            self.env.stop()
+            raise error
         status = Task.success if payload["status"] == "success" else Task.failure
         feedback = {
             "terminal_source": "external_judger",
@@ -706,10 +742,7 @@ class GlobalController:
             "progress": payload.get("progress", payload.get("score")),
             "attempt_id": payload.get("attempt_id"),
             "task_name": payload.get("task_name"),
-            "agent_execution": {
-                "drained": True,
-                "result_available": bool(group and group.futures),
-            },
+            "agent_execution": agent_execution,
         }
         self.task_manager.mark_task_status(task_id, status, feedback)
         if group is not None:
@@ -730,6 +763,71 @@ class GlobalController:
         else:
             self._request_shutdown()
         return True
+
+    def _validate_reconciled_agent_execution(
+        self,
+        group: TaskExecutionGroup | None,
+    ) -> dict:
+        if group is None:
+            return {
+                "valid": True,
+                "drained": True,
+                "result_available": False,
+                "agent_results": {},
+                "agent_failures": {},
+            }
+        snapshots = {
+            name: self._snapshot_future(future)
+            for name, future in group.futures.items()
+        }
+        results = {}
+        failures = {}
+        for name, snapshot in snapshots.items():
+            if snapshot["cancelled"]:
+                failures[name] = {
+                    "reason": "future_cancelled",
+                    "retry_safe": False,
+                }
+                continue
+            exception = snapshot["exception"]
+            if exception is not None:
+                detail = getattr(exception, "failure_detail", None)
+                failures[name] = dict(detail) if isinstance(detail, dict) else {
+                    "reason": "future_exception",
+                    "error_type": type(exception).__name__,
+                    "message": str(exception),
+                    "retry_safe": False,
+                }
+                continue
+            result = snapshot["result"]
+            if not isinstance(result, tuple) or len(result) != 2:
+                failures[name] = {
+                    "reason": "malformed_future_result",
+                    "retry_safe": False,
+                }
+                continue
+            detail = result[1]
+            failure = detail.get("failure") if isinstance(detail, dict) else None
+            if isinstance(failure, dict) and (
+                failure.get("retry_safe") is False
+                or failure.get("reason") in {
+                    "minecraft_action_log_error",
+                    "minecraft_tool_timeout",
+                }
+            ):
+                failures[name] = dict(failure)
+                continue
+            results[name] = {
+                "status": "completed",
+                "detail_available": detail is not None,
+            }
+        return {
+            "valid": not failures,
+            "drained": True,
+            "result_available": bool(group.futures),
+            "agent_results": results,
+            "agent_failures": failures,
+        }
 
     def _running_runtime_task_ids(self) -> list[str]:
         runtime_store = getattr(self.task_manager, "runtime_task_store", None)

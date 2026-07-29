@@ -371,6 +371,33 @@ def test_judged_runtime_validator_rejects_collection_errors():
         start_with_config.validate_judged_runtime_result(result)
 
 
+def test_judged_runtime_validator_requires_action_evidence_by_default():
+    result = _judged_runtime_result()
+    result["action_log"] = {"Alice": []}
+
+    with pytest.raises(start_with_config.JudgedRuntimeValidationError, match="no action evidence"):
+        start_with_config.validate_judged_runtime_result(result)
+
+
+def test_judged_runtime_validator_allows_policy_optional_empty_action_log():
+    result = _judged_runtime_result()
+    result["action_log"] = {}
+
+    start_with_config.validate_judged_runtime_result(
+        result,
+        require_action_evidence=False,
+    )
+
+
+@pytest.mark.parametrize("action_log", [None, [], {"Alice": {}}])
+def test_judged_runtime_validator_rejects_invalid_action_log(action_log):
+    result = _judged_runtime_result()
+    result["action_log"] = action_log
+
+    with pytest.raises(start_with_config.JudgedRuntimeValidationError, match="action log"):
+        start_with_config.validate_judged_runtime_result(result)
+
+
 def _judged_runtime_result():
     return {
         "attempt_id": "attempt-a",
@@ -388,5 +415,7 @@ def _judged_runtime_result():
             }],
         },
         "controller": {"shutdown_complete": True, "state": "shutdown"},
+        "action_log": {"Alice": [{"action": "navigateTo"}]},
+        "collection_errors": [],
         "error": None,
     }

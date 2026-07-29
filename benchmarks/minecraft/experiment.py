@@ -968,6 +968,7 @@ def _execute_real_runtime(
         emit_controller_terminal_event=False,
         runtime_paths=RuntimePaths.isolated(runtime_root),
         attempt_id=attempt_id,
+        require_action_evidence=bool(config.get("require_action_evidence", True)),
     )
 
 

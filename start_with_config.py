@@ -141,7 +141,11 @@ def _apply_runtime_cleanup_failure(result: dict, error: BaseException) -> dict:
     return result
 
 
-def validate_judged_runtime_result(result: dict) -> None:
+def validate_judged_runtime_result(
+    result: dict,
+    *,
+    require_action_evidence: bool = True,
+) -> None:
     score = result.get("score")
     if not isinstance(score, dict) or not score:
         raise JudgedRuntimeValidationError("judged runtime result has no score payload")
@@ -177,6 +181,31 @@ def validate_judged_runtime_result(result: dict) -> None:
         raise JudgedRuntimeValidationError("judged runtime result contains an error")
     if result.get("collection_errors"):
         raise JudgedRuntimeValidationError("judged runtime result contains collection errors")
+    action_log = result.get("action_log")
+    if not isinstance(action_log, dict):
+        raise JudgedRuntimeValidationError(
+            "judged runtime action log is unavailable or invalid"
+        )
+    invalid_entries = [
+        name
+        for name, entries in action_log.items()
+        if name != "_attempt_id"
+        and (not isinstance(name, str) or not isinstance(entries, list))
+    ]
+    if invalid_entries:
+        raise JudgedRuntimeValidationError("judged runtime action log schema is invalid")
+    if require_action_evidence and not any(
+        entries
+        for name, entries in action_log.items()
+        if name != "_attempt_id" and isinstance(entries, list)
+    ):
+        raise JudgedRuntimeValidationError(
+            "judged runtime contains no action evidence"
+        )
+
+
+def _requires_action_evidence(config: dict) -> bool:
+    return bool(config.get("require_action_evidence", True))
 
 
 def _write_runtime_result(path: str | None, payload: dict) -> None:
@@ -270,7 +299,7 @@ def _with_runtime_paths(function):
 
 
 @_with_runtime_paths
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True):
     start_time = time.time()
 
     if task_type == "meta" and not task_scenario:
@@ -502,7 +531,10 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
 
             result = _runtime_result(env, tm, ctrl, attempt_id=attempt_id, task_name=task_name)
             if task_type == "meta":
-                validate_judged_runtime_result(result)
+                validate_judged_runtime_result(
+                    result,
+                    require_action_evidence=require_action_evidence,
+                )
         result["bridge_cleanup"] = dict(
             getattr(env, "bridge_cleanup_result", {}) or {}
         )

@@ -576,6 +576,31 @@ def test_action_log_failure_does_not_repeat_completed_tool(tmp_path, monkeypatch
     assert calls == ["Alice"]
 
 
+@pytest.mark.parametrize("content", ["{", "[]", '{"Alice": {}}'])
+def test_environment_get_action_log_rejects_invalid_schema(tmp_path, content):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    paths.ensure_directories()
+    paths.action_log.write_text(content, encoding="utf-8")
+    environment = object.__new__(VillagerBench)
+    environment.runtime_paths = paths
+
+    with pytest.raises(MinecraftActionLogError):
+        environment.get_action_log()
+
+
+def test_environment_get_action_log_accepts_valid_agent_lists(tmp_path):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    action_log = {
+        "Alice": [{"action": "navigateTo"}],
+        "_attempt_id": "attempt-a",
+    }
+    atomic_write_json(paths.action_log, action_log)
+    environment = object.__new__(VillagerBench)
+    environment.runtime_paths = paths
+
+    assert environment.get_action_log() == action_log
+
+
 def test_judger_terminal_artifact_cannot_be_overwritten(tmp_path):
     paths = RuntimePaths.isolated(tmp_path / "attempt")
     writer = TerminalArtifactWriter(paths, paths.run_result_dir("run-a"))
