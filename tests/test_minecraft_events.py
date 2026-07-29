@@ -51,9 +51,9 @@ def test_experiment_writes_optional_public_events_and_metadata(tmp_path: Path) -
 
     events = [json.loads(line) for line in (output / "run" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert summary["events_available"] is True
-    assert summary["event_count"] == len(events) == 2
-    assert [event["event_type"] for event in events] == ["run_started", "run_completed"]
-    assert [event["provenance"]["runtime_seq"] for event in events] == [1, 2]
+    assert summary["event_count"] == len(events) == 1
+    assert [event["event_type"] for event in events] == ["run_started"]
+    assert [event["provenance"]["runtime_seq"] for event in events] == [1]
 
 
 def test_event_producer_failure_does_not_block_existing_artifacts(tmp_path: Path, monkeypatch) -> None:

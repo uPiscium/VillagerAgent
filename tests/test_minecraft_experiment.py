@@ -25,6 +25,7 @@ from benchmarks.minecraft.experiment import (
     _validate_runtime_cleanup,
     run_minecraft_experiment,
     task_graph_from_runtime_task_dag_snapshot,
+    validate_experiment_artifact_admission,
     validate_minecraft_config,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
@@ -396,8 +397,91 @@ def test_minecraft_manifest_captures_final_event_artifacts(tmp_path, monkeypatch
     output_dir = tmp_path / "result" / "manifest_terminal"
     validate_run_attempt(output_dir, attempt_id=summary["attempt_id"])
     events = [json.loads(line) for line in (output_dir / "events.jsonl").read_text().splitlines()]
-    assert build_calls == 2
-    assert [event["event_type"] for event in events] == ["event-0", "event-1"]
+    assert build_calls == 1
+    assert [event["event_type"] for event in events] == ["event-0"]
+
+
+def test_required_artifact_admission_accepts_complete_judged_run():
+    summary, snapshot, action_log = _artifact_admission_fixture()
+
+    admission = validate_experiment_artifact_admission(
+        summary=summary,
+        runtime_snapshot=snapshot,
+        action_log=action_log,
+        required_artifacts={
+            "score",
+            "runtime_task_dag",
+            "action_log",
+            "events",
+            "bridge_cleanup",
+            "child_protocol",
+        },
+    )
+
+    assert admission["passed"] is True
+    assert admission["missing"] == []
+    assert admission["invalid"] == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "problem"),
+    [
+        (lambda summary, _snapshot, _log: summary.update(runtime_collection_errors=[{"error": "bad"}]), "runtime_collection_errors"),
+        (lambda _summary, _snapshot, log: log.update(Alice=[]), "action_log"),
+        (lambda summary, _snapshot, _log: summary.update(bridge_cleanup={}), "bridge_cleanup"),
+        (lambda summary, _snapshot, _log: summary["bridge_cleanup"].update(cleanup_complete=False), "bridge_cleanup"),
+        (lambda summary, _snapshot, _log: summary.update(runtime_target_safe_to_reuse=False), "runtime_target"),
+        (lambda summary, _snapshot, _log: summary["child_protocol"].update(result_written=False), "child_protocol"),
+        (lambda summary, _snapshot, _log: summary.update(events_available=False), "events"),
+        (lambda summary, _snapshot, _log: summary.update(event_artifact_error="RuntimeError"), "events"),
+    ],
+)
+def test_required_artifact_admission_rejects_missing_or_invalid_evidence(mutation, problem):
+    summary, snapshot, action_log = _artifact_admission_fixture()
+    mutation(summary, snapshot, action_log)
+
+    admission = validate_experiment_artifact_admission(
+        summary=summary,
+        runtime_snapshot=snapshot,
+        action_log=action_log,
+        required_artifacts={
+            "score",
+            "runtime_task_dag",
+            "action_log",
+            "events",
+            "bridge_cleanup",
+            "child_protocol",
+        },
+    )
+
+    assert admission["passed"] is False
+    assert problem in admission["missing"] + admission["invalid"]
+
+
+@pytest.mark.parametrize("events_required", [False, True])
+def test_event_generation_failure_respects_required_policy(tmp_path, monkeypatch, events_required):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config(f"events_{events_required}")
+    if events_required:
+        config["required_artifacts"] = ["events"]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.build_normalized_events",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("event conversion failed")),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert summary["event_artifact_error"] == "RuntimeError"
+    assert summary["artifact_admission"]["passed"] is (not events_required)
+    assert summary["error_type"] == ("RequiredArtifactError" if events_required else "")
+    assert (run_dir / COMPLETION_MARKER_FILE).exists() is (not events_required)
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == ("failed" if events_required else "completed")
 
 
 def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, monkeypatch):
@@ -1786,6 +1870,37 @@ def _runtime_result_snapshot(status="success"):
         },
         "error": None,
     }
+
+
+def _artifact_admission_fixture():
+    summary = {
+        "final_score": {"status": "success", "score": 100},
+        "score_available": True,
+        "score_ownership_verified": True,
+        "action_log_available": True,
+        "events_available": True,
+        "event_artifact_error": None,
+        "bridge_cleanup": {
+            "cleanup_complete": True,
+            "processes": {"Alice": {"alive_after_kill": False}},
+        },
+        "child_protocol": {
+            "status": "completed",
+            "result_written": True,
+            "result_valid": True,
+        },
+        "runtime_collection_errors": [],
+        "controller_shutdown_complete": True,
+        "controller_active_assignments": {},
+        "runtime_target_safe_to_reuse": True,
+    }
+    snapshot = {
+        "summary": {"terminal_state": "success"},
+        "nodes": [{
+            "lifecycle": {"status": "success", "active_agents": []},
+        }],
+    }
+    return summary, snapshot, {"Alice": [{"action": "navigateTo"}]}
 
 
 def _minecraft_config(task_name):
