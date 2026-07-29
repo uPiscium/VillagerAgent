@@ -6,7 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from pipeline.controller_tiny import ControllerShutdownError, GlobalController, TaskExecutionGroup
+from pipeline.controller_tiny import (
+    ControllerShutdownError,
+    GlobalController,
+    JudgedEvidenceConsistencyError,
+    TaskExecutionGroup,
+)
+from env.minecraft_client import MinecraftActionLogError, MinecraftToolTimeoutError
 from env.minecraft_client import ToolActionBlockedError
 from pipeline.runtime_events import InMemoryRuntimeEventRecorder
 from pipeline.task_manager import TaskManager
@@ -151,6 +157,86 @@ def test_judger_failure_persists_canonical_failure_once():
     assert len(status_events) == 1
     assert controller.shutdown_event.is_set() is True
     assert controller._first_failure[2]["thread"] == "external_judger"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MinecraftActionLogError("action evidence unavailable", agent="Alice"),
+        MinecraftToolTimeoutError("tool response timed out", agent="Alice"),
+    ],
+)
+def test_judger_success_rejects_retry_unsafe_future_exception(error):
+    controller, manager, _, task = _judged_reconciliation_controller()
+    future = Future()
+    future.set_exception(error)
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller.observe_judger_terminal()
+
+    with pytest.raises(JudgedEvidenceConsistencyError) as raised:
+        controller.reconcile_judger_terminal()
+
+    snapshot = manager.runtime_task_store.snapshot()
+    assert snapshot["summary"]["terminal_state"] == "failure"
+    assert snapshot["nodes"][0]["lifecycle"]["status"] == Task.failure
+    feedback = snapshot["nodes"][0]["content"]["reflect"]
+    assert feedback["judger_status"] == "success"
+    assert feedback["evidence_consistency"] == "failed"
+    assert feedback["agent_failures"]["Alice"]["retry_safe"] is False
+    assert raised.value.agent_failures == feedback["agent_failures"]
+
+
+@pytest.mark.parametrize("future_state", ["cancelled", "malformed"])
+def test_judger_success_rejects_invalid_completed_future(future_state):
+    controller, manager, _, task = _judged_reconciliation_controller()
+    future = Future()
+    if future_state == "cancelled":
+        future.cancel()
+    else:
+        future.set_result("not a step result")
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller.observe_judger_terminal()
+
+    with pytest.raises(JudgedEvidenceConsistencyError):
+        controller.reconcile_judger_terminal()
+
+    assert manager.runtime_task_store.snapshot()["summary"]["terminal_state"] == "failure"
+
+
+def test_judger_success_accepts_valid_completed_future():
+    controller, manager, _, task = _judged_reconciliation_controller()
+    future = Future()
+    future.set_result(("done", {"action_list": [{"action": "navigateTo"}]}))
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller.observe_judger_terminal()
+
+    assert controller.reconcile_judger_terminal() is True
+
+    snapshot = manager.runtime_task_store.snapshot()
+    assert snapshot["summary"]["terminal_state"] == "success"
+    feedback = snapshot["nodes"][0]["content"]["reflect"]
+    assert feedback["agent_execution"]["valid"] is True
 
 
 def test_judger_payload_attempt_mismatch_is_rejected():

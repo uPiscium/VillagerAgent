@@ -1,4 +1,8 @@
-from env.minecraft_client import Agent, MinecraftBridgeCleanupError
+from env.minecraft_client import (
+    Agent,
+    MinecraftActionLogError,
+    MinecraftBridgeCleanupError,
+)
 from contextlib import contextmanager
 from copy import copy
 from functools import wraps
@@ -184,10 +188,24 @@ class VillagerBench:
     
     def get_action_log(self):
         action_result = read_json_artifact(self._paths().action_log)
-        if action_result.state == "valid":
-            return action_result.value
-        else:
-            return {"message": "action log not found", "status": False}
+        if action_result.state == "absent":
+            return {}
+        if action_result.state == "invalid":
+            raise MinecraftActionLogError(
+                f"action log is invalid: {action_result.error}"
+            )
+        if not isinstance(action_result.value, dict):
+            raise MinecraftActionLogError("action log must contain an object")
+        for agent_name, entries in action_result.value.items():
+            if agent_name == "_attempt_id":
+                if not isinstance(entries, str):
+                    raise MinecraftActionLogError("action log attempt identity must be a string")
+                continue
+            if not isinstance(agent_name, str) or not isinstance(entries, list):
+                raise MinecraftActionLogError(
+                    "action log must map agent names to lists"
+                )
+        return action_result.value
         
     def get_init_state(self) -> [dict]:
         if not self.running and not self._virtual_debug:
