@@ -239,6 +239,33 @@ def test_judger_success_accepts_valid_completed_future():
     assert feedback["agent_execution"]["valid"] is True
 
 
+def test_judger_success_accepts_tool_blocked_by_terminal_barrier():
+    controller, manager, _, task = _judged_reconciliation_controller()
+    future = Future()
+    future.set_exception(
+        ToolActionBlockedError(
+            "Cannot start Minecraft tool action after judger terminal detection"
+        )
+    )
+    group = TaskExecutionGroup(
+        task=task,
+        agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+        submission_complete=True,
+    )
+    controller.result_queue.append(group)
+    controller.assignment["Alice"] = task.id
+    controller.observe_judger_terminal()
+
+    assert controller.reconcile_judger_terminal() is True
+
+    snapshot = manager.runtime_task_store.snapshot()
+    assert snapshot["summary"]["terminal_state"] == "success"
+    feedback = snapshot["nodes"][0]["content"]["reflect"]
+    assert feedback["agent_execution"]["valid"] is True
+    assert feedback["agent_execution"]["agent_results"]["Alice"]["status"] == "terminal_blocked"
+
+
 def test_judger_payload_attempt_mismatch_is_rejected():
     controller, manager, _, _ = _judged_reconciliation_controller()
     controller.env.get_score = lambda: {

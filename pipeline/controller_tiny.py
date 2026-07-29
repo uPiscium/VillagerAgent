@@ -17,6 +17,7 @@ from pipeline.utils import *
 from pipeline.controller_prompt import *
 from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_event
 from env.env import VillagerBench
+from env.minecraft_client import ToolActionBlockedError
 from env.minecraft_dual_dag import rank_minecraft_runtime_tasks
 from env.runtime_paths import RuntimePaths, atomic_write_json
 import logging
@@ -791,6 +792,12 @@ class GlobalController:
                 continue
             exception = snapshot["exception"]
             if exception is not None:
+                if isinstance(exception, ToolActionBlockedError):
+                    results[name] = {
+                        "status": "terminal_blocked",
+                        "detail_available": False,
+                    }
+                    continue
                 detail = getattr(exception, "failure_detail", None)
                 failures[name] = dict(detail) if isinstance(detail, dict) else {
                     "reason": "future_exception",
