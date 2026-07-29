@@ -79,7 +79,10 @@ def test_target_safety_rejects_unverified_cleanup(runtime_process, bridge_cleanu
 def test_target_safety_accepts_completed_cleanup():
     assessment = assess_minecraft_target_safety(
         runtime_started=True,
-        runtime_process={},
+        runtime_process={
+            "process_alive_after_kill": False,
+            "process_group_alive_after_kill": False,
+        },
         bridge_cleanup={
             "cleanup_complete": True,
             "processes": {"Alice": {"alive_after_kill": False}},
@@ -88,6 +91,25 @@ def test_target_safety_accepts_completed_cleanup():
 
     assert assessment.safe is True
     assert assessment.reasons == ()
+
+
+@pytest.mark.parametrize(
+    "runtime_process",
+    [
+        {},
+        {"process_alive_after_kill": False},
+        {"process_group_alive_after_kill": False},
+    ],
+)
+def test_target_safety_rejects_missing_process_cleanup_fields(runtime_process):
+    assessment = assess_minecraft_target_safety(
+        runtime_started=True,
+        runtime_process=runtime_process,
+        bridge_cleanup={"cleanup_complete": True, "processes": {}},
+    )
+
+    assert assessment.safe is False
+    assert "runtime_process_metadata_invalid" in assessment.reasons
 
 
 def test_target_safety_does_not_quarantine_before_runtime_starts():

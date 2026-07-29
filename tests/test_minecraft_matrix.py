@@ -456,6 +456,8 @@ def _matrix_run_summary(tmp_path, run_name):
         "artifact_admission": {"passed": True},
         "runtime_target_safe_to_reuse": True,
         "runtime_started": True,
+        "runtime_process_alive_after_kill": False,
+        "runtime_process_group_alive_after_kill": False,
         "runtime_target_lock_metadata_valid": True,
         "runtime_target_quarantined": False,
         "bridge_cleanup": {"cleanup_complete": True, "processes": {}},

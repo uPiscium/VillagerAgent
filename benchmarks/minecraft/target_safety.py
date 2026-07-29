@@ -28,11 +28,11 @@ def assess_minecraft_target_safety(
     process_alive = None
     process_group_alive = None
     if runtime_process_metadata_valid:
-        process_alive, process_alive_valid = _strict_optional_bool_field(
+        process_alive, process_alive_valid = _strict_required_bool_field(
             runtime_process,
             "process_alive_after_kill",
         )
-        process_group_alive, process_group_alive_valid = _strict_optional_bool_field(
+        process_group_alive, process_group_alive_valid = _strict_required_bool_field(
             runtime_process,
             "process_group_alive_after_kill",
         )
@@ -99,9 +99,9 @@ def assess_minecraft_target_safety(
     )
 
 
-def _strict_optional_bool_field(mapping: dict, field: str) -> tuple[bool | None, bool]:
+def _strict_required_bool_field(mapping: dict, field: str) -> tuple[bool | None, bool]:
     if field not in mapping:
-        return None, True
+        return None, False
     value = mapping[field]
     if not isinstance(value, bool):
         return None, False

@@ -129,8 +129,12 @@ class MinecraftTargetLock:
     ) -> dict:
         if not self.acquired or self._stream is None:
             raise MinecraftTargetLockError("Minecraft target must be acquired before quarantine")
+        if not isinstance(run_name, str) or not run_name.strip():
+            raise ValueError("quarantine run_name must be a non-empty string")
         normalized_reasons = tuple(dict.fromkeys(
-            reason for reason in reasons if isinstance(reason, str) and reason
+            reason.strip()
+            for reason in reasons
+            if isinstance(reason, str) and reason.strip()
         ))
         if not normalized_reasons:
             raise ValueError("quarantine reasons must contain at least one non-empty string")
@@ -144,8 +148,8 @@ class MinecraftTargetLock:
         record = {
             **acquired,
             "status": "quarantined",
-            "run_name": run_name,
-            "quarantined_at": time.time(),
+            "run_name": run_name.strip(),
+            "quarantined_at": max(time.time(), acquired["acquired_at"]),
             "reasons": list(normalized_reasons),
             "diagnostics": diagnostics,
         }
@@ -160,7 +164,10 @@ class MinecraftTargetLock:
         if self.acquired:
             if not self.quarantined:
                 metadata = self._read_metadata()
-                metadata.update({"status": "released", "released_at": time.time()})
+                metadata.update({
+                    "status": "released",
+                    "released_at": max(time.time(), metadata["acquired_at"]),
+                })
                 self._write_metadata(metadata)
             fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
         self._stream.close()
@@ -344,7 +351,9 @@ def _validate_metadata_identity(
         payload.get("lock_key") != expected_key
         or not isinstance(payload.get("host"), str)
         or payload["host"].casefold() != expected_host.casefold()
-        or payload.get("port") != int(expected_port)
+        or not isinstance(payload.get("port"), int)
+        or isinstance(payload.get("port"), bool)
+        or payload["port"] != int(expected_port)
     ):
         raise MinecraftTargetLockMetadataError("Minecraft target lock metadata identity mismatch")
 
@@ -363,19 +372,99 @@ def _validate_schema_v1_metadata(payload: dict) -> dict:
 
 
 def _validate_schema_v2_metadata(payload: dict) -> dict:
-    if payload.get("status") not in LOCK_METADATA_STATUSES:
+    status = payload.get("status")
+    if status not in LOCK_METADATA_STATUSES:
         raise MinecraftTargetLockMetadataError("Minecraft target lock metadata status is invalid")
-    if payload["status"] == "quarantined":
+    if status == "acquired":
+        _validate_acquisition_metadata(payload)
+    elif status == "released":
+        _validate_acquisition_metadata(payload)
         if (
-            not isinstance(payload.get("attempt_id"), str)
-            or not isinstance(payload.get("run_name"), str)
-            or not isinstance(payload.get("reasons"), list)
-            or not payload["reasons"]
-            or not all(isinstance(reason, str) and reason for reason in payload["reasons"])
+            not _is_non_negative_finite_number(payload.get("released_at"))
+            or payload["released_at"] < payload["acquired_at"]
+        ):
+            raise MinecraftTargetLockMetadataError("Minecraft target released metadata is invalid")
+    elif status == "quarantined":
+        _validate_acquisition_metadata(payload)
+        if (
+            not _is_non_empty_string(payload.get("run_name"))
+            or not _is_non_negative_finite_number(payload.get("quarantined_at"))
+            or payload["quarantined_at"] < payload["acquired_at"]
+            or not _is_non_empty_string_list(payload.get("reasons"))
             or not isinstance(payload.get("diagnostics"), dict)
         ):
             raise MinecraftTargetLockMetadataError("Minecraft target quarantine metadata is invalid")
+    else:
+        _validate_cleared_metadata(payload)
     return dict(payload)
+
+
+def _validate_acquisition_metadata(payload: dict) -> None:
+    if (
+        not _is_non_empty_string(payload.get("attempt_id"))
+        or not _is_positive_int(payload.get("pid"))
+        or not isinstance(payload.get("world_id"), str)
+        or not _is_non_negative_finite_number(payload.get("acquired_at"))
+        or not isinstance(payload.get("stale_owner_detected"), bool)
+    ):
+        raise MinecraftTargetLockMetadataError("Minecraft target acquisition metadata is invalid")
+    if (
+        "migrated_from_schema_version" in payload
+        and (
+            not isinstance(payload["migrated_from_schema_version"], int)
+            or isinstance(payload["migrated_from_schema_version"], bool)
+            or payload["migrated_from_schema_version"] != 1
+        )
+    ):
+        raise MinecraftTargetLockMetadataError("Minecraft target migration metadata is invalid")
+    if (
+        "previous_status" in payload
+        and payload["previous_status"] not in {"acquired", "released"}
+    ):
+        raise MinecraftTargetLockMetadataError("Minecraft target migration metadata is invalid")
+
+
+def _validate_cleared_metadata(payload: dict) -> None:
+    last_quarantine = payload.get("last_quarantine")
+    if (
+        not _is_non_negative_finite_number(payload.get("cleared_at"))
+        or not _is_positive_int(payload.get("cleared_by_pid"))
+        or not _is_non_empty_string(payload.get("clear_reason"))
+        or not isinstance(last_quarantine, dict)
+    ):
+        raise MinecraftTargetLockMetadataError("Minecraft target cleared metadata is invalid")
+    if last_quarantine and (
+        not _is_non_empty_string(last_quarantine.get("attempt_id"))
+        or not _is_non_empty_string(last_quarantine.get("run_name"))
+        or not _is_non_negative_finite_number(last_quarantine.get("quarantined_at"))
+        or not _is_non_empty_string_list(last_quarantine.get("reasons"))
+    ):
+        raise MinecraftTargetLockMetadataError("Minecraft target cleared metadata is invalid")
+
+
+def _is_non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_non_empty_string_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(_is_non_empty_string(item) for item in value)
+    )
+
+
+def _is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_non_negative_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def _write_stream_metadata(stream, payload: dict) -> None:

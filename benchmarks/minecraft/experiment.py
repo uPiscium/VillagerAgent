@@ -1676,16 +1676,28 @@ def _public_bridge_cleanup(value: object) -> dict:
     public_processes = {}
     if isinstance(processes, dict):
         for name, metadata in processes.items():
-            if not isinstance(name, str) or not isinstance(metadata, dict):
+            if not isinstance(name, str) or not name:
+                continue
+            if not isinstance(metadata, dict):
+                public_processes[name] = {
+                    "terminated": None,
+                    "killed": None,
+                    "alive_after_kill": None,
+                }
                 continue
             public_processes[name] = {
-                key: bool(metadata.get(key, False))
+                key: _public_optional_bool(metadata, key)
                 for key in ("terminated", "killed", "alive_after_kill")
             }
     return {
-        "cleanup_complete": bool(value.get("cleanup_complete", False)),
+        "cleanup_complete": _public_optional_bool(value, "cleanup_complete"),
         "processes": public_processes,
     }
+
+
+def _public_optional_bool(mapping: dict, field: str) -> bool | None:
+    value = mapping.get(field)
+    return value if isinstance(value, bool) else None
 
 
 def _public_target_quarantine(record: dict, *, status: str) -> dict:

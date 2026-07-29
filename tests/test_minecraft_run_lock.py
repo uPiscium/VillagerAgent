@@ -67,6 +67,8 @@ def test_unlocked_dead_owner_metadata_is_detected_as_stale(tmp_path):
         "world_id": "world-a",
         "pid": 99999999,
         "attempt_id": "dead",
+        "acquired_at": 1.0,
+        "stale_owner_detected": False,
     }), encoding="utf-8")
 
     with lock:
@@ -119,6 +121,67 @@ def test_schema_v1_identity_mismatch_fails_closed(tmp_path):
 
     with pytest.raises(MinecraftTargetLockMetadataError, match="identity mismatch"):
         lock.acquire()
+
+
+@pytest.mark.parametrize(
+    ("status", "field", "replacement"),
+    [
+        ("acquired", "pid", None),
+        ("acquired", "acquired_at", None),
+        ("released", "attempt_id", None),
+        ("released", "released_at", None),
+        ("quarantined", "run_name", ""),
+        ("quarantined", "quarantined_at", None),
+        ("cleared", "clear_reason", None),
+        ("cleared", "cleared_at", None),
+        ("cleared", "last_quarantine", {"attempt_id": "attempt-a"}),
+    ],
+)
+def test_invalid_schema_v2_state_is_rejected_without_modification(
+    tmp_path,
+    status,
+    field,
+    replacement,
+):
+    lock = _lock(tmp_path, "attempt-new")
+    metadata = _schema_v2_metadata(lock, status=status)
+    if replacement is None:
+        del metadata[field]
+    else:
+        metadata[field] = replacement
+    original_content = json.dumps(metadata, indent=2) + "\n"
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text(original_content, encoding="utf-8")
+
+    with pytest.raises(MinecraftTargetLockMetadataError):
+        lock.acquire()
+
+    assert lock.path.read_text(encoding="utf-8") == original_content
+
+
+def test_generated_schema_v2_states_validate(tmp_path):
+    first = _lock(tmp_path, "attempt-a").acquire()
+    assert _read_lock_metadata(tmp_path)["status"] == "acquired"
+    first.release()
+    assert _read_lock_metadata(tmp_path)["status"] == "released"
+
+    second = _lock(tmp_path, "attempt-b").acquire()
+    second.quarantine(
+        run_name="run-b",
+        reasons=["bridge_cleanup_incomplete"],
+        diagnostics={},
+    )
+    second.release()
+    assert _read_lock_metadata(tmp_path)["status"] == "quarantined"
+
+    clear_minecraft_target_quarantine(
+        lock_root=tmp_path / "locks",
+        host="127.0.0.1",
+        port=25565,
+        reason="Verified cleanup",
+        acknowledge_target_safe=True,
+    )
+    assert _read_lock_metadata(tmp_path)["status"] == "cleared"
 
 
 def test_quarantine_persists_and_rejects_next_owner(tmp_path):
@@ -300,3 +363,51 @@ def _write_schema_v1_metadata(
         "lock_key": lock.key,
     }
     lock.path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def _schema_v2_metadata(lock, *, status):
+    metadata = {
+        "schema_version": 2,
+        "status": status,
+        "lock_key": lock.key,
+        "host": lock.host,
+        "port": lock.port,
+    }
+    if status in {"acquired", "released", "quarantined"}:
+        metadata.update({
+            "attempt_id": "attempt-a",
+            "pid": os.getpid(),
+            "world_id": "world-a",
+            "acquired_at": 1.0,
+            "stale_owner_detected": False,
+        })
+    if status == "released":
+        metadata["released_at"] = 2.0
+    elif status == "quarantined":
+        metadata.update({
+            "run_name": "run-a",
+            "quarantined_at": 2.0,
+            "reasons": ["bridge_cleanup_incomplete"],
+            "diagnostics": {},
+        })
+    elif status == "cleared":
+        metadata.update({
+            "cleared_at": 3.0,
+            "cleared_by_pid": os.getpid(),
+            "clear_reason": "Verified cleanup",
+            "last_quarantine": {
+                "attempt_id": "attempt-a",
+                "run_name": "run-a",
+                "quarantined_at": 2.0,
+                "reasons": ["bridge_cleanup_incomplete"],
+            },
+        })
+    return metadata
+
+
+def _read_lock_metadata(tmp_path):
+    return read_minecraft_target_lock_metadata(
+        lock_root=tmp_path / "locks",
+        host="127.0.0.1",
+        port=25565,
+    )
