@@ -821,8 +821,9 @@ def test_judged_missing_score_finalizes_parent_attempt_as_failure(monkeypatch, t
     experiment_manifest = validate_run_attempt(
         experiment_dir,
         attempt_id=read_attempt_id(experiment_dir),
+        require_completed=False,
     )
-    assert experiment_manifest["status"] == "completed"
+    assert experiment_manifest["status"] == "failed"
 
 
 def _assert_recorded_command(run_dir: Path, expected: list[str]) -> None:

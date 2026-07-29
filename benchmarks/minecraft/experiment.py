@@ -41,6 +41,15 @@ DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
 TASK_SELECTION_POLICIES = ("dual-dag", "original")
 RUNTIME_TERMINATE_GRACE_SECONDS = 1.0
+DEFAULT_JUDGED_REQUIRED_ARTIFACTS = (
+    "score",
+    "runtime_task_dag",
+    "action_log",
+    "events",
+    "bridge_cleanup",
+    "child_protocol",
+)
+SUPPORTED_REQUIRED_ARTIFACTS = frozenset(DEFAULT_JUDGED_REQUIRED_ARTIFACTS)
 
 
 class MinecraftExecuteTimeoutError(TimeoutError):
@@ -60,6 +69,10 @@ class MinecraftRuntimeChildError(RuntimeError):
         self.timed_out = timed_out
         self.primary_error = primary_error or {}
         self.cleanup_state = cleanup_state or {}
+
+
+class RequiredArtifactError(RuntimeError):
+    pass
 
 
 def _require_positive_finite_timeout(value: float | None) -> float:
@@ -538,6 +551,22 @@ def _run_minecraft_experiment_attempt(
             summary["error_type"] = "JudgedArtifactConsistencyError"
             error = str(exc)
             error_type = "JudgedArtifactConsistencyError"
+    required_artifacts = _required_artifacts(
+        launch_config,
+        execute=execute,
+    )
+    artifact_admission = validate_experiment_artifact_admission(
+        summary=summary,
+        runtime_snapshot=runtime_task_dag_snapshot,
+        action_log=action_log,
+        required_artifacts=required_artifacts,
+    )
+    summary["artifact_admission"] = artifact_admission
+    if not artifact_admission["passed"] and error is None:
+        error = "required experiment artifact admission failed"
+        error_type = "RequiredArtifactError"
+        summary["error"] = error
+        summary["error_type"] = error_type
     metrics = build_minecraft_metrics(
         summary=summary,
         action_log=action_log,
@@ -589,28 +618,112 @@ def _run_minecraft_experiment_attempt(
         "run_timed_out" if timed_out else "run_failed" if error else "run_completed",
         payload={"error": error, "error_type": error_type},
     )
-    if runtime_event_path is not None:
-        try:
-            normalized_events = build_normalized_events(
-                run_id=selected_run_name,
-                runtime_journal=runtime_event_path,
-                action_log=action_log,
-                analysis_artifact=artifact,
-            )
-            _write_jsonl(output_dir / "events.jsonl", normalized_events.events)
-            summary["events_available"] = True
-            summary["event_count"] = len(normalized_events.events)
-            summary["event_warnings"] = list(normalized_events.warnings)
-            _write_json(output_dir / "summary.json", summary)
-        except Exception as exc:
-            summary["event_artifact_error"] = type(exc).__name__
-    finalize_run_directory(
-        output_dir,
-        attempt_id=attempt_id,
-        producer="benchmarks.minecraft.experiment",
-        status="failed" if error else "completed",
-    )
     return summary
+
+
+def _required_artifacts(config: dict, *, execute: bool) -> tuple[str, ...]:
+    configured = config.get("required_artifacts")
+    if configured is None:
+        return DEFAULT_JUDGED_REQUIRED_ARTIFACTS if execute and config.get("task_type") == "meta" else ()
+    if not isinstance(configured, list) or not all(
+        isinstance(item, str) and item for item in configured
+    ):
+        raise ValueError("required_artifacts must be a list of non-empty strings")
+    unknown = sorted(set(configured) - SUPPORTED_REQUIRED_ARTIFACTS)
+    if unknown:
+        raise ValueError(f"unsupported required artifact(s): {', '.join(unknown)}")
+    return tuple(dict.fromkeys(configured))
+
+
+def validate_experiment_artifact_admission(
+    *,
+    summary: dict,
+    runtime_snapshot: dict,
+    action_log: dict,
+    required_artifacts: tuple[str, ...] | set[str],
+) -> dict:
+    required = list(required_artifacts)
+    missing = []
+    invalid = []
+
+    if "score" in required:
+        score = summary.get("final_score")
+        if summary.get("score_available") is not True or not isinstance(score, dict):
+            missing.append("score")
+        elif summary.get("score_ownership_verified") is not True or score.get("status") != "success":
+            invalid.append("score")
+    if "runtime_task_dag" in required:
+        nodes = runtime_snapshot.get("nodes") if isinstance(runtime_snapshot, dict) else None
+        if not isinstance(nodes, list) or not nodes:
+            missing.append("runtime_task_dag")
+        elif (
+            runtime_snapshot.get("summary", {}).get("terminal_state") != "success"
+            or any(
+                not isinstance(node, dict)
+                or node.get("lifecycle", {}).get("status") != Task.success
+                or bool(node.get("lifecycle", {}).get("active_agents"))
+                for node in nodes
+            )
+        ):
+            invalid.append("runtime_task_dag")
+    if "action_log" in required:
+        if summary.get("action_log_available") is not True or not isinstance(action_log, dict):
+            missing.append("action_log")
+        else:
+            entries = [
+                value
+                for key, value in action_log.items()
+                if key != "_attempt_id"
+            ]
+            if any(not isinstance(key, str) or not isinstance(value, list) for key, value in action_log.items() if key != "_attempt_id"):
+                invalid.append("action_log")
+            elif not any(entries):
+                invalid.append("action_log")
+    if "events" in required:
+        if summary.get("events_available") is not True:
+            missing.append("events")
+        elif summary.get("event_artifact_error") is not None:
+            invalid.append("events")
+    if "bridge_cleanup" in required:
+        cleanup = summary.get("bridge_cleanup")
+        if not isinstance(cleanup, dict) or not cleanup:
+            missing.append("bridge_cleanup")
+        else:
+            processes = cleanup.get("processes")
+            if (
+                cleanup.get("cleanup_complete") is not True
+                or not isinstance(processes, dict)
+                or any(
+                    not isinstance(item, dict)
+                    or item.get("alive_after_kill") is True
+                    for item in processes.values()
+                )
+            ):
+                invalid.append("bridge_cleanup")
+    if "child_protocol" in required:
+        protocol = summary.get("child_protocol")
+        if not isinstance(protocol, dict) or not protocol:
+            missing.append("child_protocol")
+        elif (
+            protocol.get("status") != "completed"
+            or protocol.get("result_valid") is not True
+            or protocol.get("result_written") is not True
+        ):
+            invalid.append("child_protocol")
+
+    if required:
+        if summary.get("runtime_collection_errors"):
+            invalid.append("runtime_collection_errors")
+        if summary.get("controller_shutdown_complete") is not True or summary.get("controller_active_assignments"):
+            invalid.append("controller")
+        if summary.get("runtime_target_safe_to_reuse") is not True:
+            invalid.append("runtime_target")
+    return {
+        "passed": not missing and not invalid,
+        "required": required,
+        "missing": list(dict.fromkeys(missing)),
+        "invalid": list(dict.fromkeys(invalid)),
+    }
 
 
 def _emit_attempt_terminal_event(attempt_state: dict, event_type: str, *, payload: dict) -> None:
@@ -1363,6 +1476,7 @@ def _validate_child_status(
                 "status_received": child_status is not None,
                 "status": child_status.get("status") if isinstance(child_status, dict) else None,
                 "exit_code": process_metadata.get("exit_code"),
+                "result_written": False,
                 "result_valid": False,
             },
         )
@@ -1384,6 +1498,7 @@ def _validate_child_status(
         "status_received": True,
         "status": child_status["status"],
         "exit_code": process_metadata.get("exit_code"),
+        "result_written": child_status.get("result_written") is True,
         "result_valid": False,
     }
 
