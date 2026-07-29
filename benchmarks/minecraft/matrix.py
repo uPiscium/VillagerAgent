@@ -143,6 +143,8 @@ def _run_minecraft_matrix_attempt(
 
     results = []
     common_rows = []
+    aborted = False
+    unsafe_run = None
     for matrix_index, config_index in enumerate(selected_indices):
         if config_index < 0 or config_index >= len(configs):
             raise IndexError(f"Minecraft config index out of range: {config_index}")
@@ -181,7 +183,11 @@ def _run_minecraft_matrix_attempt(
             "provenance": str(run_dir / "provenance.json"),
             "mode": summary.get("mode", ""),
             "execute_timeout_seconds": summary.get("execute_timeout_seconds"),
-            "passed": summary.get("error") is None,
+            "passed": (
+                summary.get("error") is None
+                and summary.get("artifact_admission", {}).get("passed") is True
+                and (not execute or _runtime_target_is_safe(summary))
+            ),
             "task_type": summary.get("task_type", ""),
             "task_idx": summary.get("task_idx"),
             "progress": summary.get("progress"),
@@ -195,12 +201,35 @@ def _run_minecraft_matrix_attempt(
             "load_status_path": summary.get("load_status_path", ""),
             "server_lock_key": summary.get("server_lock_key", ""),
             "server_lock_acquired": bool(summary.get("server_lock_acquired", False)),
+            "runtime_target_safe_to_reuse": summary.get("runtime_target_safe_to_reuse"),
+            "bridge_cleanup": summary.get("bridge_cleanup", {}),
+            "artifact_admission_passed": summary.get("artifact_admission", {}).get("passed") is True,
             "metrics": metrics,
             "common_report": common_row,
         }
         results.append(result)
         common_rows.append(common_row)
+        if execute and not _runtime_target_is_safe(summary):
+            aborted = True
+            unsafe_run = {
+                "matrix_index": matrix_index,
+                "run_name": result["run_name"],
+                "attempt_id": result["attempt_id"],
+            }
+            for remaining in run_plan[matrix_index + 1:]:
+                results.append({
+                    "benchmark": "minecraft",
+                    "matrix_index": remaining["matrix_index"],
+                    "config_index": remaining["config_index"],
+                    "run_name": remaining["run_name"],
+                    "status": "skipped",
+                    "reason": "unsafe_runtime_target",
+                    "passed": False,
+                })
+            break
 
+    executed_runs = [run for run in results if run.get("status") != "skipped"]
+    skipped_runs = [run for run in results if run.get("status") == "skipped"]
     payload = {
         "attempt_id": attempt_id,
         "benchmark": "minecraft",
@@ -208,13 +237,21 @@ def _run_minecraft_matrix_attempt(
         "matrix_output_dir": str(matrix_dir),
         "run_output_root": str(run_output_root),
         "run_count": len(results),
+        "planned_run_count": len(run_plan),
+        "completed_runs": sum(run.get("passed") is True for run in executed_runs),
+        "failed_runs": sum(run.get("passed") is not True for run in executed_runs),
+        "skipped_runs": len(skipped_runs),
+        "aborted_runs": 1 if aborted else 0,
+        "aborted": aborted,
+        "abort_reason": "unsafe_runtime_target" if aborted else None,
+        "unsafe_run": unsafe_run,
         "dual_dag_runtime_enabled": True,
         "dual_dag_task_selection_enabled": any(
             run.get("task_selection_policy") == "dual-dag" for run in results
         ),
         "task_selection_policy": task_selection_policy,
         "execute_timeout_seconds": execute_timeout_seconds,
-        "runtime_result_retained": any(run["runtime_result_retained"] for run in results),
+        "runtime_result_retained": any(run.get("runtime_result_retained", False) for run in executed_runs),
         "aggregate": aggregate_rows(common_rows),
         "runs": results,
     }
@@ -247,7 +284,22 @@ def main(argv: list[str] | None = None) -> int:
         overwrite=args.overwrite,
     )
     print(json.dumps(summary, indent=2))
-    return 0 if summary["aggregate"].get("failed_runs", 0) == 0 else 1
+    return 0 if not summary["aborted"] and summary["failed_runs"] == 0 else 1
+
+
+def _runtime_target_is_safe(summary: dict) -> bool:
+    if summary.get("runtime_target_safe_to_reuse") is not True:
+        return False
+    cleanup = summary.get("bridge_cleanup")
+    if not isinstance(cleanup, dict) or cleanup.get("cleanup_complete") is not True:
+        return False
+    processes = cleanup.get("processes")
+    if not isinstance(processes, dict):
+        return False
+    return not any(
+        not isinstance(item, dict) or item.get("alive_after_kill") is True
+        for item in processes.values()
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
