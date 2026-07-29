@@ -22,7 +22,12 @@ from benchmarks.experiment_provenance import (
     write_provenance,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
-from benchmarks.minecraft.events import build_normalized_events
+from benchmarks.minecraft.events import (
+    ATTEMPT_TERMINAL_EVENT_TYPES,
+    build_normalized_events,
+    finalize_attempt_events,
+    validate_attempt_event_lifecycle,
+)
 from benchmarks.minecraft.run_lock import MinecraftTargetLock, minecraft_target_lock_key
 from env.runtime_paths import RuntimePaths
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
@@ -134,11 +139,12 @@ def run_minecraft_experiment(
                 "run_timed_out" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "run_failed",
                 payload={"error": str(exc), "error_type": exc.__class__.__name__},
             )
+            _write_minimal_failure_artifacts(attempt_state)
+            _repair_failed_event_artifact(attempt_state)
             finalize_provenance(
                 attempt_state["output_dir"],
                 status="timeout" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "failure",
             )
-            _write_minimal_failure_artifacts(attempt_state)
             _sanitize_runtime_checkpoint(
                 attempt_state.get(
                     "runtime_result_path",
@@ -258,6 +264,7 @@ def _run_minecraft_experiment_attempt(
         attempt_state["secret_values"] = secret_values
 
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+    attempt_state["started_at"] = started_at
     selected_policy = _task_selection_policy(
         requested_policy,
         enable_dual_dag_task_selection=enable_dual_dag_task_selection,
@@ -431,19 +438,21 @@ def _run_minecraft_experiment_attempt(
     selected_task = _find_task(artifact_tasks, runtime_selected_task_ids[0]) if runtime_selected_task_ids else None
     if not execute and ranked_tasks:
         selected_task = ranked_tasks[0]
-    normalized_events = None
+    base_normalized_events = None
+    final_normalized_events = None
     event_artifact_error = None
+    event_artifact_error_detail = None
     try:
-        normalized_events = build_normalized_events(
+        base_normalized_events = build_normalized_events(
             run_id=selected_run_name,
             runtime_journal=runtime_event_path,
             action_log=action_log,
             analysis_artifact=artifact,
         )
-        _write_jsonl(output_dir / "events.jsonl", normalized_events.events)
     except Exception as exc:
-        normalized_events = None
+        base_normalized_events = None
         event_artifact_error = type(exc).__name__
+        event_artifact_error_detail = str(exc)
     summary = {
         "attempt_id": attempt_id,
         "run_name": selected_run_name,
@@ -534,10 +543,15 @@ def _run_minecraft_experiment_attempt(
             runtime_result.get("collection_errors", [])
         ),
         "action_log_available": action_log_available,
-        "events_available": normalized_events is not None,
-        "event_count": len(normalized_events.events) if normalized_events is not None else None,
-        "event_warnings": list(normalized_events.warnings) if normalized_events is not None else [],
+        "events_available": False,
+        "event_count": None,
+        "event_warnings": list(base_normalized_events.warnings) if base_normalized_events is not None else [],
         "event_artifact_error": event_artifact_error,
+        "event_artifact_error_detail": event_artifact_error_detail,
+        "event_lifecycle_valid": False,
+        "event_terminal_count": 0,
+        "terminal_event_type": None,
+        "finished_at": None,
     }
     if execute and launch_config.get("task_type") == "meta" and score.get("status") == "success":
         try:
@@ -555,11 +569,111 @@ def _run_minecraft_experiment_attempt(
         launch_config,
         execute=execute,
     )
+    non_event_required_artifacts = tuple(
+        name for name in required_artifacts if name != "events"
+    )
+    pre_event_admission = validate_experiment_artifact_admission(
+        summary=summary,
+        runtime_snapshot=runtime_task_dag_snapshot,
+        action_log=action_log,
+        required_artifacts=non_event_required_artifacts,
+    )
+    if not pre_event_admission["passed"] and error is None:
+        error = "required experiment artifact admission failed"
+        error_type = "RequiredArtifactError"
+        summary["error"] = error
+        summary["error_type"] = error_type
+    if "events" in required_artifacts and base_normalized_events is None and error is None:
+        error = "required experiment artifact admission failed"
+        error_type = "RequiredArtifactError"
+        summary["error"] = error
+        summary["error_type"] = error_type
+
+    finished_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+    terminal_event_type = (
+        "run_timed_out" if timed_out else "run_failed" if error else "run_completed"
+    )
+    if base_normalized_events is not None:
+        try:
+            candidate_events = finalize_attempt_events(
+                base_normalized_events.events,
+                run_id=selected_run_name,
+                attempt_id=attempt_id,
+                mode=summary["mode"],
+                started_at=started_at,
+                finished_at=finished_at,
+                terminal_event_type=terminal_event_type,
+                error=error,
+                error_type=error_type or None,
+                warnings=base_normalized_events.warnings,
+            )
+            candidate_events = type(candidate_events)(
+                events=tuple(sanitize_artifact_value(
+                    candidate_events.events,
+                    secret_values=secret_values,
+                )),
+                warnings=candidate_events.warnings,
+            )
+            validate_attempt_event_lifecycle(
+                candidate_events.events,
+                expected_run_id=selected_run_name,
+                expected_attempt_id=attempt_id,
+                expected_terminal_event_type=terminal_event_type,
+            )
+            _write_jsonl(output_dir / "events.jsonl", candidate_events.events)
+            final_normalized_events = candidate_events
+        except Exception as exc:
+            final_normalized_events = None
+            event_artifact_error = type(exc).__name__
+            event_artifact_error_detail = str(exc)
+    if "events" in required_artifacts and final_normalized_events is None and error is None:
+        error = "required experiment artifact admission failed"
+        error_type = "RequiredArtifactError"
+        terminal_event_type = "run_timed_out" if timed_out else "run_failed"
+        summary["error"] = error
+        summary["error_type"] = error_type
+
+    summary.update({
+        "finished_at": finished_at,
+        "terminal_event_type": terminal_event_type,
+        "events_available": final_normalized_events is not None,
+        "event_count": (
+            len(final_normalized_events.events)
+            if final_normalized_events is not None
+            else None
+        ),
+        "event_warnings": (
+            list(final_normalized_events.warnings)
+            if final_normalized_events is not None
+            else list(base_normalized_events.warnings)
+            if base_normalized_events is not None
+            else []
+        ),
+        "event_artifact_error": event_artifact_error,
+        "event_artifact_error_detail": event_artifact_error_detail,
+        "event_lifecycle_valid": final_normalized_events is not None,
+        "event_terminal_count": (
+            sum(
+                event.get("event_type") in ATTEMPT_TERMINAL_EVENT_TYPES
+                for event in final_normalized_events.events
+            )
+            if final_normalized_events is not None
+            else 0
+        ),
+    })
     artifact_admission = validate_experiment_artifact_admission(
         summary=summary,
         runtime_snapshot=runtime_task_dag_snapshot,
         action_log=action_log,
         required_artifacts=required_artifacts,
+        normalized_events=(
+            final_normalized_events.events
+            if final_normalized_events is not None
+            else None
+        ),
+        expected_terminal_event_type=terminal_event_type,
+        expected_run_id=selected_run_name,
+        expected_attempt_id=attempt_id,
     )
     summary["artifact_admission"] = artifact_admission
     if not artifact_admission["passed"] and error is None:
@@ -641,6 +755,10 @@ def validate_experiment_artifact_admission(
     runtime_snapshot: dict,
     action_log: dict,
     required_artifacts: tuple[str, ...] | set[str],
+    normalized_events: tuple[dict, ...] | None = None,
+    expected_terminal_event_type: str | None = None,
+    expected_run_id: str | None = None,
+    expected_attempt_id: str | None = None,
 ) -> dict:
     required = list(required_artifacts)
     missing = []
@@ -684,6 +802,23 @@ def validate_experiment_artifact_admission(
             missing.append("events")
         elif summary.get("event_artifact_error") is not None:
             invalid.append("events")
+        elif (
+            normalized_events is None
+            or expected_terminal_event_type is None
+            or expected_run_id is None
+            or expected_attempt_id is None
+        ):
+            invalid.append("events")
+        else:
+            try:
+                validate_attempt_event_lifecycle(
+                    normalized_events,
+                    expected_run_id=expected_run_id,
+                    expected_attempt_id=expected_attempt_id,
+                    expected_terminal_event_type=expected_terminal_event_type,
+                )
+            except ValueError:
+                invalid.append("events")
     if "bridge_cleanup" in required:
         cleanup = summary.get("bridge_cleanup")
         if not isinstance(cleanup, dict) or not cleanup:
@@ -1614,6 +1749,73 @@ def _write_minimal_failure_artifacts(attempt_state: dict) -> None:
         })
 
 
+def _repair_failed_event_artifact(attempt_state: dict) -> None:
+    output_dir = attempt_state["output_dir"]
+    events_path = output_dir / "events.jsonl"
+    existing_events = []
+    if events_path.exists():
+        try:
+            existing_events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (OSError, json.JSONDecodeError):
+            existing_events = []
+    error = sanitize_artifact_value(
+        str(attempt_state.get("error") or "experiment finalization failed"),
+        secret_values=attempt_state.get("secret_values", ()),
+    )
+    error_type = str(attempt_state.get("error_type") or "RuntimeError")
+    terminal_event_type = (
+        "run_timed_out"
+        if error_type in {"TimeoutError", "MinecraftExecuteTimeoutError"}
+        else "run_failed"
+    )
+    finished_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+    try:
+        repaired = finalize_attempt_events(
+            tuple(existing_events),
+            run_id=attempt_state.get("run_name", output_dir.name),
+            attempt_id=attempt_state["attempt_id"],
+            mode="execute" if attempt_state.get("execute") else "dry_run",
+            started_at=attempt_state.get("started_at", finished_at),
+            finished_at=finished_at,
+            terminal_event_type=terminal_event_type,
+            error=error,
+            error_type=error_type,
+        )
+        validate_attempt_event_lifecycle(
+            repaired.events,
+            expected_run_id=attempt_state.get("run_name", output_dir.name),
+            expected_attempt_id=attempt_state["attempt_id"],
+            expected_terminal_event_type=terminal_event_type,
+        )
+        _write_jsonl(events_path, repaired.events)
+    except BaseException:
+        events_path.unlink(missing_ok=True)
+        return
+
+    summary_path = output_dir / "summary.json"
+    summary = _read_json(summary_path, default={})
+    if not isinstance(summary, dict):
+        return
+    summary.update({
+        "error": error,
+        "error_type": error_type,
+        "finished_at": finished_at,
+        "terminal_event_type": terminal_event_type,
+        "events_available": True,
+        "event_count": len(repaired.events),
+        "event_warnings": list(repaired.warnings),
+        "event_artifact_error": None,
+        "event_artifact_error_detail": None,
+        "event_lifecycle_valid": True,
+        "event_terminal_count": 1,
+    })
+    _write_json(summary_path, summary)
+
+
 def _task_graph_from_config(config: dict) -> tuple[list[Task], Graph, RuntimeTaskDAGStore]:
     task_configs = config.get("smoke_tasks")
     if isinstance(task_configs, list) and task_configs:
@@ -1864,9 +2066,18 @@ def _write_json(path: Path, payload) -> None:
 
 
 def _write_jsonl(path: Path, rows) -> None:
-    with path.open("w", encoding="utf-8") as stream:
-        for row in rows:
-            stream.write(json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n")
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as stream:
+            for row in rows:
+                stream.write(json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        raise
 
 
 if __name__ == "__main__":

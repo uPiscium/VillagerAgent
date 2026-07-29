@@ -9,10 +9,131 @@ from benchmarks.common.sanitization import sanitize_artifact_value
 from pipeline.runtime_events import RUNTIME_EVENT_SCHEMA_VERSION, read_runtime_events
 
 
+ATTEMPT_LIFECYCLE_EVENT_TYPES = frozenset({
+    "run_started",
+    "run_completed",
+    "run_failed",
+    "run_timed_out",
+})
+ATTEMPT_TERMINAL_EVENT_TYPES = frozenset({
+    "run_completed",
+    "run_failed",
+    "run_timed_out",
+})
+
+
+class EventLifecycleConsistencyError(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class NormalizedEvents:
     events: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...] = ()
+
+
+def finalize_attempt_events(
+    events: tuple[dict[str, Any], ...],
+    *,
+    run_id: str,
+    attempt_id: str,
+    mode: str,
+    started_at: str,
+    finished_at: str,
+    terminal_event_type: str,
+    error: str | None,
+    error_type: str | None,
+    warnings: tuple[str, ...] = (),
+) -> NormalizedEvents:
+    if terminal_event_type not in ATTEMPT_TERMINAL_EVENT_TYPES:
+        raise EventLifecycleConsistencyError(
+            f"unsupported attempt terminal event type: {terminal_event_type}"
+        )
+    retained = [
+        dict(event)
+        for event in events
+        if event.get("event_type") not in ATTEMPT_LIFECYCLE_EVENT_TYPES
+    ]
+    removed_count = len(events) - len(retained)
+    final_warnings = list(warnings)
+    if removed_count:
+        final_warnings.append(
+            f"removed {removed_count} pre-existing attempt lifecycle event(s)"
+        )
+    lifecycle_common = {
+        "schema_version": RUNTIME_EVENT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "emitted_at": None,
+        "entity_id": None,
+        "source": "benchmarks.minecraft.experiment",
+        "provenance": {},
+    }
+    started = {
+        **lifecycle_common,
+        "event_type": "run_started",
+        "occurred_at": started_at,
+        "payload": {"attempt_id": attempt_id, "mode": mode},
+    }
+    terminal = {
+        **lifecycle_common,
+        "event_type": terminal_event_type,
+        "occurred_at": finished_at,
+        "payload": {
+            "attempt_id": attempt_id,
+            "mode": mode,
+            "error": error,
+            "error_type": error_type,
+        },
+    }
+    finalized = []
+    for seq, event in enumerate((started, *retained, terminal), start=1):
+        finalized.append({
+            **event,
+            "seq": seq,
+            "event_id": f"{run_id}:normalized:{seq}",
+        })
+    return NormalizedEvents(
+        events=tuple(finalized),
+        warnings=tuple(final_warnings),
+    )
+
+
+def validate_attempt_event_lifecycle(
+    events: tuple[dict[str, Any], ...],
+    *,
+    expected_run_id: str,
+    expected_attempt_id: str,
+    expected_terminal_event_type: str,
+) -> None:
+    if not events:
+        raise EventLifecycleConsistencyError("attempt event artifact is empty")
+    started = [event for event in events if event.get("event_type") == "run_started"]
+    terminal = [
+        event
+        for event in events
+        if event.get("event_type") in ATTEMPT_TERMINAL_EVENT_TYPES
+    ]
+    if len(started) != 1:
+        raise EventLifecycleConsistencyError("attempt events must contain exactly one run_started")
+    if len(terminal) != 1:
+        raise EventLifecycleConsistencyError("attempt events must contain exactly one terminal event")
+    if events[0].get("event_type") != "run_started":
+        raise EventLifecycleConsistencyError("run_started must be the first attempt event")
+    if events[-1].get("event_type") != expected_terminal_event_type:
+        raise EventLifecycleConsistencyError(
+            f"attempt events must end with {expected_terminal_event_type}"
+        )
+    for seq, event in enumerate(events, start=1):
+        if event.get("run_id") != expected_run_id:
+            raise EventLifecycleConsistencyError("attempt event run_id mismatch")
+        if event.get("seq") != seq:
+            raise EventLifecycleConsistencyError("attempt event sequence is not contiguous")
+        if event.get("event_id") != f"{expected_run_id}:normalized:{seq}":
+            raise EventLifecycleConsistencyError("attempt event_id does not match run_id and seq")
+        if event.get("event_type") in ATTEMPT_LIFECYCLE_EVENT_TYPES:
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or payload.get("attempt_id") != expected_attempt_id:
+                raise EventLifecycleConsistencyError("attempt lifecycle event identity mismatch")
 
 
 def build_normalized_events(
