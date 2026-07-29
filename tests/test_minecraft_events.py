@@ -1,7 +1,14 @@
 import json
 from pathlib import Path
 
-from benchmarks.minecraft.events import build_normalized_events
+import pytest
+
+from benchmarks.minecraft.events import (
+    EventLifecycleConsistencyError,
+    build_normalized_events,
+    finalize_attempt_events,
+    validate_attempt_event_lifecycle,
+)
 from benchmarks.minecraft.experiment import run_minecraft_experiment
 from pipeline.runtime_events import JsonlRuntimeEventRecorder
 
@@ -41,6 +48,124 @@ def test_normalized_events_merge_task_action_observation_and_claim_semantics(tmp
     assert result.warnings == ("incomplete final event line ignored",)
 
 
+def test_finalize_attempt_events_adds_canonical_lifecycle_and_preserves_order():
+    base = (
+        {"run_id": "run", "event_type": "task_started", "seq": 7, "event_id": "old:7"},
+        {"run_id": "run", "event_type": "action_recorded", "seq": 8, "event_id": "old:8"},
+    )
+
+    result = finalize_attempt_events(
+        base,
+        run_id="run",
+        attempt_id="attempt-a",
+        mode="execute",
+        started_at="2026-07-29T10:00:00+0900",
+        finished_at="2026-07-29T10:01:00+0900",
+        terminal_event_type="run_completed",
+        error=None,
+        error_type=None,
+        warnings=("existing warning",),
+    )
+
+    assert [event["event_type"] for event in result.events] == [
+        "run_started",
+        "task_started",
+        "action_recorded",
+        "run_completed",
+    ]
+    assert [event["seq"] for event in result.events] == [1, 2, 3, 4]
+    assert [event["event_id"] for event in result.events] == [
+        f"run:normalized:{seq}" for seq in range(1, 5)
+    ]
+    assert result.events[0]["payload"] == {"attempt_id": "attempt-a", "mode": "execute"}
+    assert result.events[-1]["payload"] == {
+        "attempt_id": "attempt-a",
+        "mode": "execute",
+        "error": None,
+        "error_type": None,
+    }
+    assert result.warnings == ("existing warning",)
+    assert base[0]["seq"] == 7
+    validate_attempt_event_lifecycle(
+        result.events,
+        expected_run_id="run",
+        expected_attempt_id="attempt-a",
+        expected_terminal_event_type="run_completed",
+    )
+
+
+def test_finalize_attempt_events_removes_duplicate_lifecycle_events():
+    base = (
+        {"run_id": "run", "event_type": "run_started"},
+        {"run_id": "run", "event_type": "task_started"},
+        {"run_id": "run", "event_type": "run_completed"},
+    )
+
+    result = finalize_attempt_events(
+        base,
+        run_id="run",
+        attempt_id="attempt-a",
+        mode="dry_run",
+        started_at="start",
+        finished_at="finish",
+        terminal_event_type="run_completed",
+        error=None,
+        error_type=None,
+    )
+
+    assert [event["event_type"] for event in result.events] == [
+        "run_started",
+        "task_started",
+        "run_completed",
+    ]
+    assert result.warnings == ("removed 2 pre-existing attempt lifecycle event(s)",)
+
+
+def _valid_attempt_events():
+    return finalize_attempt_events(
+        (),
+        run_id="run",
+        attempt_id="attempt-a",
+        mode="execute",
+        started_at="start",
+        finished_at="finish",
+        terminal_event_type="run_completed",
+        error=None,
+        error_type=None,
+    ).events
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda events: events.pop(),
+        lambda events: events.append(dict(events[-1], seq=3, event_id="run:normalized:3")),
+        lambda events: events[-1].update(event_type="run_failed"),
+        lambda events: events[0]["payload"].update(attempt_id="wrong"),
+        lambda events: events[0].update(run_id="wrong"),
+        lambda events: events.append({
+            "run_id": "run",
+            "event_type": "action_recorded",
+            "seq": 3,
+            "event_id": "run:normalized:3",
+        }),
+        lambda events: events[-1].update(seq=3),
+        lambda events: events[-1].update(event_id="wrong"),
+    ],
+)
+def test_attempt_event_lifecycle_validator_rejects_inconsistent_artifacts(mutation):
+    events = [dict(event, payload=dict(event.get("payload", {}))) for event in _valid_attempt_events()]
+    mutation(events)
+
+    with pytest.raises(EventLifecycleConsistencyError):
+        validate_attempt_event_lifecycle(
+            tuple(events),
+            expected_run_id="run",
+            expected_attempt_id="attempt-a",
+            expected_terminal_event_type="run_completed",
+        )
+
+
 def test_experiment_writes_optional_public_events_and_metadata(tmp_path: Path) -> None:
     config = write_config(tmp_path)
     output = tmp_path / "result"
@@ -51,9 +176,12 @@ def test_experiment_writes_optional_public_events_and_metadata(tmp_path: Path) -
 
     events = [json.loads(line) for line in (output / "run" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert summary["events_available"] is True
-    assert summary["event_count"] == len(events) == 1
-    assert [event["event_type"] for event in events] == ["run_started"]
-    assert [event["provenance"]["runtime_seq"] for event in events] == [1]
+    assert summary["event_count"] == len(events) == 2
+    assert [event["event_type"] for event in events] == ["run_started", "run_completed"]
+    assert events[0]["payload"]["attempt_id"] == summary["attempt_id"]
+    assert events[-1]["payload"]["attempt_id"] == summary["attempt_id"]
+    assert summary["terminal_event_type"] == "run_completed"
+    assert summary["event_lifecycle_valid"] is True
 
 
 def test_event_producer_failure_does_not_block_existing_artifacts(tmp_path: Path, monkeypatch) -> None:

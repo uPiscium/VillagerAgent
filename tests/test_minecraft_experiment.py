@@ -1,4 +1,5 @@
 import json
+import os
 import signal
 import time
 from pathlib import Path
@@ -29,8 +30,16 @@ from benchmarks.minecraft.experiment import (
     validate_minecraft_config,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
+from benchmarks.minecraft.events import (
+    ATTEMPT_TERMINAL_EVENT_TYPES,
+    finalize_attempt_events,
+)
 from benchmarks.common.report import summarize_inputs
-from pipeline.runtime_events import InMemoryRuntimeEventRecorder, JsonlRuntimeEventRecorder
+from pipeline.runtime_events import (
+    InMemoryRuntimeEventRecorder,
+    JsonlRuntimeEventRecorder,
+    read_runtime_events,
+)
 
 
 @pytest.mark.parametrize("dependency_key", ["required_subtasks", "required subtasks"])
@@ -371,6 +380,15 @@ def test_minecraft_experiment_emits_one_terminal_event_when_finalization_raises(
         if event["event_type"] in {"run_completed", "run_failed", "run_timed_out"}
     ]
     assert terminal_events == ["run_failed"]
+    run_dir = tmp_path / "result" / "terminal_once"
+    events = _read_public_events(run_dir)
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert events[-1]["event_type"] == "run_failed"
+    assert events[-1]["payload"]["error"] == "finalization failed"
+    assert summary["terminal_event_type"] == "run_failed"
+    assert summary["error"] == "finalization failed"
+    assert provenance["lifecycle"]["status"] == "failure"
 
 
 def test_minecraft_manifest_captures_final_event_artifacts(tmp_path, monkeypatch):
@@ -382,7 +400,7 @@ def test_minecraft_manifest_captures_final_event_artifacts(tmp_path, monkeypatch
         nonlocal build_calls
         build_calls += 1
         return SimpleNamespace(
-            events=[{"event_type": f"event-{index}"} for index in range(build_calls)],
+            events=[],
             warnings=[],
         )
 
@@ -398,11 +416,12 @@ def test_minecraft_manifest_captures_final_event_artifacts(tmp_path, monkeypatch
     validate_run_attempt(output_dir, attempt_id=summary["attempt_id"])
     events = [json.loads(line) for line in (output_dir / "events.jsonl").read_text().splitlines()]
     assert build_calls == 1
-    assert [event["event_type"] for event in events] == ["event-0"]
+    assert [event["event_type"] for event in events] == ["run_started", "run_completed"]
 
 
 def test_required_artifact_admission_accepts_complete_judged_run():
     summary, snapshot, action_log = _artifact_admission_fixture()
+    normalized_events = _admitted_event_fixture()
 
     admission = validate_experiment_artifact_admission(
         summary=summary,
@@ -416,6 +435,10 @@ def test_required_artifact_admission_accepts_complete_judged_run():
             "bridge_cleanup",
             "child_protocol",
         },
+        normalized_events=normalized_events,
+        expected_terminal_event_type="run_completed",
+        expected_run_id="run",
+        expected_attempt_id="attempt-a",
     )
 
     assert admission["passed"] is True
@@ -482,6 +505,236 @@ def test_event_generation_failure_respects_required_policy(tmp_path, monkeypatch
     assert (run_dir / COMPLETION_MARKER_FILE).exists() is (not events_required)
     manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == ("failed" if events_required else "completed")
+
+
+def test_invalid_event_lifecycle_rejects_required_event_artifact(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config("invalid_lifecycle")
+    config["required_artifacts"] = ["events"]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.finalize_attempt_events",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            events=({"event_type": "run_started"},),
+            warnings=(),
+        ),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert summary["events_available"] is False
+    assert summary["event_artifact_error"] == "EventLifecycleConsistencyError"
+    assert summary["error_type"] == "RequiredArtifactError"
+    assert summary["artifact_admission"]["passed"] is False
+    assert not (run_dir / "events.jsonl").exists()
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
+@pytest.mark.parametrize("events_required", [False, True])
+def test_atomic_event_write_failure_respects_required_policy(
+    tmp_path,
+    monkeypatch,
+    events_required,
+):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config(f"event_write_{events_required}")
+    if events_required:
+        config["required_artifacts"] = ["events"]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    real_replace = os.replace
+
+    def fail_event_replace(source, destination):
+        if Path(destination).name == "events.jsonl":
+            raise OSError("event replace failed")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("benchmarks.minecraft.experiment.os.replace", fail_event_replace)
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert summary["events_available"] is False
+    assert summary["event_artifact_error"] == "OSError"
+    assert summary["error_type"] == ("RequiredArtifactError" if events_required else "")
+    assert not (run_dir / "events.jsonl").exists()
+    assert not (run_dir / "events.jsonl.tmp").exists()
+    assert (run_dir / COMPLETION_MARKER_FILE).exists() is (not events_required)
+
+
+def test_canonical_events_do_not_depend_on_external_event_sink(tmp_path):
+    class BrokenSink:
+        def emit(self, *_args, **_kwargs):
+            raise OSError("notification unavailable")
+
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_minecraft_config("broken_sink")), encoding="utf-8")
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        event_sink=BrokenSink(),
+    )
+
+    events = _read_public_events(Path(summary["output_dir"]))
+    assert summary["events_available"] is True
+    assert events[0]["event_type"] == "run_started"
+    assert events[-1]["event_type"] == "run_completed"
+
+
+def test_events_only_policy_writes_failed_terminal_when_runtime_guard_fails(tmp_path):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config("events_only_guard")
+    config["required_artifacts"] = ["events"]
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+    )
+
+    run_dir = Path(summary["output_dir"])
+    events = _read_public_events(run_dir)
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert summary["error_type"] == "RequiredArtifactError"
+    assert summary["artifact_admission"]["passed"] is False
+    assert summary["terminal_event_type"] == "run_failed"
+    assert summary["event_lifecycle_valid"] is True
+    assert events[0]["event_type"] == "run_started"
+    assert events[-1]["event_type"] == "run_failed"
+    assert events[-1]["payload"]["error_type"] == "RequiredArtifactError"
+    assert sum(
+        event["event_type"] in ATTEMPT_TERMINAL_EVENT_TYPES
+        for event in events
+    ) == 1
+    assert provenance["lifecycle"]["status"] == "failure"
+    assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
+def test_late_admission_failure_rewrites_completed_terminal_to_failed(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_minecraft_config("late_failure")), encoding="utf-8")
+    real_validate = validate_experiment_artifact_admission
+    calls = 0
+
+    def fail_final_admission(**kwargs):
+        nonlocal calls
+        calls += 1
+        admission = real_validate(**kwargs)
+        if calls == 2:
+            return {
+                **admission,
+                "passed": False,
+                "invalid": [*admission["invalid"], "late_failure"],
+            }
+        return admission
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.validate_experiment_artifact_admission",
+        fail_final_admission,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+    )
+
+    run_dir = Path(summary["output_dir"])
+    events = _read_public_events(run_dir)
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert summary["error_type"] == "RequiredArtifactError"
+    assert summary["terminal_event_type"] == "run_failed"
+    assert events[-1]["event_type"] == "run_failed"
+    assert sum(
+        event["event_type"] in ATTEMPT_TERMINAL_EVENT_TYPES
+        for event in events
+    ) == 1
+    assert provenance["lifecycle"]["status"] == "failure"
+    assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
+def test_dry_run_does_not_import_previous_external_sink_events(tmp_path):
+    external_journal = tmp_path / "external.jsonl"
+    sink = JsonlRuntimeEventRecorder(
+        external_journal,
+        run_id="previous-run",
+        durable=False,
+    )
+    sink.emit(
+        "task_status_changed",
+        entity_id="previous-task",
+        source="previous-controller",
+        payload={"status": "success"},
+    )
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_minecraft_config("current-run")), encoding="utf-8")
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="current-run",
+        event_sink=sink,
+    )
+
+    public_events = _read_public_events(Path(summary["output_dir"]))
+    assert all(event.get("entity_id") != "previous-task" for event in public_events)
+    assert all(event.get("source") != "previous-controller" for event in public_events)
+    assert public_events[0]["event_type"] == "run_started"
+    assert public_events[-1]["event_type"] == "run_completed"
+    external_events = read_runtime_events(external_journal).events
+    assert any(event["event_type"] == "run_started" for event in external_events)
+
+
+def test_reused_external_sink_does_not_cross_contaminate_public_runs(tmp_path):
+    external_journal = tmp_path / "external.jsonl"
+    sink = JsonlRuntimeEventRecorder(
+        external_journal,
+        run_id="notifications",
+        durable=False,
+    )
+    sink.emit(
+        "task_status_changed",
+        entity_id="external-only-task",
+        source="external-controller",
+        payload={"run": "before-both"},
+    )
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(json.dumps(_minecraft_config("reused_sink")), encoding="utf-8")
+
+    first = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="first-run",
+        event_sink=sink,
+    )
+    second = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="second-run",
+        event_sink=sink,
+    )
+
+    first_events = _read_public_events(Path(first["output_dir"]))
+    second_events = _read_public_events(Path(second["output_dir"]))
+    assert all(event["run_id"] == "first-run" for event in first_events)
+    assert all(event["run_id"] == "second-run" for event in second_events)
+    assert all(event.get("entity_id") != "external-only-task" for event in first_events)
+    assert all(event.get("entity_id") != "external-only-task" for event in second_events)
+    assert first_events[-1]["event_type"] == "run_completed"
+    assert second_events[-1]["event_type"] == "run_completed"
 
 
 def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, monkeypatch):
@@ -750,9 +1003,24 @@ def test_runtime_task_snapshot_adapter_restores_tasks_edges_and_lifecycle_metada
 def test_minecraft_execute_builds_task_artifacts_from_real_runtime_state(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
 
+    def successful_runtime(launch_config, *args, **kwargs):
+        result = _runtime_result_snapshot(status="success")
+        result.update({
+            "score": {
+                "attempt_id": kwargs["attempt_id"],
+                "task_name": launch_config["task_name"],
+                "status": "success",
+                "score": 100,
+            },
+            "controller": {"shutdown_complete": True, "active_assignments": {}},
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+            "collection_errors": [],
+        })
+        return result
+
     monkeypatch.setattr(
         "benchmarks.minecraft.experiment._execute_real_runtime",
-        lambda *args, **kwargs: _runtime_result_snapshot(status="success"),
+        successful_runtime,
     )
 
     summary = run_minecraft_experiment(
@@ -783,6 +1051,12 @@ def test_minecraft_execute_builds_task_artifacts_from_real_runtime_state(tmp_pat
     assert any(edge["edge_type"] == "task_invokes_action" for edge in artifact["edges"])
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["task_completion_rate"] == 1.0
+    events = _read_public_events(output_dir)
+    assert events[0]["event_type"] == "run_started"
+    assert events[-1]["event_type"] == "run_completed"
+    assert events[-1]["payload"]["attempt_id"] == summary["attempt_id"]
+    assert summary["terminal_event_type"] == "run_completed"
+    assert summary["event_lifecycle_valid"] is True
 
 
 def test_minecraft_execute_uses_recorded_runtime_selection_history(tmp_path, monkeypatch):
@@ -831,6 +1105,13 @@ def test_minecraft_execute_failure_uses_partial_runtime_snapshot(tmp_path, monke
     assert summary["error_type"] == "RuntimeError"
     assert summary["snapshot_source"] == "real_runtime"
     assert runtime_snapshot["nodes"][0]["lifecycle"]["status"] == "running"
+    events = _read_public_events(output_dir)
+    assert events[-1]["event_type"] == "run_failed"
+    assert events[-1]["payload"]["error"] == "server unavailable"
+    assert events[-1]["payload"]["error_type"] == "RuntimeError"
+    provenance = json.loads((output_dir / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["lifecycle"]["status"] == "failure"
+    assert json.loads((output_dir / "artifact_manifest.json").read_text())["status"] == "failed"
 
 
 def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
@@ -868,6 +1149,36 @@ def test_minecraft_execute_timeout_preserves_artifacts(tmp_path, monkeypatch):
     assert provenance["environment_unverifiable"] is True
     common_rows = summarize_inputs([output_dir])
     assert common_rows[0]["error_type"] == "timeout"
+    events = _read_public_events(output_dir)
+    assert events[-1]["event_type"] == "run_timed_out"
+    assert events[-1]["payload"]["attempt_id"] == summary["attempt_id"]
+    assert summary["terminal_event_type"] == "run_timed_out"
+
+
+def test_non_event_admission_failure_writes_canonical_failed_events(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    runtime_result = _runtime_result_snapshot(status="success")
+    runtime_result["score"] = {}
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        lambda *args, **kwargs: runtime_result,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="missing_score",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    run_dir = Path(summary["output_dir"])
+    events = _read_public_events(run_dir)
+    assert summary["artifact_admission"]["passed"] is False
+    assert summary["terminal_event_type"] == "run_failed"
+    assert summary["event_lifecycle_valid"] is True
+    assert events[-1]["event_type"] == "run_failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 
 
 def test_minecraft_execute_timeout_preserves_partial_runtime_dag(tmp_path, monkeypatch):
@@ -1901,6 +2212,27 @@ def _artifact_admission_fixture():
         }],
     }
     return summary, snapshot, {"Alice": [{"action": "navigateTo"}]}
+
+
+def _read_public_events(run_dir: Path):
+    return [
+        json.loads(line)
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+
+
+def _admitted_event_fixture():
+    return finalize_attempt_events(
+        (),
+        run_id="run",
+        attempt_id="attempt-a",
+        mode="execute",
+        started_at="start",
+        finished_at="finish",
+        terminal_event_type="run_completed",
+        error=None,
+        error_type=None,
+    ).events
 
 
 def _minecraft_config(task_name):
