@@ -332,6 +332,20 @@ def test_invalid_or_unsupported_metadata_fails_closed(tmp_path, content):
         lock.acquire()
 
 
+def test_invalid_utf8_metadata_fails_closed_without_modification(tmp_path):
+    lock = _lock(tmp_path, "attempt-a")
+    original_content = b"\xff\xfeinvalid-lock-metadata"
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_bytes(original_content)
+
+    with pytest.raises(MinecraftTargetLockMetadataError, match="encoding is invalid"):
+        lock.acquire()
+
+    assert lock.acquired is False
+    assert lock._stream is None
+    assert lock.path.read_bytes() == original_content
+
+
 def test_quarantine_requires_non_empty_reasons(tmp_path):
     lock = _lock(tmp_path, "attempt-a").acquire()
     try:

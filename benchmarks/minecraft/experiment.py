@@ -328,7 +328,7 @@ def _run_minecraft_experiment_attempt(
     runtime_target_lock_unavailable = False
     runtime_target_lock_unavailable_reason = None
     runtime_target_lock_owner = {}
-    runtime_target_lock_metadata_valid = None if not execute else True
+    runtime_target_lock_metadata_valid = None
     runtime_target_quarantined = False
     runtime_target_quarantine = {}
     target_safety = assess_minecraft_target_safety(
@@ -447,6 +447,11 @@ def _run_minecraft_experiment_attempt(
         except Exception as exc:
             error = str(exc)
             error_type = exc.__class__.__name__
+            if runtime_target_lock_admission == "pending" and not runtime_started:
+                runtime_target_lock_admission = "unavailable"
+                runtime_target_lock_unavailable = True
+                runtime_target_lock_unavailable_reason = "unknown_error"
+                runtime_target_lock_metadata_valid = None
         finally:
             server_lock_released = not target_lock.acquired
         action_log_available = isinstance(runtime_result.get("action_log"), dict)
@@ -468,6 +473,21 @@ def _run_minecraft_experiment_attempt(
                 score_ownership_verified = True
 
     public_runtime_process = _public_runtime_process(runtime_process)
+    runtime_target_safe_to_reuse = bool(
+        (
+            not execute
+            and target_safety.safe
+            and not runtime_target_quarantined
+        )
+        or (
+            execute
+            and runtime_target_lock_admission == "granted"
+            and runtime_target_lock_metadata_valid is True
+            and server_lock_released
+            and target_safety.safe
+            and not runtime_target_quarantined
+        )
+    )
     effective_settings["runtime"].update({
         "server_lock_acquired": server_lock_acquired,
         "server_lock_released": server_lock_released,
@@ -612,13 +632,7 @@ def _run_minecraft_experiment_attempt(
         "runtime_target_lock_unavailable_reason": runtime_target_lock_unavailable_reason,
         "runtime_target_lock_owner": runtime_target_lock_owner,
         "runtime_target_lock_metadata_valid": runtime_target_lock_metadata_valid,
-        "runtime_target_safe_to_reuse": bool(
-            runtime_target_lock_admission
-            not in {"busy", "unavailable", "quarantined", "metadata_invalid"}
-            and runtime_target_lock_metadata_valid is not False
-            and target_safety.safe
-            and not runtime_target_quarantined
-        ),
+        "runtime_target_safe_to_reuse": runtime_target_safe_to_reuse,
         "runtime_target_quarantined": runtime_target_quarantined,
         "runtime_target_quarantine": runtime_target_quarantine,
         "runtime_primary_error": runtime_primary_error,

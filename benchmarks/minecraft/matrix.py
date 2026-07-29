@@ -312,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _runtime_target_is_safe(summary: dict) -> bool:
+    if summary.get("runtime_target_lock_admission") != "granted":
+        return False
     if summary.get("runtime_target_lock_unavailable") is True:
         return False
     if summary.get("runtime_target_lock_metadata_valid") is False:

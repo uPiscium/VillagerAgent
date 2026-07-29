@@ -199,15 +199,20 @@ class MinecraftTargetLock:
     def _read_metadata(self) -> dict:
         if self._stream is None:
             return {}
-        self._stream.seek(0)
-        content = self._stream.read()
+        try:
+            self._stream.seek(0)
+            content = self._stream.read()
+        except UnicodeError as exc:
+            raise MinecraftTargetLockMetadataError(
+                "Minecraft target lock metadata encoding is invalid"
+            ) from exc
         if not content.strip():
             return {}
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:
             raise MinecraftTargetLockMetadataError(
-                f"Minecraft target lock metadata is invalid JSON: {exc}"
+                "Minecraft target lock metadata is invalid JSON"
             ) from exc
         return _parse_lock_metadata(
             payload,
@@ -298,15 +303,20 @@ def read_minecraft_target_lock_metadata(
     path = Path(lock_root) / f"{key}.lock"
     if not path.exists():
         return {}
-    with path.open("r", encoding="utf-8") as stream:
-        content = stream.read()
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            content = stream.read()
+    except UnicodeError as exc:
+        raise MinecraftTargetLockMetadataError(
+            "Minecraft target lock metadata encoding is invalid"
+        ) from exc
     if not content.strip():
         return {}
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as exc:
         raise MinecraftTargetLockMetadataError(
-            f"Minecraft target lock metadata is invalid JSON: {exc}"
+            "Minecraft target lock metadata is invalid JSON"
         ) from exc
     return _parse_lock_metadata(
         payload,

@@ -110,6 +110,7 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert summary["mutates_runtime"] is False
     assert summary["runtime_target_lock_admission"] == "not_applicable"
     assert summary["runtime_target_lock_metadata_valid"] is None
+    assert summary["runtime_target_safe_to_reuse"] is True
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
     assert (output_dir / "action_log.json").exists()
@@ -1750,6 +1751,37 @@ def test_lock_io_error_is_unavailable_without_starting_runtime(tmp_path, monkeyp
     assert summary["runtime_target_quarantined"] is False
 
 
+def test_unknown_lock_admission_error_fails_closed(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.MinecraftTargetLock.acquire",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("unknown lock failure")),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: calls.append("runtime"),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="unknown_lock_failure",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == []
+    assert summary["error_type"] == "RuntimeError"
+    assert summary["runtime_started"] is False
+    assert summary["runtime_target_lock_admission"] == "unavailable"
+    assert summary["runtime_target_lock_unavailable"] is True
+    assert summary["runtime_target_lock_unavailable_reason"] == "unknown_error"
+    assert summary["runtime_target_lock_metadata_valid"] is None
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is False
+
+
 def test_generic_runtime_error_quarantines_unverified_cleanup(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
     calls = []
@@ -1836,6 +1868,44 @@ def test_invalid_lock_metadata_is_not_reported_as_safe(tmp_path, monkeypatch):
     assert summary["terminal_event_type"] == "run_failed"
     assert provenance["lifecycle"]["status"] == "failure"
     assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
+def test_invalid_utf8_lock_metadata_is_not_reported_as_safe(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    lock = MinecraftTargetLock(
+        lock_root=tmp_path / "target-locks",
+        host="127.0.0.1",
+        port=25565,
+        world_id="",
+        attempt_id="corrupt-owner",
+    )
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_bytes(b"\xff\xfeinvalid-lock-metadata")
+    calls = []
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: calls.append("runtime"),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="invalid_utf8_lock_metadata",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert calls == []
+    assert summary["error_type"] == "MinecraftTargetLockMetadataError"
+    assert summary["runtime_started"] is False
+    assert summary["runtime_target_lock_admission"] == "metadata_invalid"
+    assert summary["runtime_target_lock_metadata_valid"] is False
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is False
+    assert summary["terminal_event_type"] == "run_failed"
+    assert json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
     assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 
 
