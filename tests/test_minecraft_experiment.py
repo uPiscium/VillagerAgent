@@ -30,7 +30,10 @@ from benchmarks.minecraft.experiment import (
     validate_minecraft_config,
 )
 from benchmarks.minecraft.metrics import build_minecraft_metrics
-from benchmarks.minecraft.run_lock import clear_minecraft_target_quarantine
+from benchmarks.minecraft.run_lock import (
+    MinecraftTargetLock,
+    clear_minecraft_target_quarantine,
+)
 from benchmarks.minecraft.events import (
     ATTEMPT_TERMINAL_EVENT_TYPES,
     finalize_attempt_events,
@@ -104,6 +107,7 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert summary["task_selection_mutates_order"] is True
     assert summary["task_order_changed"] is False
     assert summary["mutates_runtime"] is False
+    assert summary["runtime_target_lock_metadata_valid"] is None
     assert summary["artifact_summary"]["task_node_count"] == 1
     assert summary["recommended_task_id"].startswith("minecraft:task:")
     assert (output_dir / "action_log.json").exists()
@@ -759,10 +763,47 @@ def test_minecraft_non_meta_execute_does_not_require_task_scenario(tmp_path, mon
         config_path=config_path,
         output_root=tmp_path / "result",
         execute=True,
-            execute_timeout_seconds=30,
+        execute_timeout_seconds=30,
     )
 
     assert summary["error"] is None
+
+
+def test_non_meta_execute_requires_safe_target_independent_of_artifact_policy(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "minecraft_config.json"
+    config = _minecraft_config("construction_unsafe_cleanup")
+    config.update({
+        "task_type": "construction",
+        "required_artifacts": [],
+    })
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: {
+            "action_log": {},
+            "bridge_cleanup": {},
+        },
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="construction_unsafe_cleanup",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert summary["error_type"] == "MinecraftTargetCleanupError"
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is True
+    assert summary["terminal_event_type"] == "run_failed"
+    assert _read_public_events(run_dir)[-1]["event_type"] == "run_failed"
+    assert json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 
 
 def test_minecraft_experiment_records_task_selection_policy_ablation(tmp_path):
@@ -1384,6 +1425,115 @@ def test_cleanup_failure_summary_keeps_timeout_and_marks_target_unsafe(tmp_path,
     assert summary["child_protocol"].get("status") != "completed"
 
 
+@pytest.mark.parametrize(
+    ("bridge_cleanup", "expected_reason"),
+    [
+        (
+            {"cleanup_complete": True, "processes": []},
+            "bridge_process_metadata_invalid",
+        ),
+        (
+            {"cleanup_complete": True, "processes": {"Alice": "malformed"}},
+            "bridge_process_metadata_invalid:Alice",
+        ),
+        (
+            {"cleanup_complete": "true", "processes": {}},
+            "bridge_cleanup_metadata_invalid",
+        ),
+    ],
+)
+def test_malformed_raw_bridge_cleanup_quarantines_target(
+    tmp_path,
+    monkeypatch,
+    bridge_cleanup,
+    expected_reason,
+):
+    config_path = _write_minecraft_config(tmp_path)
+    calls = []
+
+    def malformed_runtime(*_args, **_kwargs):
+        calls.append("runtime")
+        return {
+            "action_log": {},
+            "bridge_cleanup": bridge_cleanup,
+        }
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        malformed_runtime,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="malformed_cleanup",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is True
+    assert expected_reason in summary["runtime_target_quarantine"]["reasons"]
+    assert summary["terminal_event_type"] == "run_failed"
+    assert _read_public_events(run_dir)[-1]["event_type"] == "run_failed"
+    assert json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+    if expected_reason == "bridge_process_metadata_invalid":
+        blocked = run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            run_name="blocked_after_malformed_cleanup",
+            execute=True,
+            execute_timeout_seconds=30,
+        )
+        assert calls == ["runtime"]
+        assert blocked["error_type"] == "MinecraftTargetQuarantinedError"
+        assert blocked["runtime_started"] is False
+
+
+@pytest.mark.parametrize(
+    "runtime_process",
+    [
+        [],
+        {
+            "process_alive_after_kill": "false",
+            "process_group_alive_after_kill": False,
+        },
+    ],
+)
+def test_malformed_runtime_process_metadata_quarantines_without_breaking_finalization(
+    tmp_path,
+    monkeypatch,
+    runtime_process,
+):
+    config_path = _write_minecraft_config(tmp_path)
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: {
+            "action_log": {},
+            "runtime_process": runtime_process,
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+        },
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="malformed_runtime_process",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    run_dir = Path(summary["output_dir"])
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is True
+    assert "runtime_process_metadata_invalid" in summary["runtime_target_quarantine"]["reasons"]
+    assert summary["terminal_event_type"] == "run_failed"
+    assert json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
+
+
 def test_quarantine_blocks_next_command_until_explicit_clear(tmp_path, monkeypatch):
     config_path = _write_minecraft_config(tmp_path)
     calls = []
@@ -1448,6 +1598,46 @@ def test_quarantine_blocks_next_command_until_explicit_clear(tmp_path, monkeypat
     assert calls == ["runtime", "runtime"]
     assert resumed["runtime_started"] is True
     assert resumed["runtime_target_quarantined"] is False
+
+
+def test_invalid_lock_metadata_is_not_reported_as_safe(tmp_path, monkeypatch):
+    config_path = _write_minecraft_config(tmp_path)
+    lock = MinecraftTargetLock(
+        lock_root=tmp_path / "target-locks",
+        host="127.0.0.1",
+        port=25565,
+        world_id="",
+        attempt_id="corrupt-owner",
+    )
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text("{", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime_bounded",
+        lambda *_args, **_kwargs: calls.append("runtime"),
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="invalid_lock_metadata",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    run_dir = Path(summary["output_dir"])
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert calls == []
+    assert summary["error_type"] == "MinecraftTargetLockMetadataError"
+    assert summary["runtime_started"] is False
+    assert summary["runtime_target_lock_metadata_valid"] is False
+    assert summary["runtime_target_safe_to_reuse"] is False
+    assert summary["runtime_target_quarantined"] is False
+    assert summary["terminal_event_type"] == "run_failed"
+    assert provenance["lifecycle"]["status"] == "failure"
+    assert manifest["status"] == "failed"
+    assert not (run_dir / COMPLETION_MARKER_FILE).exists()
 
 
 def test_public_bridge_cleanup_omits_process_ids():

@@ -94,7 +94,7 @@ class MinecraftTargetLock:
                 and previous_pid != os.getpid()
                 and not _pid_exists(previous_pid)
             )
-            self._write_metadata({
+            acquired_metadata = {
                 "schema_version": LOCK_METADATA_SCHEMA_VERSION,
                 "status": "acquired",
                 "attempt_id": self.attempt_id,
@@ -105,7 +105,13 @@ class MinecraftTargetLock:
                 "lock_key": self.key,
                 "acquired_at": time.time(),
                 "stale_owner_detected": self.stale_owner_detected,
-            })
+            }
+            if previous.get("schema_version") == 1:
+                acquired_metadata.update({
+                    "migrated_from_schema_version": 1,
+                    "previous_status": previous["status"],
+                })
+            self._write_metadata(acquired_metadata)
         except BaseException:
             fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
             self._stream.close()
@@ -174,7 +180,7 @@ class MinecraftTargetLock:
             raise MinecraftTargetLockMetadataError(
                 f"Minecraft target lock metadata is invalid JSON: {exc}"
             ) from exc
-        return _validate_metadata(
+        return _parse_lock_metadata(
             payload,
             expected_key=self.key,
             expected_host=self.host,
@@ -228,7 +234,7 @@ def read_minecraft_target_lock_metadata(
         raise MinecraftTargetLockMetadataError(
             f"Minecraft target lock metadata is invalid JSON: {exc}"
         ) from exc
-    return _validate_metadata(
+    return _parse_lock_metadata(
         payload,
         expected_key=key,
         expected_host=host,
@@ -266,7 +272,7 @@ def clear_minecraft_target_quarantine(
         previous = {}
         if content.strip():
             try:
-                previous = _validate_metadata(
+                previous = _parse_lock_metadata(
                     json.loads(content),
                     expected_key=key,
                     expected_host=host,
@@ -300,7 +306,7 @@ def clear_minecraft_target_quarantine(
             stream.close()
 
 
-def _validate_metadata(
+def _parse_lock_metadata(
     payload: object,
     *,
     expected_key: str,
@@ -309,10 +315,31 @@ def _validate_metadata(
 ) -> dict:
     if not isinstance(payload, dict):
         raise MinecraftTargetLockMetadataError("Minecraft target lock metadata must be an object")
-    if payload.get("schema_version") != LOCK_METADATA_SCHEMA_VERSION:
+    schema_version = payload.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, LOCK_METADATA_SCHEMA_VERSION}
+    ):
         raise MinecraftTargetLockMetadataError("Minecraft target lock metadata schema is unsupported")
-    if payload.get("status") not in LOCK_METADATA_STATUSES:
-        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata status is invalid")
+    _validate_metadata_identity(
+        payload,
+        expected_key=expected_key,
+        expected_host=expected_host,
+        expected_port=expected_port,
+    )
+    if schema_version == 1:
+        return _validate_schema_v1_metadata(payload)
+    return _validate_schema_v2_metadata(payload)
+
+
+def _validate_metadata_identity(
+    payload: dict,
+    *,
+    expected_key: str,
+    expected_host: str,
+    expected_port: int,
+) -> None:
     if (
         payload.get("lock_key") != expected_key
         or not isinstance(payload.get("host"), str)
@@ -320,6 +347,24 @@ def _validate_metadata(
         or payload.get("port") != int(expected_port)
     ):
         raise MinecraftTargetLockMetadataError("Minecraft target lock metadata identity mismatch")
+
+
+def _validate_schema_v1_metadata(payload: dict) -> dict:
+    if payload.get("status") not in {"acquired", "released"}:
+        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata status is invalid")
+    attempt_id = payload.get("attempt_id")
+    if not isinstance(attempt_id, str) or not attempt_id:
+        raise MinecraftTargetLockMetadataError("Minecraft target legacy metadata is invalid")
+    if payload["status"] == "acquired":
+        pid = payload.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            raise MinecraftTargetLockMetadataError("Minecraft target legacy metadata is invalid")
+    return dict(payload)
+
+
+def _validate_schema_v2_metadata(payload: dict) -> dict:
+    if payload.get("status") not in LOCK_METADATA_STATUSES:
+        raise MinecraftTargetLockMetadataError("Minecraft target lock metadata status is invalid")
     if payload["status"] == "quarantined":
         if (
             not isinstance(payload.get("attempt_id"), str)

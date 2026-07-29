@@ -75,6 +75,52 @@ def test_unlocked_dead_owner_metadata_is_detected_as_stale(tmp_path):
         assert metadata["pid"] == os.getpid()
 
 
+def test_schema_v1_released_metadata_migrates_on_acquire(tmp_path):
+    lock = _lock(tmp_path, "attempt-new")
+    _write_schema_v1_metadata(lock, status="released", attempt_id="attempt-old")
+
+    with lock:
+        metadata = json.loads(lock.path.read_text(encoding="utf-8"))
+        assert metadata["schema_version"] == 2
+        assert metadata["status"] == "acquired"
+        assert metadata["attempt_id"] == "attempt-new"
+        assert metadata["lock_key"] == lock.key
+        assert metadata["host"] == "127.0.0.1"
+        assert metadata["port"] == 25565
+        assert metadata["migrated_from_schema_version"] == 1
+        assert metadata["previous_status"] == "released"
+
+
+def test_schema_v1_dead_acquired_owner_migrates_as_stale(tmp_path):
+    lock = _lock(tmp_path, "attempt-new")
+    _write_schema_v1_metadata(
+        lock,
+        status="acquired",
+        attempt_id="attempt-dead",
+        pid=99999999,
+    )
+
+    with lock:
+        metadata = json.loads(lock.path.read_text(encoding="utf-8"))
+        assert lock.stale_owner_detected is True
+        assert metadata["schema_version"] == 2
+        assert metadata["stale_owner_detected"] is True
+        assert metadata["previous_status"] == "acquired"
+
+
+def test_schema_v1_identity_mismatch_fails_closed(tmp_path):
+    lock = _lock(tmp_path, "attempt-new")
+    _write_schema_v1_metadata(
+        lock,
+        status="released",
+        attempt_id="attempt-old",
+        host="other-host",
+    )
+
+    with pytest.raises(MinecraftTargetLockMetadataError, match="identity mismatch"):
+        lock.acquire()
+
+
 def test_quarantine_persists_and_rejects_next_owner(tmp_path):
     first = _lock(tmp_path, "attempt-a").acquire()
     record = first.quarantine(
@@ -232,3 +278,25 @@ def _quarantine_waiter(lock_root, result):
     else:
         result.put("acquired")
         lock.release()
+
+
+def _write_schema_v1_metadata(
+    lock,
+    *,
+    status,
+    attempt_id,
+    pid=None,
+    host="127.0.0.1",
+):
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "schema_version": 1,
+        "status": status,
+        "attempt_id": attempt_id,
+        "pid": os.getpid() if pid is None else pid,
+        "host": host,
+        "port": lock.port,
+        "world_id": lock.world_id,
+        "lock_key": lock.key,
+    }
+    lock.path.write_text(json.dumps(metadata), encoding="utf-8")

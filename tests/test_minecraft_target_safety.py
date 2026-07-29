@@ -23,6 +23,38 @@ from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
             {"cleanup_complete": True, "processes": []},
             "bridge_process_metadata_invalid",
         ),
+        ([], {"cleanup_complete": True, "processes": {}}, "runtime_process_metadata_invalid"),
+        (
+            {"process_alive_after_kill": "false"},
+            {"cleanup_complete": True, "processes": {}},
+            "runtime_process_metadata_invalid",
+        ),
+        (
+            {"process_group_alive_after_kill": 0},
+            {"cleanup_complete": True, "processes": {}},
+            "runtime_process_metadata_invalid",
+        ),
+        ({}, [], "bridge_cleanup_metadata_invalid"),
+        (
+            {},
+            {"cleanup_complete": "true", "processes": {}},
+            "bridge_cleanup_metadata_invalid",
+        ),
+        (
+            {},
+            {"cleanup_complete": True, "processes": {"Alice": "malformed"}},
+            "bridge_process_metadata_invalid:Alice",
+        ),
+        (
+            {},
+            {"cleanup_complete": True, "processes": {"Alice": {"alive_after_kill": 0}}},
+            "bridge_process_metadata_invalid:Alice",
+        ),
+        (
+            {},
+            {"cleanup_complete": True, "processes": {1: {"alive_after_kill": False}}},
+            "bridge_process_metadata_invalid",
+        ),
         (
             {},
             {

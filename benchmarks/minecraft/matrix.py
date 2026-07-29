@@ -207,6 +207,9 @@ def _run_minecraft_matrix_attempt(
                 summary.get("server_lock_quarantine_detected", False)
             ),
             "runtime_started": bool(summary.get("runtime_started", False)),
+            "runtime_target_lock_metadata_valid": summary.get(
+                "runtime_target_lock_metadata_valid"
+            ),
             "runtime_target_safe_to_reuse": summary.get("runtime_target_safe_to_reuse"),
             "runtime_target_quarantined": bool(
                 summary.get("runtime_target_quarantined", False)
@@ -219,17 +222,15 @@ def _run_minecraft_matrix_attempt(
         }
         results.append(result)
         common_rows.append(common_row)
-        if execute and not _runtime_target_is_safe(summary):
+        run_abort_reason = _runtime_target_abort_reason(summary) if execute else None
+        if run_abort_reason is not None:
             aborted = True
-            abort_reason = (
-                "target_quarantined"
-                if summary.get("runtime_target_quarantined") is True
-                else "unsafe_runtime_target"
-            )
+            abort_reason = run_abort_reason
             unsafe_run = {
                 "matrix_index": matrix_index,
                 "run_name": result["run_name"],
                 "attempt_id": result["attempt_id"],
+                "error_type": summary.get("error_type", ""),
             }
             for remaining in run_plan[matrix_index + 1:]:
                 results.append({
@@ -303,21 +304,39 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _runtime_target_is_safe(summary: dict) -> bool:
+    if summary.get("runtime_target_lock_metadata_valid") is False:
+        return False
     if summary.get("runtime_target_quarantined") is True:
         return False
     if summary.get("runtime_target_safe_to_reuse") is not True:
         return False
+    runtime_process = {
+        field: summary[field]
+        for field in (
+            "runtime_process_alive_after_kill",
+            "runtime_process_group_alive_after_kill",
+        )
+        if field in summary
+    }
     assessment = assess_minecraft_target_safety(
         runtime_started=summary.get("runtime_started") is True,
         runtime_process={
-            "process_alive_after_kill": summary.get("runtime_process_alive_after_kill"),
-            "process_group_alive_after_kill": summary.get(
-                "runtime_process_group_alive_after_kill"
-            ),
+            field.removeprefix("runtime_"): value
+            for field, value in runtime_process.items()
         },
         bridge_cleanup=summary.get("bridge_cleanup", {}),
     )
     return assessment.safe
+
+
+def _runtime_target_abort_reason(summary: dict) -> str | None:
+    if summary.get("runtime_target_lock_metadata_valid") is False:
+        return "target_lock_metadata_invalid"
+    if summary.get("runtime_target_quarantined") is True:
+        return "target_quarantined"
+    if not _runtime_target_is_safe(summary):
+        return "unsafe_runtime_target"
+    return None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

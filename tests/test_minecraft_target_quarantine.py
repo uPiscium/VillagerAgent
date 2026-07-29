@@ -104,6 +104,31 @@ def test_clear_corrupt_metadata_requires_force_corrupt(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["status"] == "cleared"
 
 
+def test_status_accepts_legacy_schema_v1_metadata(tmp_path, capsys):
+    _write_schema_v1_released_metadata(tmp_path)
+
+    assert main(["status", *_base_args(tmp_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["quarantined"] is False
+    assert payload["metadata"]["schema_version"] == 1
+    assert payload["metadata"]["status"] == "released"
+
+
+def test_clear_reports_legacy_schema_as_not_quarantined(tmp_path, capsys):
+    _write_schema_v1_released_metadata(tmp_path)
+
+    assert main([
+        "clear",
+        *_base_args(tmp_path),
+        "--reason",
+        "Verified cleanup",
+        "--acknowledge-target-safe",
+    ]) == 1
+    output = capsys.readouterr().out
+    assert "not quarantined" in output
+    assert "force_corrupt" not in output
+
+
 def _base_args(tmp_path):
     return [
         "--host",
@@ -133,3 +158,18 @@ def _quarantine(tmp_path):
         diagnostics={},
     )
     lock.release()
+
+
+def _write_schema_v1_released_metadata(tmp_path):
+    lock = _lock(tmp_path)
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text(json.dumps({
+        "schema_version": 1,
+        "status": "released",
+        "attempt_id": "attempt-legacy",
+        "pid": 99999999,
+        "host": "127.0.0.1",
+        "port": 25565,
+        "world_id": "world-a",
+        "lock_key": lock.key,
+    }), encoding="utf-8")

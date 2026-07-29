@@ -289,6 +289,47 @@ def test_minecraft_matrix_classifies_preexisting_quarantine_and_never_starts_run
     assert summary["runs"][1]["reason"] == "target_quarantined"
 
 
+def test_minecraft_matrix_aborts_after_target_lock_metadata_error(tmp_path, monkeypatch):
+    config_path = tmp_path / "minecraft_config.json"
+    config_path.write_text(
+        json.dumps([_config("first", 0), _config("second", 1), _config("third", 2)]),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run_single(**kwargs):
+        calls.append(kwargs["run_name"])
+        summary = _matrix_run_summary(tmp_path, kwargs["run_name"])
+        summary.update({
+            "error": "lock metadata is invalid",
+            "error_type": "MinecraftTargetLockMetadataError",
+            "runtime_target_lock_metadata_valid": False,
+            "runtime_target_safe_to_reuse": False,
+            "runtime_target_quarantined": False,
+        })
+        return summary
+
+    _mock_matrix_run_dependencies(monkeypatch, run_single)
+
+    summary = run_minecraft_matrix(
+        config_path=config_path,
+        output_dir=tmp_path / "matrix",
+        run_names=["first", "second", "third"],
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    assert calls == ["first"]
+    assert summary["aborted"] is True
+    assert summary["abort_reason"] == "target_lock_metadata_invalid"
+    assert summary["unsafe_run"]["error_type"] == "MinecraftTargetLockMetadataError"
+    assert summary["skipped_runs"] == 2
+    assert all(
+        run["reason"] == "target_lock_metadata_invalid"
+        for run in summary["runs"][1:]
+    )
+
+
 def test_minecraft_matrix_dry_run_does_not_require_cleanup_metadata(tmp_path, monkeypatch):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(
@@ -415,6 +456,7 @@ def _matrix_run_summary(tmp_path, run_name):
         "artifact_admission": {"passed": True},
         "runtime_target_safe_to_reuse": True,
         "runtime_started": True,
+        "runtime_target_lock_metadata_valid": True,
         "runtime_target_quarantined": False,
         "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
     }
