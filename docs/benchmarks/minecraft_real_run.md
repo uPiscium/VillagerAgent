@@ -214,7 +214,7 @@ The bridge check launches `VillagerBench(env_type.none)` through the FastAPI bri
 
 Each preflight/bridge output is a unique managed attempt containing `attempt.json`, `verification.json`, standardized `provenance.json`, `artifact_manifest.json`, and `_COMPLETED` on success. The judged target preserves the normal `minecraft_judged_meta` experiment bundle and adds a `minecraft_judged_smoke` parent attempt whose status reflects smoke success, including score availability. Existing bundles require explicit overwrite.
 
-`command.txt` and provenance `argv` record a runnable public smoke subcommand with the effective output directory, timeout, host/port or judged config, and explicit overwrite flag. Service credentials remain environment-provided and are redacted from persisted artifacts.
+`command.txt` and provenance `argv` record a public smoke command template with the timeout, host/port, judged config, and explicit overwrite flag. Repository-local paths are relative and host-local paths use `<external>`; replace that placeholder before rerunning the command. Service credentials remain environment-provided and are redacted from persisted artifacts.
 
 For `meta`, #234 diagnostics are written directly below the judged run's `.runtime/` directory and normalized `meta_judger_diagnostics.json` is emitted when available. The summary reports `load_status`, `meta_judger_diagnostics_available`, and `score_available`. A timeout or missing score makes the judged target fail while retaining the actionable bundle; this is blocker evidence, not a performance result.
 

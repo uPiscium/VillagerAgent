@@ -884,6 +884,7 @@ def _run_minecraft_experiment_attempt(
     decision_support = sanitize_artifact_value(decision_support, secret_values=secret_values)
     metrics = sanitize_artifact_value(metrics, secret_values=secret_values)
     summary = sanitize_artifact_value(summary, secret_values=secret_values)
+    persisted_summary = {**summary, "output_dir": "."}
     _write_json(output_dir / "launch_config.json", sanitized_launch_config)
     _write_json(output_dir / "action_log.json", action_log)
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
@@ -891,7 +892,7 @@ def _run_minecraft_experiment_attempt(
     _write_json(output_dir / "dual_dag_artifact.json", artifact)
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
-    _write_json(output_dir / "summary.json", summary)
+    _write_json(output_dir / "summary.json", persisted_summary)
     if meta_judger_diagnostics:
         _write_json(
             output_dir / "meta_judger_diagnostics.json",

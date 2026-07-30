@@ -127,11 +127,19 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     launch_config = json.loads((output_dir / "launch_config.json").read_text(encoding="utf-8"))
     assert "api_key" not in launch_config
     provenance = json.loads((output_dir / "provenance.json").read_text(encoding="utf-8"))
+    persisted_summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
     assert provenance["benchmark"] == "minecraft"
     assert provenance["schema_version"] == "2.0.0"
     assert provenance["lifecycle"]["status"] == "success"
     assert provenance["repository"]["dirty"] in {True, False}
     assert "secret" not in json.dumps(provenance)
+    assert persisted_summary["output_dir"] == "."
+    assert str(tmp_path) not in json.dumps(provenance)
+    assert str(tmp_path) not in (output_dir / "command.txt").read_text(encoding="utf-8")
+    assert not any(
+        isinstance(value, str) and Path(value).is_absolute()
+        for value in _nested_values(provenance)
+    )
     runtime_snapshot = json.loads((output_dir / "runtime_dual_dag_snapshot.json").read_text(encoding="utf-8"))
     artifact = json.loads((output_dir / "dual_dag_artifact.json").read_text(encoding="utf-8"))
     decision_support = json.loads((output_dir / "decision_support.json").read_text(encoding="utf-8"))
@@ -140,6 +148,17 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert runtime_snapshot["nodes"][0]["node_type"] == "runtime_task"
     assert artifact["task_state_source"] == "config_fixture"
     assert decision_support["task_state_source"] == "config_fixture"
+
+
+def _nested_values(value):
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _nested_values(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _nested_values(child)
+    else:
+        yield value
 
 
 def test_minecraft_experiment_sanitizes_run_names(tmp_path):

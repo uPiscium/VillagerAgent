@@ -16,7 +16,6 @@ import yaml
 
 from benchmarks.common.sanitization import (
     collect_secret_values,
-    redact_command_text,
     sanitize_artifact_value,
     sanitize_command,
 )
@@ -48,17 +47,36 @@ def write_provenance(
     output_dir.mkdir(parents=True, exist_ok=True)
     secret_values = collect_secret_values(resolved_config)
     argv = _command_argv(command)
-    safe_argv = sanitize_command(argv, secret_values=secret_values)
-    sanitized_command = redact_command_text(
-        command if isinstance(command, str) else shlex.join(command),
-        secret_values=secret_values,
+    repository_root = _repository_root()
+    safe_argv = _sanitize_public_paths(
+        sanitize_command(argv, secret_values=secret_values),
+        repository_root=repository_root,
     )
-    settings = sanitize_artifact_value(resolved_config, secret_values=secret_values)
-    repository = git_identity(_repository_root(), required=True, name="villageragent")
-    lock_identity = dependency_lock_identity(_repository_root())
-    recorded_assets = [sanitize_artifact_value(item, secret_values=secret_values) for item in (assets or [])]
+    sanitized_command = shlex.join(safe_argv)
+    settings = _sanitize_public_paths(
+        sanitize_artifact_value(resolved_config, secret_values=secret_values),
+        repository_root=repository_root,
+    )
+    repository = _sanitize_public_paths(
+        git_identity(repository_root, required=True, name="villageragent"),
+        repository_root=repository_root,
+    )
+    lock_identity = _sanitize_public_paths(
+        dependency_lock_identity(repository_root),
+        repository_root=repository_root,
+    )
+    recorded_assets = [
+        _sanitize_public_paths(
+            sanitize_artifact_value(item, secret_values=secret_values),
+            repository_root=repository_root,
+        )
+        for item in (assets or [])
+    ]
     recorded_assets.extend(
-        sanitize_artifact_value(item, secret_values=secret_values)
+        _sanitize_public_paths(
+            sanitize_artifact_value(item, secret_values=secret_values),
+            repository_root=repository_root,
+        )
         for item in (required_identities or [])
     )
     reasons = _unverifiable_reasons([repository, lock_identity, *recorded_assets])
@@ -76,7 +94,7 @@ def write_provenance(
         "argv": safe_argv,
         "command": sanitized_command,
         "interpreter": {
-            "executable": sys.executable,
+            "executable": _public_path(sys.executable, repository_root=repository_root),
             "implementation": platform.python_implementation(),
             "python_version": platform.python_version(),
         },
@@ -121,7 +139,10 @@ def finalize_provenance(output_dir: Path, *, status: str) -> dict[str, Any]:
 def update_provenance_assets(output_dir: Path, assets: list[dict[str, Any]]) -> dict[str, Any]:
     path = output_dir / PROVENANCE_FILE
     provenance = json.loads(path.read_text(encoding="utf-8"))
-    updates = sanitize_artifact_value(assets)
+    updates = _sanitize_public_paths(
+        sanitize_artifact_value(assets),
+        repository_root=_repository_root(),
+    )
     update_names = {item.get("name") for item in updates}
     provenance["assets"] = [
         item for item in provenance["assets"] if item.get("name") not in update_names
@@ -141,7 +162,10 @@ def update_provenance_settings(output_dir: Path, resolved_config: Any) -> dict[s
     path = output_dir / PROVENANCE_FILE
     provenance = json.loads(path.read_text(encoding="utf-8"))
     secret_values = collect_secret_values(resolved_config)
-    settings = sanitize_artifact_value(resolved_config, secret_values=secret_values)
+    settings = _sanitize_public_paths(
+        sanitize_artifact_value(resolved_config, secret_values=secret_values),
+        repository_root=_repository_root(),
+    )
     provenance["effective_settings"] = settings
     _write_resolved_config(output_dir, settings)
     _write_json(path, provenance)
@@ -299,6 +323,33 @@ def _command_argv(command: str | list[str]) -> list[str]:
         return shlex.split(command)
     except ValueError:
         return [command]
+
+
+def _sanitize_public_paths(value: Any, *, repository_root: Path) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_public_paths(child, repository_root=repository_root)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_public_paths(item, repository_root=repository_root) for item in value]
+    if isinstance(value, str):
+        flag, separator, argument = value.partition("=")
+        if separator and Path(argument).is_absolute():
+            return f"{flag}={_public_path(argument, repository_root=repository_root)}"
+        return _public_path(value, repository_root=repository_root)
+    return value
+
+
+def _public_path(value: str, *, repository_root: Path) -> str:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        return value
+    try:
+        relative = candidate.relative_to(repository_root)
+    except ValueError:
+        return "<external>"
+    return relative.as_posix() or "."
 
 
 def _repository_root() -> Path:
