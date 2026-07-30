@@ -215,19 +215,21 @@ class OllamaReasoningChatOpenAI(ChatOpenAI):
                 payload = json.loads(match.group(1).strip(), strict=False)
             except json.JSONDecodeError:
                 return reasoning
-            if isinstance(payload, dict) and payload.get("action"):
+            action = payload.get("action") if isinstance(payload, dict) else None
+            if isinstance(action, str) and action.strip():
                 return reasoning
 
         try:
             payload = json.loads(reasoning)
         except json.JSONDecodeError:
             payload = None
-        if isinstance(payload, dict) and payload.get("action"):
+        action = payload.get("action") if isinstance(payload, dict) else None
+        if isinstance(action, str) and action.strip():
             return f"```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
 
         # A malformed fenced action makes the legacy parser request another
         # iteration instead of accepting natural-language thought as a final answer.
-        return f"{reasoning}\n```json\n{{}}\n```"
+        return f"```json\n{{}}\n```\n{reasoning}"
 
     def _create_chat_result(self, response):
         if isinstance(response, dict):
