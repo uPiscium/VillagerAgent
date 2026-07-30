@@ -833,8 +833,9 @@ def test_judged_missing_score_finalizes_parent_attempt_as_failure(monkeypatch, t
 
 def _assert_recorded_command(run_dir: Path, expected: list[str]) -> None:
     provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
-    assert provenance["argv"] == expected
-    assert (run_dir / "command.txt").read_text(encoding="utf-8") == shlex.join(expected) + "\n"
+    public_expected = ["<external>" if Path(argument).is_absolute() else argument for argument in expected]
+    assert provenance["argv"] == public_expected
+    assert (run_dir / "command.txt").read_text(encoding="utf-8") == shlex.join(public_expected) + "\n"
 
 
 def _wait_for_pid(path: Path, timeout: float = 2) -> int:

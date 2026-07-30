@@ -145,11 +145,11 @@ def test_matrix_uses_environment_credential_without_argv_or_artifact_leak(tmp_pa
     assert settings["episode_id"] == "cwah-task_0_seed_0"
     assert settings["temperature"] == 0.0
     assert settings["max_tokens"] == 128
-    assert Path(settings["coela_cwah_path"]).is_absolute()
-    assert Path(settings["dataset_path"]).is_absolute()
-    assert Path(settings["executable_file"]).is_absolute()
-    assert settings["output"].endswith("task_0_seed_0/raw.json")
-    assert settings["artifact_dir"].endswith("task_0_seed_0/normalized")
+    assert settings["coela_cwah_path"] == "external/CoELA/cwah"
+    assert settings["dataset_path"] == "external/CoELA/cwah/dataset/test_env_set_help.pik"
+    assert settings["executable_file"] == "external/CoELA/executable/linux_exec.v2.3.0.x86_64"
+    assert settings["output"] == "<external>"
+    assert settings["artifact_dir"] == "<external>"
     assert captured_command[captured_command.index("--temperature") + 1] == "0.0"
     assert captured_command[captured_command.index("--max-tokens") + 1] == "128"
     assert secret not in json.dumps(provenance)

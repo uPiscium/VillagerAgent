@@ -198,9 +198,7 @@ def test_baseline_writes_default_report_inside_completed_matrix(tmp_path, monkey
     )
     assert report_provenance["schema_version"] == "2.0.0"
     assert report_provenance["lifecycle"]["status"] == "success"
-    assert report_provenance["effective_settings"]["matrix_provenance"] == str(
-        output_dir / "provenance.json"
-    )
+    assert report_provenance["effective_settings"]["matrix_provenance"] == "<external>"
     assert matrix_asset["available"] is True
     assert matrix_asset["sha256"]
 
