@@ -5,6 +5,8 @@ import types
 from types import SimpleNamespace
 
 import pytest
+from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain_core.exceptions import OutputParserException
 
 import env.env as env_module
 from env.env import VillagerBench, env_type
@@ -111,7 +113,32 @@ def test_ollama_chat_model_uses_reasoning_when_content_is_empty():
         "usage": {},
     })
 
-    assert result.generations[0].text == '{"action": "navigateTo"}'
+    assert json.loads(result.generations[0].text.removeprefix("```json\n").removesuffix("\n```")) == {
+        "action": "navigateTo"
+    }
+
+
+def test_ollama_chat_model_rejects_thought_only_reasoning_as_final_answer():
+    model = OllamaReasoningChatOpenAI(
+        model="gemma4:12b",
+        openai_api_key="ollama",
+        base_url="http://localhost:11434/v1",
+    )
+
+    result = model._create_chat_result({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "reasoning": "I should call navigateTo next.",
+            },
+            "finish_reason": "length",
+        }],
+        "usage": {},
+    })
+
+    with pytest.raises(OutputParserException):
+        StructuredChatOutputParser().parse(result.generations[0].text)
 
 
 def test_ollama_chat_model_keeps_nonempty_content():
