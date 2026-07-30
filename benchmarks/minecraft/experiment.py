@@ -42,6 +42,7 @@ from benchmarks.minecraft.run_lock import (
     MinecraftTargetQuarantinedError,
     minecraft_target_lock_key,
 )
+from benchmarks.minecraft.seed_contract import SeedContract, SeedScope, resolve_seed_contract
 from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
 from env.runtime_paths import RuntimePaths
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
@@ -206,6 +207,7 @@ def _run_minecraft_experiment_attempt(
     runtime and then captures the same public artifact set from the run outputs.
     """
     launch_config = _load_config(config_path, config_index=config_index, execute=execute)
+    seed_resolution = _resolve_minecraft_seed_contract(launch_config)
     secret_values = collect_secret_values(launch_config)
     selected_run_name = standard_run_name(run_name or launch_config.get("task_name") or _default_run_name(config_path))
     output_dir = Path(output_root) / selected_run_name
@@ -260,6 +262,8 @@ def _run_minecraft_experiment_attempt(
         runtime_llm_config=runtime_llm_config,
         attempt_id=attempt_id,
     )
+    if seed_resolution is not None:
+        effective_settings["seed_contract"] = seed_resolution.to_dict()
     write_provenance(
         output_dir,
         benchmark="minecraft",
@@ -300,6 +304,8 @@ def _run_minecraft_experiment_attempt(
         runtime_llm_config=runtime_llm_config,
         attempt_id=attempt_id,
     )
+    if seed_resolution is not None:
+        effective_settings["seed_contract"] = seed_resolution.to_dict()
     effective_settings["runtime"] = {
         "root": f".runtime/attempts/{attempt_id}",
         "result": f".runtime/attempts/{attempt_id}/runtime_result.json",
@@ -673,6 +679,8 @@ def _run_minecraft_experiment_attempt(
         "terminal_event_type": None,
         "finished_at": None,
     }
+    if seed_resolution is not None:
+        summary["seed_contract"] = seed_resolution.to_dict()
     if execute and launch_config.get("task_type") == "meta" and score.get("status") == "success":
         try:
             validate_judged_artifact_consistency(
@@ -937,6 +945,8 @@ def _run_minecraft_experiment_attempt(
     summary = sanitize_artifact_value(summary, secret_values=secret_values)
     persisted_summary = {**summary, "output_dir": "."}
     _write_json(output_dir / "launch_config.json", sanitized_launch_config)
+    if seed_resolution is not None:
+        _write_json(output_dir / "seed_contract.json", seed_resolution.to_dict())
     _write_json(output_dir / "action_log.json", action_log)
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
     _write_json(output_dir / "runtime_dual_dag_snapshot.json", runtime_task_dag_snapshot)
@@ -1309,11 +1319,27 @@ def validate_minecraft_config(config: dict, *, context: str = "config", execute:
         raise ValueError(f"{context}.document_file must be a string or null")
     if config.get("task_selection_policy") not in (None, *TASK_SELECTION_POLICIES):
         raise ValueError(f"{context}.task_selection_policy must be one of: {', '.join(TASK_SELECTION_POLICIES)}")
+    seed_contract = SeedContract.from_value(config.get("seed_contract"))
+    if seed_contract is not None:
+        config["seed_contract"] = seed_contract.to_dict()
     _validate_smoke_tasks(config, context=context)
     action_log = config.get("smoke_action_log", {})
     if action_log is not None and not isinstance(action_log, dict):
         raise ValueError(f"{context}.smoke_action_log must be an object")
     return config
+
+
+def _resolve_minecraft_seed_contract(config: dict):
+    if config.get("seed_contract") is None:
+        return None
+    supported = set()
+    if config.get("task_type") == "meta":
+        supported.update({SeedScope.PYTHON_RANDOM, SeedScope.META_JUDGER})
+    return resolve_seed_contract(
+        config["seed_contract"],
+        supported_scopes=supported,
+        applied_scopes=supported,
+    )
 
 
 def _validate_smoke_tasks(config: dict, *, context: str) -> None:
@@ -1507,6 +1533,7 @@ def _execute_real_runtime(
         runtime_paths=RuntimePaths.isolated(runtime_root),
         attempt_id=attempt_id,
         require_action_evidence=bool(config.get("require_action_evidence", True)),
+        seed_contract=config.get("seed_contract"),
     )
 
 

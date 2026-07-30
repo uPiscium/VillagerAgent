@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
 
 
 DEFAULT_MATRIX_OUTPUT_ROOT = Path("result/minecraft_matrix")
+RUNTIME_ADAPTERS: dict[str, Any] = {}
 
 
 def run_minecraft_matrix(
@@ -293,6 +295,9 @@ def _run_minecraft_matrix_attempt(
 
 
 def main(argv: list[str] | None = None) -> int:
+    command_argv = list(sys.argv[1:] if argv is None else argv)
+    if command_argv and command_argv[0] in {"validate", "premanifest", "run"}:
+        return _premanifest_main(command_argv)
     args = parse_args(argv)
     summary = run_minecraft_matrix(
         config_path=args.config,
@@ -309,6 +314,55 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(json.dumps(summary, indent=2))
     return 0 if not summary["aborted"] and summary["failed_runs"] == 0 else 1
+
+
+def _premanifest_main(argv: list[str]) -> int:
+    from benchmarks.minecraft.matrix_runner import run_finalized_matrix
+    from benchmarks.minecraft.matrix_spec import (
+        finalize_matrix_spec,
+        load_matrix_spec,
+        matrix_spec_to_dict,
+        parse_matrix_spec,
+        validate_matrix_spec,
+        write_finalized_matrix_spec,
+    )
+
+    parser = argparse.ArgumentParser(description="Validate, finalize, or run a Minecraft matrix premanifest.")
+    subparsers = parser.add_subparsers(dest="matrix_command", required=True)
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("premanifest")
+    validate_parser.add_argument("--repo-root", default=None)
+    premanifest_parser = subparsers.add_parser("premanifest")
+    premanifest_parser.add_argument("input")
+    premanifest_parser.add_argument("--output", required=True)
+    premanifest_parser.add_argument("--repo-root", default=None)
+    run_parser = subparsers.add_parser("run")
+    run_parser.add_argument("premanifest")
+    run_parser.add_argument("--output-dir", required=True)
+    run_parser.add_argument("--runtime-adapter", required=True)
+    run_parser.add_argument("--repo-root", default=None)
+    args = parser.parse_args(argv)
+    if args.matrix_command == "validate":
+        spec = load_matrix_spec(args.premanifest, repo_root=args.repo_root)
+        print(json.dumps(matrix_spec_to_dict(spec), indent=2, sort_keys=True))
+        return 0
+    if args.matrix_command == "premanifest":
+        payload = Path(args.input).read_text(encoding="utf-8")
+        validated = validate_matrix_spec(parse_matrix_spec(payload), repo_root=args.repo_root)
+        finalized = finalize_matrix_spec(validated, repo_root=args.repo_root)
+        write_finalized_matrix_spec(finalized, args.output)
+        print(json.dumps({"premanifest": args.output, "premanifest_sha256": finalized.premanifest_sha256}, indent=2))
+        return 0
+    executor = RUNTIME_ADAPTERS.get(args.runtime_adapter)
+    if executor is None:
+        parser.error(
+            f"unsupported runtime adapter {args.runtime_adapter!r}; no local-world-capable adapter is available"
+        )
+    result = run_finalized_matrix(
+        args.premanifest, args.output_dir, executor=executor, repo_root=args.repo_root
+    )
+    print(json.dumps(result, indent=2))
+    return 0 if result["gate_passed"] else 1
 
 
 def _runtime_target_is_safe(summary: dict) -> bool:
