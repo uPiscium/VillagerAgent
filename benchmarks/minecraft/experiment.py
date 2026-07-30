@@ -151,10 +151,6 @@ def run_minecraft_experiment(
             )
             _write_minimal_failure_artifacts(attempt_state)
             _repair_failed_event_artifact(attempt_state)
-            finalize_provenance(
-                attempt_state["output_dir"],
-                status="timeout" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "failure",
-            )
             _sanitize_retained_meta_judger_diagnostics(
                 attempt_state.get(
                     "runtime_result_path",
@@ -169,6 +165,10 @@ def run_minecraft_experiment(
                     attempt_state["output_dir"] / ".runtime" / "runtime_result.json",
                 ),
                 secret_values=attempt_state.get("secret_values", ()),
+            )
+            finalize_provenance(
+                attempt_state["output_dir"],
+                status="timeout" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "failure",
             )
             finalize_run_directory(
                 attempt_state["output_dir"],
@@ -1382,9 +1382,16 @@ def _sanitize_retained_meta_judger_diagnostics(
 ) -> dict:
     if not path.exists():
         return {}
-    diagnostics = _read_json(path, default={})
+    try:
+        diagnostics = _read_json(path, default={})
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        public_diagnostics = _invalid_retained_diagnostics(type(exc).__name__)
+        _write_runtime_checkpoint(path, public_diagnostics)
+        return public_diagnostics
     if not isinstance(diagnostics, dict):
-        return {}
+        public_diagnostics = _invalid_retained_diagnostics("TypeError")
+        _write_runtime_checkpoint(path, public_diagnostics)
+        return public_diagnostics
     public_diagnostics = project_public_path_fields(
         diagnostics,
         repository_root=output_dir.resolve(),
@@ -1399,8 +1406,17 @@ def _sanitize_retained_meta_judger_diagnostics(
         public_diagnostics,
         secret_values=secret_values,
     )
-    _write_json(path, public_diagnostics)
+    _write_runtime_checkpoint(path, public_diagnostics)
     return public_diagnostics
+
+
+def _invalid_retained_diagnostics(error_type: str) -> dict:
+    return {
+        "schema_version": 1,
+        "status": "invalid",
+        "error": "retained meta judger diagnostics could not be published",
+        "error_type": error_type,
+    }
 
 
 def _execute_real_runtime(
