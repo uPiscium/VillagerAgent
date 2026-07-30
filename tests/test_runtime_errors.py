@@ -5,6 +5,8 @@ import types
 from types import SimpleNamespace
 
 import pytest
+from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain_core.exceptions import OutputParserException
 
 import env.env as env_module
 from env.env import VillagerBench, env_type
@@ -92,7 +94,72 @@ def test_environment_run_propagates_launch_failure(monkeypatch):
             pytest.fail("launch failure must prevent entering the run context")
 
 
-def test_ollama_chat_model_uses_reasoning_when_content_is_empty():
+def test_ollama_reasoning_preserves_valid_fenced_action():
+    reasoning = """Thought text.
+
+```json
+{
+  "action": "navigateTo",
+  "action_input": {"x": 1, "y": 2, "z": 3}
+}
+```
+
+More thought text."""
+
+    content = OllamaReasoningChatOpenAI._reasoning_as_structured_chat_content(reasoning)
+    parsed = StructuredChatOutputParser().parse(content)
+
+    assert content == reasoning
+    assert parsed.tool == "navigateTo"
+    assert parsed.tool_input == {"x": 1, "y": 2, "z": 3}
+
+
+def test_ollama_reasoning_rejects_fenced_json_without_action():
+    reasoning = '```json\n{"thought": "navigate next"}\n```'
+
+    content = OllamaReasoningChatOpenAI._reasoning_as_structured_chat_content(reasoning)
+
+    with pytest.raises(OutputParserException):
+        StructuredChatOutputParser().parse(content)
+
+
+def test_ollama_reasoning_rejects_empty_fenced_action():
+    reasoning = '```json\n{"action": "", "action_input": {}}\n```'
+
+    content = OllamaReasoningChatOpenAI._reasoning_as_structured_chat_content(reasoning)
+
+    with pytest.raises(OutputParserException):
+        StructuredChatOutputParser().parse(content)
+
+
+def test_ollama_reasoning_rejects_malformed_fenced_json():
+    reasoning = 'I should navigate.\n```json\n{"action": "navigateTo",\n```'
+
+    content = OllamaReasoningChatOpenAI._reasoning_as_structured_chat_content(reasoning)
+
+    with pytest.raises(OutputParserException):
+        StructuredChatOutputParser().parse(content)
+
+
+def test_ollama_reasoning_normalizes_raw_action_json_without_semantic_change():
+    payload = {
+        "action": "navigateTo",
+        "action_input": {"x": 1, "y": 2, "z": 3, "murmur": "進む"},
+    }
+
+    content = OllamaReasoningChatOpenAI._reasoning_as_structured_chat_content(
+        json.dumps(payload, ensure_ascii=False)
+    )
+    parsed = StructuredChatOutputParser().parse(content)
+
+    assert content.startswith("```json\n")
+    assert "進む" in content
+    assert "\\u9032" not in content
+    assert parsed.tool == payload["action"]
+    assert parsed.tool_input == payload["action_input"]
+
+
+def test_ollama_chat_model_rejects_thought_only_reasoning_as_final_answer():
     model = OllamaReasoningChatOpenAI(
         model="gemma4:12b",
         openai_api_key="ollama",
@@ -104,17 +171,18 @@ def test_ollama_chat_model_uses_reasoning_when_content_is_empty():
             "message": {
                 "role": "assistant",
                 "content": "",
-                "reasoning": '{"action": "navigateTo"}',
+                "reasoning": "I should call navigateTo next.",
             },
-            "finish_reason": "stop",
+            "finish_reason": "length",
         }],
         "usage": {},
     })
 
-    assert result.generations[0].text == '{"action": "navigateTo"}'
+    with pytest.raises(OutputParserException):
+        StructuredChatOutputParser().parse(result.generations[0].text)
 
 
-def test_ollama_chat_model_keeps_nonempty_content():
+def test_ollama_chat_model_prefers_nonempty_content_over_reasoning():
     model = OllamaReasoningChatOpenAI(
         model="gemma4:12b",
         openai_api_key="ollama",

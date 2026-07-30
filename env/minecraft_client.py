@@ -19,6 +19,7 @@ from copy import deepcopy
 from functools import wraps
 import os
 import random
+import re
 import platform
 from model.ollama_config import load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
@@ -204,6 +205,32 @@ def _log_action_diagnostics(agent_name, call_site, response, action_list, llmhan
 class OllamaReasoningChatOpenAI(ChatOpenAI):
     """Expose Ollama reasoning text to legacy structured-chat parsers."""
 
+    _structured_action_pattern = re.compile(r"```(?:json\s+)?(\W.*?)```", re.DOTALL)
+
+    @classmethod
+    def _reasoning_as_structured_chat_content(cls, reasoning):
+        match = cls._structured_action_pattern.search(reasoning)
+        if match is not None:
+            try:
+                payload = json.loads(match.group(1).strip(), strict=False)
+            except json.JSONDecodeError:
+                return reasoning
+            action = payload.get("action") if isinstance(payload, dict) else None
+            if isinstance(action, str) and action.strip():
+                return reasoning
+
+        try:
+            payload = json.loads(reasoning)
+        except json.JSONDecodeError:
+            payload = None
+        action = payload.get("action") if isinstance(payload, dict) else None
+        if isinstance(action, str) and action.strip():
+            return f"```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
+
+        # A malformed fenced action makes the legacy parser request another
+        # iteration instead of accepting natural-language thought as a final answer.
+        return f"```json\n{{}}\n```\n{reasoning}"
+
     def _create_chat_result(self, response):
         if isinstance(response, dict):
             payload = deepcopy(response)
@@ -215,7 +242,7 @@ class OllamaReasoningChatOpenAI(ChatOpenAI):
             message = choice.get("message", {})
             reasoning = message.get("reasoning")
             if not message.get("content") and isinstance(reasoning, str) and reasoning:
-                message["content"] = reasoning
+                message["content"] = self._reasoning_as_structured_chat_content(reasoning)
         return super()._create_chat_result(payload)
 
 
