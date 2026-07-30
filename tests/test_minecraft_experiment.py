@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shlex
@@ -20,6 +21,7 @@ from benchmarks.minecraft.experiment import (
     _execute_real_runtime,
     _execute_real_runtime_bounded,
     _read_completed_runtime_result,
+    _sanitize_retained_meta_judger_diagnostics,
     _public_bridge_cleanup,
     _public_runtime_process,
     _task_graph_from_config,
@@ -1336,23 +1338,32 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
     def runtime_with_diagnostics(launch_config, **kwargs):
         diagnostics_path = Path(kwargs["runtime_result_path"]).parent / "meta_judger_diagnostics.json"
         diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+        runtime_root = Path(kwargs["runtime_root"])
+        assert runtime_root.is_absolute()
         diagnostics_path.write_text(json.dumps({
-            "command": ["python", "env/meta_judger.py", "--runtime-root", str(kwargs["runtime_root"])],
-            "stdout_path": str(Path(kwargs["runtime_root"]) / "meta_judger.stdout.log"),
+            "command": ["python", "env/meta_judger.py", "--runtime-root", str(runtime_root)],
+            "stdout_path": str(runtime_root / "meta_judger.stdout.log"),
+            "stderr_path": str(tmp_path / "external-runtime" / "meta_judger.stderr.log"),
+            "windows_path": r"C:\Users\researcher\meta_judger.log",
+            "unc_path": r"\\server\share\meta_judger.log",
+            "api_key": "retained-secret-value-12345",
             "load_status_history": [{"status": "loading"}, {"status": "loaded"}],
             "exit_code": None,
             "timeout_reason": None,
         }), encoding="utf-8")
-        return {
+        result = _runtime_result_snapshot(status="success")
+        result.update({
             "score": {
                 "attempt_id": kwargs["attempt_id"],
                 "task_name": launch_config["task_name"],
                 "status": "success",
                 "score": 1,
             },
-            "action_log": {},
             "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
-        }
+            "controller": {"shutdown_complete": True, "active_assignments": {}},
+            "collection_errors": [],
+        })
+        return result
 
     monkeypatch.setattr("benchmarks.minecraft.experiment._execute_real_runtime", runtime_with_diagnostics)
 
@@ -1368,10 +1379,128 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
     assert summary["load_status"] == "loaded"
     assert summary["meta_judger_diagnostics_available"] is True
     assert summary["score_available"] is True
+    assert summary["artifact_admission"]["passed"] is True
     diagnostics = json.loads((output_dir / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
+    retained_diagnostics_path = (
+        output_dir / summary["runtime_root"] / "meta_judger_diagnostics.json"
+    )
+    retained_diagnostics = json.loads(retained_diagnostics_path.read_text(encoding="utf-8"))
     assert diagnostics["load_status_history"][-1]["status"] == "loaded"
     assert str(tmp_path) not in json.dumps(diagnostics)
-    assert diagnostics["stdout_path"].startswith("./.runtime/attempts/")
+    assert diagnostics == retained_diagnostics
+    assert diagnostics["stdout_path"].startswith(".runtime/attempts/")
+    assert diagnostics["stderr_path"] == "<external>"
+    assert diagnostics["windows_path"] == "<external>"
+    assert diagnostics["unc_path"] == "<external>"
+    assert diagnostics["api_key"] == "[REDACTED]"
+    runtime_root_index = diagnostics["command"].index("--runtime-root") + 1
+    assert diagnostics["command"][runtime_root_index].startswith(".runtime/attempts/")
+    validate_run_attempt(
+        output_dir,
+        attempt_id=summary["attempt_id"],
+        require_completed=True,
+    )
+    assert (output_dir / COMPLETION_MARKER_FILE).is_file()
+    _assert_bundle_has_no_absolute_paths(output_dir)
+    assert "retained-secret-value-12345" not in "".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in output_dir.rglob("*")
+        if path.is_file()
+    )
+
+
+def test_minecraft_failure_sanitizes_retained_diagnostics_before_manifest(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def runtime_with_diagnostics(_launch_config, **kwargs):
+        runtime_root = Path(kwargs["runtime_root"])
+        diagnostics_path = runtime_root / "meta_judger_diagnostics.json"
+        diagnostics_path.write_text(json.dumps({
+            "command": ["python", "env/meta_judger.py", "--runtime-root", str(runtime_root)],
+            "stdout_path": str(runtime_root / "meta_judger.stdout.log"),
+            "stderr_path": str(tmp_path / "external-runtime" / "meta_judger.stderr.log"),
+            "windows_path": r"C:\Users\researcher\meta_judger.log",
+            "unc_path": r"\\server\share\meta_judger.log",
+        }), encoding="utf-8")
+        return _runtime_result_snapshot(status="success")
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        runtime_with_diagnostics,
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._runtime_task_dag_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="snapshot failed"):
+        run_minecraft_experiment(
+            config_path=config_path,
+            output_root=tmp_path / "result",
+            run_name="failed_diagnostics",
+            execute=True,
+            execute_timeout_seconds=30,
+        )
+
+    output_dir = tmp_path / "result" / "failed_diagnostics"
+    retained_paths = list(output_dir.glob(".runtime/attempts/*/meta_judger_diagnostics.json"))
+    assert len(retained_paths) == 1
+    retained_path = retained_paths[0]
+    retained = json.loads(retained_path.read_text(encoding="utf-8"))
+    assert retained["stdout_path"].startswith(".runtime/attempts/")
+    assert retained["stderr_path"] == "<external>"
+    assert retained["windows_path"] == "<external>"
+    assert retained["unc_path"] == "<external>"
+
+    attempt = json.loads((output_dir / "attempt.json").read_text(encoding="utf-8"))
+    manifest = validate_run_attempt(
+        output_dir,
+        attempt_id=attempt["attempt_id"],
+        require_completed=False,
+    )
+    relative_path = str(retained_path.relative_to(output_dir))
+    retained_entry = next(
+        artifact for artifact in manifest["artifacts"] if artifact["path"] == relative_path
+    )
+    assert retained_entry["sha256"] == hashlib.sha256(retained_path.read_bytes()).hexdigest()
+    assert manifest["status"] == "failed"
+    assert not (output_dir / COMPLETION_MARKER_FILE).exists()
+    _assert_bundle_has_no_absolute_paths(output_dir)
+
+
+@pytest.mark.parametrize(
+    ("contents", "error_type"),
+    [
+        ("{not-json", "JSONDecodeError"),
+        ("[]", "TypeError"),
+    ],
+)
+def test_retained_diagnostics_invalid_payload_is_replaced(
+    tmp_path,
+    contents,
+    error_type,
+):
+    output_dir = tmp_path / "bundle"
+    diagnostics_path = output_dir / ".runtime" / "meta_judger_diagnostics.json"
+    diagnostics_path.parent.mkdir(parents=True)
+    diagnostics_path.write_text(contents, encoding="utf-8")
+
+    diagnostics = _sanitize_retained_meta_judger_diagnostics(
+        diagnostics_path,
+        output_dir=output_dir,
+        secret_values=(),
+    )
+
+    assert diagnostics == {
+        "schema_version": 1,
+        "status": "invalid",
+        "error": "retained meta judger diagnostics could not be published",
+        "error_type": error_type,
+    }
+    assert json.loads(diagnostics_path.read_text(encoding="utf-8")) == diagnostics
 
 
 def test_minecraft_execute_timeout_stops_child_activity(tmp_path, monkeypatch):
