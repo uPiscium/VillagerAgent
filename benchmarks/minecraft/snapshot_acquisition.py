@@ -31,6 +31,8 @@ TEMPORARY_NAMES = frozenset({"uid.dat_old"})
 TEMPORARY_SUFFIXES = (".lock", ".tmp", ".temp", ".swp", "~")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SOURCE_ARCHIVE_SHA256 = "8519378f5d71195ac67294acb318994ef660afdba92eada7289faa9be9f74673"
+SOURCE_MARKER = f"src_{SOURCE_ARCHIVE_SHA256[:16]}"
 _ABSOLUTE_PATH_RE = re.compile(r"(?:^|[\s\"'=])(?:/[A-Za-z0-9_.-]+/|[A-Za-z]:[\\/])")
 _CREDENTIAL_RE = re.compile(
     r"(?i)(?:api[_-]?key|authorization|password|passwd|secret|token)\s*[:=]\s*[^\s,;}]+"
@@ -136,7 +138,7 @@ class BaselineInitialState:
 
 _CENTRAL_WALL_BLOCKS = tuple(
     BlockPlacement(12, y, z, "minecraft:stone")
-    for y in range(-60, -56)
+    for y in range(-59, -56)
     for z in range(3, 8)
     if not (y in {-59, -58} and z == 7)
 )
@@ -203,7 +205,10 @@ _CANONICAL_TARGETS = tuple(
     (variant_id, get_movement_variant(variant_id).target) for variant_id in VARIANT_ORDER
 )
 _COMMON_PREPARATION_COMMANDS = (
-    "/execute in minecraft:overworld run tp @p 14 -59 5 0 0",
+    "/execute in minecraft:overworld run forceload add 4 2 21 19",
+    "/fill 4 -61 2 21 -61 19 minecraft:stone",
+    "/fill 4 -60 2 21 -56 19 minecraft:air",
+    "/fill 9 -60 2 15 -60 8 minecraft:stone",
     "/gamemode survival @p",
     "/clear @p",
     "/effect clear @p",
@@ -211,28 +216,44 @@ _COMMON_PREPARATION_COMMANDS = (
     "/effect give @p minecraft:instant_health 1 255 true",
     "/effect give @p minecraft:saturation 1 255 true",
     "/effect clear @p",
-    "/time set 6000",
-    "/weather clear",
-    "/difficulty peaceful",
     "/gamerule doDaylightCycle false",
     "/gamerule doWeatherCycle false",
     "/gamerule doMobSpawning false",
+    "/gamerule spawnRadius 0",
+    "/setworldspawn 14 -59 5 0",
+    "/time set 6000",
+    "/weather clear",
+    "/difficulty peaceful",
     "/kill @e[type=minecraft:item]",
     "/difficulty normal",
+    "/scoreboard objectives remove va_baseline",
+    "/scoreboard objectives add va_baseline dummy",
+    f"/scoreboard players set {SOURCE_MARKER} va_baseline 1",
 )
 baseline_open = BaselineDefinition(
     baseline_id="baseline_open",
     initial_state=_INITIAL_STATE,
     targets=_CANONICAL_TARGETS,
     obstacle_profile=None,
-    preparation_commands=_COMMON_PREPARATION_COMMANDS,
+    preparation_commands=(
+        *_COMMON_PREPARATION_COMMANDS,
+        "/scoreboard players set baseline_open va_baseline 1",
+        "/execute in minecraft:overworld run tp @p 14.0 -59.0 5.0 0 0",
+        "/execute in minecraft:overworld run forceload remove 4 2 21 19",
+    ),
 )
 baseline_obstructed = BaselineDefinition(
     baseline_id="baseline_obstructed",
     initial_state=_INITIAL_STATE,
     targets=_CANONICAL_TARGETS,
     obstacle_profile=central_wall_v1,
-    preparation_commands=(*_COMMON_PREPARATION_COMMANDS, *central_wall_v1.commands),
+    preparation_commands=(
+        *_COMMON_PREPARATION_COMMANDS,
+        "/scoreboard players set baseline_obstructed va_baseline 1",
+        *central_wall_v1.commands,
+        "/execute in minecraft:overworld run tp @p 14.0 -59.0 5.0 0 0",
+        "/execute in minecraft:overworld run forceload remove 4 2 21 19",
+    ),
 )
 BASELINE_DEFINITIONS: Mapping[str, BaselineDefinition] = {
     baseline_open.baseline_id: baseline_open,
@@ -309,6 +330,9 @@ class AcquisitionRuntime(Protocol):
     def prepare(self, definition: BaselineDefinition) -> PreparedBaseline:
         ...
 
+    def release(self, prepared: PreparedBaseline) -> None:
+        ...
+
 
 @dataclass(frozen=True)
 class AcquisitionResult:
@@ -369,6 +393,17 @@ def acquire_baseline(
         raise SnapshotAcquisitionError(f"acquisition output already exists: {output}")
 
     prepared = runtime.prepare(definition)
+    try:
+        return _capture_prepared_baseline(definition, prepared, output)
+    finally:
+        runtime.release(prepared)
+
+
+def _capture_prepared_baseline(
+    definition: BaselineDefinition,
+    prepared: PreparedBaseline,
+    output: Path,
+) -> AcquisitionResult:
     _validate_prepared(definition, prepared)
     source = prepared.source.cloned_world
     included, excluded = _snapshot_file_policy(source)
@@ -626,7 +661,11 @@ def _validate_prepared(definition: BaselineDefinition, prepared: PreparedBaselin
     if _canonical_json(prepared.observed_initial_state.as_dict()) != _canonical_json(
         definition.initial_state.as_dict()
     ):
-        raise SnapshotApprovalError("observed initial state differs from the baseline definition")
+        raise SnapshotApprovalError(
+            "observed initial state differs from the baseline definition: expected "
+            f"{_canonical_json(definition.initial_state.as_dict())}, observed "
+            f"{_canonical_json(prepared.observed_initial_state.as_dict())}"
+        )
     if not _semantic_observation_object_valid(prepared.semantic_observation, definition):
         raise SnapshotApprovalError("observed obstacle semantics differ from the baseline definition")
     if not _probe_objects_valid(prepared.probes, definition):
@@ -1083,6 +1122,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "acquire":
+            if args.runtime == "minecraft-1.19.2-local":
+                from benchmarks.minecraft.docker_runtime import register_builtin_runtimes
+
+                register_builtin_runtimes(acquisition=True)
             runtime = RUNTIME_ADAPTERS.get(args.runtime)
             if runtime is None:
                 raise AcquisitionRuntimeUnavailableError(
@@ -1100,4 +1143,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from benchmarks.minecraft.snapshot_acquisition import main as package_main
+
+    raise SystemExit(package_main())

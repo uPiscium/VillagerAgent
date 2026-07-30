@@ -353,6 +353,10 @@ def _premanifest_main(argv: list[str]) -> int:
         write_finalized_matrix_spec(finalized, args.output)
         print(json.dumps({"premanifest": args.output, "premanifest_sha256": finalized.premanifest_sha256}, indent=2))
         return 0
+    if args.runtime_adapter == "minecraft-1.19.2-local":
+        from benchmarks.minecraft.docker_runtime import register_builtin_runtimes
+
+        register_builtin_runtimes(matrix_premanifest=args.premanifest)
     executor = RUNTIME_ADAPTERS.get(args.runtime_adapter)
     if executor is None:
         parser.error(

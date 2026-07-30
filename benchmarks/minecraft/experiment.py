@@ -278,9 +278,7 @@ def _run_minecraft_experiment_attempt(
         ),
     )
     if execute:
-        from model.ollama_config import make_ollama_llm_config
-
-        runtime_llm_config = make_ollama_llm_config()
+        runtime_llm_config = _runtime_llm_config(launch_config)
         runtime_secret_values = collect_secret_values(runtime_llm_config)
         secret_values = tuple(dict.fromkeys((*secret_values, *runtime_secret_values)))
         attempt_state["secret_values"] = secret_values
@@ -1502,9 +1500,7 @@ def _execute_real_runtime(
     attempt_id: str | None = None,
 ) -> dict:
     from start_with_config import run
-    from model.ollama_config import make_ollama_llm_config
-
-    llm_config = make_ollama_llm_config()
+    llm_config = _runtime_llm_config(launch_config)
     config = dict(launch_config)
     document = config.get("evaluation_arg", {}) if config.get("task_type") == "meta" else {}
     runtime_root = runtime_root or runtime_result_path.parent
@@ -1535,6 +1531,24 @@ def _execute_real_runtime(
         require_action_evidence=bool(config.get("require_action_evidence", True)),
         seed_contract=config.get("seed_contract"),
     )
+
+
+def _runtime_llm_config(launch_config: dict) -> dict:
+    from model.ollama_config import make_ollama_llm_config
+
+    key_env = launch_config.get("api_key_env")
+    if key_env is None:
+        return make_ollama_llm_config()
+    if not isinstance(key_env, str) or not key_env.strip():
+        raise RuntimeError("api_key_env must be a non-empty environment variable name")
+    api_key = os.environ.get(key_env)
+    if not api_key:
+        raise RuntimeError(f"required model credential environment variable is not set: {key_env}")
+    api_model = launch_config.get("api_model")
+    api_base = launch_config.get("api_base")
+    if not all(isinstance(value, str) and value.strip() for value in (api_model, api_base)):
+        raise RuntimeError("real Minecraft execution requires api_model and api_base")
+    return make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=api_key)
 
 
 def _execute_real_runtime_bounded(

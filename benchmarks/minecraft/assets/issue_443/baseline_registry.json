@@ -1,0 +1,57 @@
+{
+  "approved": true,
+  "baselines": [
+    {
+      "archive_sha256": "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b",
+      "baseline_id": "baseline_open",
+      "path": "benchmarks/minecraft/assets/issue_443/baseline_open/baseline_open.tar.gz",
+      "provenance": {
+        "path": "benchmarks/minecraft/assets/issue_443/baseline_open/baseline_provenance.json",
+        "sha256": "f855012da0151ab1070aebf3b7f9128c2e5b430b2263743dc6f2378373c680cb"
+      },
+      "tree_sha256": "3e743096c7b0a5bde0784c126bf9a36f0b3bd38901c964d6d5a3118181ad3594",
+      "validation": {
+        "path": "benchmarks/minecraft/assets/issue_443/baseline_open/baseline_validation.json",
+        "sha256": "f1d08760bac441ef1db22c882d72998778ca44d2d0f29774b8e5c69988b737c4"
+      }
+    },
+    {
+      "archive_sha256": "da502d68911ec1a1cbed953df54d1baf7a0e277c4da50656a3e7f2b36fef5237",
+      "baseline_id": "baseline_obstructed",
+      "path": "benchmarks/minecraft/assets/issue_443/baseline_obstructed/baseline_obstructed.tar.gz",
+      "provenance": {
+        "path": "benchmarks/minecraft/assets/issue_443/baseline_obstructed/baseline_provenance.json",
+        "sha256": "41c6ffda546380b845e0aeca90114e0ccf8073269dbe5617f60586aaed57c773"
+      },
+      "tree_sha256": "823758d8bb60a9ba7907e7cab2c8e036911ba564da3e5e83977e5ca517814d4b",
+      "validation": {
+        "path": "benchmarks/minecraft/assets/issue_443/baseline_obstructed/baseline_validation.json",
+        "sha256": "0f91115c5d0ab516436263ce8f8a073e2bb0397fc31c4753a5386834d77a730b"
+      }
+    }
+  ],
+  "pair_approval": {
+    "json": {
+      "path": "benchmarks/minecraft/assets/issue_443/approval/baseline_diff_report.json",
+      "sha256": "17f144b619a826d78f9dad3e2504d721a15ed53beae03b22902833835eef8754"
+    },
+    "markdown": {
+      "path": "benchmarks/minecraft/assets/issue_443/approval/baseline_approval_report.md",
+      "sha256": "c8f764fd4e5ba3281d3f0ee5f600c2d388f26f036379cb4f67a0db79ae3ae5c1"
+    }
+  },
+  "runtime": {
+    "adapter": "minecraft-1.19.2-local",
+    "composite_sha256": "dd06d858d013b9c28b819a34f96593d59644695c5f265aff6a6c55767846e713",
+    "image": "docker.io/itzg/minecraft-server@sha256:5b3e96bcd7dace8ab7be89c245dc9ba0b1573fdef2f01d3e101ac40e7843fa70",
+    "image_source_revision": "162bd9b5f19a0de2870407a4406506aeb0fe5a99",
+    "minecraft_version": "1.19.2",
+    "server_jar_sha1": "f69c284232d7c7580bd89a5a4931c3581eae1378",
+    "server_jar_sha256": "b26727069ef5f61c704add9a378ac90e3d271fd7876c0bd3dcfbe9fd0bec4d96"
+  },
+  "schema_version": 1,
+  "source": {
+    "archive_sha256": "8519378f5d71195ac67294acb318994ef660afdba92eada7289faa9be9f74673",
+    "repository_revision": "a567ddd5c67fad0463d46a3094f8b511dac30544"
+  }
+}

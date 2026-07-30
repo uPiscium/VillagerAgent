@@ -1,0 +1,24 @@
+{
+  "approved": true,
+  "archive_sha256": [
+    "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b",
+    "da502d68911ec1a1cbed953df54d1baf7a0e277c4da50656a3e7f2b36fef5237"
+  ],
+  "baselines": [
+    "baseline_open",
+    "baseline_obstructed"
+  ],
+  "changed_block_count": 13,
+  "checks": {
+    "archive_hashes_distinct": true,
+    "same_initial_state": true,
+    "same_targets": true,
+    "semantic_difference_central_wall_v1": true,
+    "tree_hashes_distinct": true
+  },
+  "schema_version": 1,
+  "tree_sha256": [
+    "3e743096c7b0a5bde0784c126bf9a36f0b3bd38901c964d6d5a3118181ad3594",
+    "823758d8bb60a9ba7907e7cab2c8e036911ba564da3e5e83977e5ca517814d4b"
+  ]
+}

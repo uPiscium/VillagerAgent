@@ -1,0 +1,212 @@
+{
+  "archive": {
+    "excluded": [
+      "session.lock"
+    ],
+    "exclusion_policy": {
+      "level_datapacks_and_config": "included",
+      "runtime_directories": [
+        "logs",
+        "crash-reports"
+      ],
+      "runtime_lock_names": [
+        "server.lock",
+        "session.lock",
+        "world.lock"
+      ],
+      "temporary_names": [
+        "uid.dat_old"
+      ],
+      "temporary_suffixes": [
+        ".lock",
+        ".tmp",
+        ".temp",
+        ".swp",
+        "~"
+      ]
+    },
+    "file": "baseline_obstructed.tar.gz",
+    "included_file_count": 72,
+    "sha256": "da502d68911ec1a1cbed953df54d1baf7a0e277c4da50656a3e7f2b36fef5237",
+    "world_directory": "world"
+  },
+  "baseline": {
+    "baseline_id": "baseline_obstructed",
+    "initial_state": {
+      "difficulty": "normal",
+      "dimension": "minecraft:overworld",
+      "game_mode": "survival",
+      "health": 20,
+      "hostile_mob_spawning": false,
+      "hostile_mobs_removed": true,
+      "hunger": 20,
+      "inventory": {
+        "representation": "occupied_slots_v1",
+        "slots": []
+      },
+      "pitch": 0.0,
+      "position": {
+        "x": 14,
+        "y": -59,
+        "z": 5
+      },
+      "time": 6000,
+      "weather": "clear",
+      "yaw": 0.0
+    },
+    "obstacle_profile": {
+      "blocks": [
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -59,
+          "z": 3
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -59,
+          "z": 4
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -59,
+          "z": 5
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -59,
+          "z": 6
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -58,
+          "z": 3
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -58,
+          "z": 4
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -58,
+          "z": 5
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -58,
+          "z": 6
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -57,
+          "z": 3
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -57,
+          "z": 4
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -57,
+          "z": 5
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -57,
+          "z": 6
+        },
+        {
+          "block": "minecraft:stone",
+          "x": 12,
+          "y": -57,
+          "z": 7
+        }
+      ],
+      "changed_block_count": 13,
+      "commands": [
+        "/fill 12 -60 3 12 -57 7 minecraft:stone",
+        "/fill 12 -59 7 12 -58 7 minecraft:air"
+      ],
+      "opening": [
+        {
+          "block": "minecraft:air",
+          "x": 12,
+          "y": -59,
+          "z": 7
+        },
+        {
+          "block": "minecraft:air",
+          "x": 12,
+          "y": -58,
+          "z": 7
+        }
+      ],
+      "profile_id": "central_wall_v1"
+    },
+    "preparation_commands": [
+      "/execute in minecraft:overworld run forceload add 4 2 21 19",
+      "/fill 4 -61 2 21 -61 19 minecraft:stone",
+      "/fill 4 -60 2 21 -56 19 minecraft:air",
+      "/fill 9 -60 2 15 -60 8 minecraft:stone",
+      "/gamemode survival @p",
+      "/clear @p",
+      "/effect clear @p",
+      "/attribute @p minecraft:generic.max_health base set 20",
+      "/effect give @p minecraft:instant_health 1 255 true",
+      "/effect give @p minecraft:saturation 1 255 true",
+      "/effect clear @p",
+      "/gamerule doDaylightCycle false",
+      "/gamerule doWeatherCycle false",
+      "/gamerule doMobSpawning false",
+      "/gamerule spawnRadius 0",
+      "/setworldspawn 14 -59 5 0",
+      "/time set 6000",
+      "/weather clear",
+      "/difficulty peaceful",
+      "/kill @e[type=minecraft:item]",
+      "/difficulty normal",
+      "/scoreboard objectives remove va_baseline",
+      "/scoreboard objectives add va_baseline dummy",
+      "/scoreboard players set src_8519378f5d71195a va_baseline 1",
+      "/scoreboard players set baseline_obstructed va_baseline 1",
+      "/fill 12 -60 3 12 -57 7 minecraft:stone",
+      "/fill 12 -59 7 12 -58 7 minecraft:air",
+      "/execute in minecraft:overworld run tp @p 14.0 -59.0 5.0 0 0",
+      "/execute in minecraft:overworld run forceload remove 4 2 21 19"
+    ],
+    "targets": {
+      "diagonal": {
+        "x": 5,
+        "y": -60,
+        "z": 5
+      },
+      "long_distance": {
+        "x": 20,
+        "y": -60,
+        "z": 18
+      },
+      "near": {
+        "x": 10,
+        "y": -59,
+        "z": 5
+      }
+    }
+  },
+  "file_count": 60,
+  "schema_version": 1,
+  "setup_profile_sha256": "a93bd6e2375f87545b3899cd784dbfd63a6e35c0e2e78514775bfd3f797fcbb5",
+  "tree_sha256": "823758d8bb60a9ba7907e7cab2c8e036911ba564da3e5e83977e5ca517814d4b"
+}

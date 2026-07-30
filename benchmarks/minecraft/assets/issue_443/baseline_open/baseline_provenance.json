@@ -1,0 +1,96 @@
+{
+  "acquisition_tool_sha256": "0e2b795d39d735a853ef332c2c19aea15a4c773e8e5ee6277dafdd5c9533aebf",
+  "approved": true,
+  "archive_sha256": "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b",
+  "baseline_id": "baseline_open",
+  "cleanup": {
+    "completed": true,
+    "details": "container stopped and removed; no running process or active world lock"
+  },
+  "created_at": "2026-07-30T23:25:19.257677Z",
+  "minecraft_version": "1.19.2",
+  "observed_initial_state": {
+    "difficulty": "normal",
+    "dimension": "minecraft:overworld",
+    "game_mode": "survival",
+    "health": 20,
+    "hostile_mob_spawning": false,
+    "hostile_mobs_removed": true,
+    "hunger": 20,
+    "inventory": {
+      "representation": "occupied_slots_v1",
+      "slots": []
+    },
+    "pitch": 0.0,
+    "position": {
+      "x": 14,
+      "y": -59,
+      "z": 5
+    },
+    "time": 6000,
+    "weather": "clear",
+    "yaw": 0.0
+  },
+  "quiescence": {
+    "observed_process_state": "stopped",
+    "process_checked": true,
+    "save_complete": true,
+    "server_stopped": true
+  },
+  "reachability_probes": [
+    {
+      "evidence": "pathfinder strict deltas x=0.628,y=0.000,z=0.500",
+      "reachable": true,
+      "target": {
+        "x": 10,
+        "y": -59,
+        "z": 5
+      },
+      "variant_id": "near"
+    },
+    {
+      "evidence": "pathfinder strict deltas x=0.580,y=0.000,z=0.500",
+      "reachable": true,
+      "target": {
+        "x": 5,
+        "y": -60,
+        "z": 5
+      },
+      "variant_id": "diagonal"
+    },
+    {
+      "evidence": "pathfinder strict deltas x=0.498,y=0.000,z=0.311",
+      "reachable": true,
+      "target": {
+        "x": 20,
+        "y": -60,
+        "z": 18
+      },
+      "variant_id": "long_distance"
+    }
+  ],
+  "restored_file_count": 60,
+  "restored_tree_sha256": "3e743096c7b0a5bde0784c126bf9a36f0b3bd38901c964d6d5a3118181ad3594",
+  "runtime": {
+    "digest": "dd06d858d013b9c28b819a34f96593d59644695c5f265aff6a6c55767846e713",
+    "minecraft_version": "1.19.2",
+    "name": "minecraft-1.19.2-local",
+    "version": "Vanilla 1.19.2 / Java 17"
+  },
+  "runtime_digest": "dd06d858d013b9c28b819a34f96593d59644695c5f265aff6a6c55767846e713",
+  "schema_version": 1,
+  "semantic_observation": {
+    "changed_block_count": 0,
+    "obstacle_profile_id": null
+  },
+  "setup_profile_sha256": "58a97caeeec802a42416bc4ee09978253414388765fedfe2c64d7ee223332083",
+  "source": {
+    "active_locks": [],
+    "clone_evidence": "verified archive restored into fresh runtime data root",
+    "cloned_from": "approved-source-8519378f5d71",
+    "process_state": "stopped",
+    "source_id": "baseline_open-9316638f7b70"
+  },
+  "source_revision": "a567ddd5c67fad0463d46a3094f8b511dac30544",
+  "source_world_identity": "9316638f7b70683fcea2bb3bd88163b36f36b7fa586bf1fa2beeee8abe447d51"
+}

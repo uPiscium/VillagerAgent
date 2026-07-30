@@ -81,6 +81,9 @@ class FakeRuntime:
             cleanup=CleanupEvidence(True, "fake runtime stopped and temporary player removed"),
         )
 
+    def release(self, _prepared):
+        pass
+
 
 def _world(tmp_path, name, marker=b"open"):
     world = tmp_path / name
@@ -125,11 +128,11 @@ def test_baseline_definitions_use_canonical_targets_and_profile_parses():
         "hostile_mob_spawning": False,
     }
     commands = baseline_open.preparation_commands
-    assert any("tp @p 14 -59 5 0 0" in command for command in commands)
+    assert any("tp @p 14.0 -59.0 5.0 0 0" in command for command in commands)
     assert any("gamemode survival" in command for command in commands)
     assert any("doMobSpawning false" in command for command in commands)
     assert any("type=minecraft:item" in command for command in commands)
-    assert baseline_obstructed.preparation_commands[-2:] == central_wall_v1.commands
+    assert baseline_obstructed.preparation_commands[-4:-2] == central_wall_v1.commands
 
 
 def test_deterministic_archive_and_level_specific_content(tmp_path):

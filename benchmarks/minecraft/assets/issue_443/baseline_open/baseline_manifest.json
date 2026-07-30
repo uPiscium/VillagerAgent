@@ -1,0 +1,109 @@
+{
+  "archive": {
+    "excluded": [
+      "session.lock"
+    ],
+    "exclusion_policy": {
+      "level_datapacks_and_config": "included",
+      "runtime_directories": [
+        "logs",
+        "crash-reports"
+      ],
+      "runtime_lock_names": [
+        "server.lock",
+        "session.lock",
+        "world.lock"
+      ],
+      "temporary_names": [
+        "uid.dat_old"
+      ],
+      "temporary_suffixes": [
+        ".lock",
+        ".tmp",
+        ".temp",
+        ".swp",
+        "~"
+      ]
+    },
+    "file": "baseline_open.tar.gz",
+    "included_file_count": 72,
+    "sha256": "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b",
+    "world_directory": "world"
+  },
+  "baseline": {
+    "baseline_id": "baseline_open",
+    "initial_state": {
+      "difficulty": "normal",
+      "dimension": "minecraft:overworld",
+      "game_mode": "survival",
+      "health": 20,
+      "hostile_mob_spawning": false,
+      "hostile_mobs_removed": true,
+      "hunger": 20,
+      "inventory": {
+        "representation": "occupied_slots_v1",
+        "slots": []
+      },
+      "pitch": 0.0,
+      "position": {
+        "x": 14,
+        "y": -59,
+        "z": 5
+      },
+      "time": 6000,
+      "weather": "clear",
+      "yaw": 0.0
+    },
+    "obstacle_profile": null,
+    "preparation_commands": [
+      "/execute in minecraft:overworld run forceload add 4 2 21 19",
+      "/fill 4 -61 2 21 -61 19 minecraft:stone",
+      "/fill 4 -60 2 21 -56 19 minecraft:air",
+      "/fill 9 -60 2 15 -60 8 minecraft:stone",
+      "/gamemode survival @p",
+      "/clear @p",
+      "/effect clear @p",
+      "/attribute @p minecraft:generic.max_health base set 20",
+      "/effect give @p minecraft:instant_health 1 255 true",
+      "/effect give @p minecraft:saturation 1 255 true",
+      "/effect clear @p",
+      "/gamerule doDaylightCycle false",
+      "/gamerule doWeatherCycle false",
+      "/gamerule doMobSpawning false",
+      "/gamerule spawnRadius 0",
+      "/setworldspawn 14 -59 5 0",
+      "/time set 6000",
+      "/weather clear",
+      "/difficulty peaceful",
+      "/kill @e[type=minecraft:item]",
+      "/difficulty normal",
+      "/scoreboard objectives remove va_baseline",
+      "/scoreboard objectives add va_baseline dummy",
+      "/scoreboard players set src_8519378f5d71195a va_baseline 1",
+      "/scoreboard players set baseline_open va_baseline 1",
+      "/execute in minecraft:overworld run tp @p 14.0 -59.0 5.0 0 0",
+      "/execute in minecraft:overworld run forceload remove 4 2 21 19"
+    ],
+    "targets": {
+      "diagonal": {
+        "x": 5,
+        "y": -60,
+        "z": 5
+      },
+      "long_distance": {
+        "x": 20,
+        "y": -60,
+        "z": 18
+      },
+      "near": {
+        "x": 10,
+        "y": -59,
+        "z": 5
+      }
+    }
+  },
+  "file_count": 60,
+  "schema_version": 1,
+  "setup_profile_sha256": "58a97caeeec802a42416bc4ee09978253414388765fedfe2c64d7ee223332083",
+  "tree_sha256": "3e743096c7b0a5bde0784c126bf9a36f0b3bd38901c964d6d5a3118181ad3594"
+}
