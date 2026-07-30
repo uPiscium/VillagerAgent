@@ -1037,6 +1037,26 @@ def test_minecraft_execute_preserves_artifacts_on_runtime_error(tmp_path, monkey
     assert summary["runtime_task_name"].startswith("bounded_execute_")
     assert (output_dir / "summary.json").exists()
     assert (output_dir / "metrics.json").exists()
+    assert (output_dir / "judged_iteration_trace.json").exists()
+    terminal_diagnostics = json.loads(
+        (output_dir / "judged_terminal_diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert terminal_diagnostics["score_status"] is None
+    assert terminal_diagnostics["root_cause_category"] == "runtime_internal_error"
+    manifest = validate_run_attempt(
+        output_dir,
+        attempt_id=summary["attempt_id"],
+        require_completed=False,
+    )
+    assert manifest["status"] == "failed"
+    assert "judged_iteration_trace.json" in {
+        artifact["path"] for artifact in manifest["artifacts"]
+    }
+    assert "judged_terminal_diagnostics.json" in {
+        artifact["path"] for artifact in manifest["artifacts"]
+    }
+    assert not (output_dir / COMPLETION_MARKER_FILE).exists()
+    _assert_bundle_has_no_absolute_paths(output_dir)
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["error"] == "server unavailable"
     assert metrics["mutates_environment"] is True
@@ -1380,6 +1400,14 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
     assert summary["meta_judger_diagnostics_available"] is True
     assert summary["score_available"] is True
     assert summary["artifact_admission"]["passed"] is True
+    assert summary["judged_iteration_trace_available"] is True
+    assert summary["judged_terminal_diagnostics_available"] is True
+    terminal_diagnostics = json.loads(
+        (output_dir / "judged_terminal_diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert terminal_diagnostics["score_status"] == "success"
+    assert terminal_diagnostics["root_cause_category"] is None
+    assert (output_dir / "judged_iteration_trace.json").is_file()
     diagnostics = json.loads((output_dir / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
     retained_diagnostics_path = (
         output_dir / summary["runtime_root"] / "meta_judger_diagnostics.json"

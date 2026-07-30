@@ -10,6 +10,7 @@ from pipeline.controller_tiny import (
     ControllerShutdownError,
     GlobalController,
     JudgedEvidenceConsistencyError,
+    JudgedTaskFailure,
     TaskExecutionGroup,
 )
 from env.minecraft_client import MinecraftActionLogError, MinecraftToolTimeoutError
@@ -157,6 +158,10 @@ def test_judger_failure_persists_canonical_failure_once():
     assert len(status_events) == 1
     assert controller.shutdown_event.is_set() is True
     assert controller._first_failure[2]["thread"] == "external_judger"
+    error = controller._first_failure[0]
+    assert isinstance(error, JudgedTaskFailure)
+    assert "status=failure" in str(error)
+    assert "diagnostics=judged_terminal_diagnostics.json" in str(error)
 
 
 @pytest.mark.parametrize(

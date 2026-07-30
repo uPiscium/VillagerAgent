@@ -8,6 +8,11 @@ import os
 import json
 from collections import deque
 
+try:
+    from env.movement_diagnostics import movement_completion
+except ImportError:
+    from movement_diagnostics import movement_completion
+
 if not os.environ.get("PYTEST_CURRENT_TEST") and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
 
@@ -747,8 +752,7 @@ def move_to(pathfinder, bot, Vec3, RANGE_GOAL, pos):  # √
     range_to_block = 0
     if "pressure_plate" in block_name or "pressure_plate" in block_name_below:
         range_to_block = 1.4
-    while distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL and max_steps > 0 and distanceTo(
-            bot.entity.position, Vec3(pos.x, pos.y, pos.z)) > 1:
+    while not movement_completion(bot.entity.position, pos, RANGE_GOAL)["target_reached"] and max_steps > 0:
         try_num = 3
         while try_num > 0:
             try:
@@ -779,7 +783,8 @@ def move_to(pathfinder, bot, Vec3, RANGE_GOAL, pos):  # √
                 last_jump_time = time.time()
             # bot.chat(f'bot seems like in an idle state.')
 
-    if max_steps <= 0 and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL + 1.5:
+    completion = movement_completion(bot.entity.position, pos, RANGE_GOAL)
+    if not completion["target_reached"]:
         # # bot.chat('can not reach the position')
         if bot.blockAt(pos)['name'] == 'air':
             return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z}, your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}, you need to jump or use dirt block to reach the position"

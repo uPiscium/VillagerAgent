@@ -107,6 +107,7 @@ max_action_time = 90
 max_time = 180
 base_iter = 1
 max_iter_flag = 0
+last_observed_world_state = {"available": False, "reason": "no entity position observed"}
 
 environment_set_time = 10
 info_count = 0
@@ -772,6 +773,45 @@ def handle(this):
 
         return total_time
 
+    def iteration_evidence(config):
+        max_iter = (
+            base_iter + 1
+            if (
+                config["evaluation_arg"]["item_position"] == "chest"
+                and config["evaluation_arg"]["action"] != "store"
+            )
+            or config["evaluation_arg"]["action"] == "chat"
+            else base_iter
+        )
+        history_path = run_result_dir / "Alice_history.json"
+        used = None
+        if history_path.exists():
+            with history_path.open("r", encoding="utf-8") as stream:
+                history = json.load(stream)
+            used = len(history) if isinstance(history, list) else None
+        return {
+            "source": "external_judger_history_episode_count",
+            "limit": max_iter,
+            "used": used,
+            "terminal_observations": max_iter_flag,
+        }
+
+    def expected_terminal_state(config):
+        evaluation = config["evaluation_arg"]
+        expected = {"task_scenario": config["task_scenario"]}
+        if config["task_scenario"] == "move":
+            expected.update({
+                "player_position": {
+                    axis: evaluation.get(axis)
+                    for axis in ("x", "y", "z")
+                },
+                "axis_tolerance": 1,
+                "comparison": "strictly_less_than",
+            })
+        else:
+            expected["evaluation_arg"] = evaluation
+        return expected
+
     def check_block(pos_list, goal_item):
         Block = bot.blockAt(Vec3(pos_list[0], pos_list[1], pos_list[2]))
         if aligned_item_name(Block["name"]) == "air" or aligned_item_name(Block["name"]) == "water" or aligned_item_name(Block["name"]) == "lava":
@@ -895,9 +935,17 @@ def handle(this):
                     "task_name": task_name,
                     "status": "success",
                     "score": score,
+                    "progress": score,
                     "use_time": calculate_action_time(),
                     "end_reason": "task completed",
-                    "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time))
+                    "end_time": time.strftime(
+                        "%Y-%m-%d %H:%M:%S",
+                        time.localtime(now_time),
+                    ),
+                    "iteration": iteration_evidence(config),
+                    "expected_terminal_state": expected_terminal_state(config),
+                    "actual_terminal_state": last_observed_world_state,
+                    "root_cause_category": None,
                 }
                 terminal_writer.write(score_payload, config)
                 return
@@ -961,9 +1009,29 @@ def handle(this):
                         "complexity_score": complexity_score,
                         "efficiency": efficiency,
                         "balance": balance,
+                        "progress": score,
                         "use_time": calculate_action_time(),
                         "end_reason": "max iteration out",
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time)),
+                        "iteration": {
+                            **iteration_evidence(config),
+                            "used": now_iter,
+                            "terminal_observations": max_iter_flag,
+                        },
+                        "expected_terminal_state": expected_terminal_state(config),
+                        "actual_terminal_state": last_observed_world_state,
+                        "failure_reason": (
+                            "the observed player position did not satisfy the move target "
+                            "before the external judger history-episode limit"
+                            if last_observed_world_state.get("available") is True
+                            else "no parseable player position was observed before the "
+                            "external judger history-episode limit"
+                        ),
+                        "root_cause_category": (
+                            "task_not_satisfied"
+                            if last_observed_world_state.get("available") is True
+                            else "world_state_not_observed"
+                        ),
                     }
                     terminal_writer.write(failure_payload, config)
                     return
@@ -997,7 +1065,7 @@ def handle(this):
 
 @On(bot, 'messagestr')
 def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
-    global score, info_count
+    global score, info_count, last_observed_world_state
     with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
         config = json.load(f)
     arg_dict = config["evaluation_arg"]
@@ -1092,11 +1160,33 @@ def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
                         start = pos + len(replace_dict[1])
                         break
 
-            try:    
+            try:
                 data = json.loads(data_str)
             except: # Lazy fix
                 bot.chat(f"Error: JUDGER -- JSONDecodeError")
                 data = {}
+
+            observed_pos = data.get("Pos")
+            if isinstance(observed_pos, list) and len(observed_pos) >= 3:
+                try:
+                    last_observed_world_state = {
+                        "available": True,
+                        "player": entity_name,
+                        "player_position": {
+                            "x": float(str(observed_pos[0]).rstrip("d")),
+                            "y": float(str(observed_pos[1]).rstrip("d")),
+                            "z": float(str(observed_pos[2]).rstrip("d")),
+                        },
+                        "observed_at": time.strftime(
+                            "%Y-%m-%d %H:%M:%S",
+                            time.localtime(),
+                        ),
+                    }
+                except (TypeError, ValueError):
+                    last_observed_world_state = {
+                        "available": False,
+                        "reason": "entity position could not be parsed",
+                    }
 
             # cache_dir = 'tmp'
             # file_path = os.path.join(cache_dir, 'message.json')
