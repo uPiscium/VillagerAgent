@@ -880,7 +880,7 @@ def _run_minecraft_experiment_attempt(
                     "event_lifecycle_valid": False,
                     "event_terminal_count": 0,
                 })
-    judged_iteration_trace = []
+    judged_iteration_trace = {}
     judged_terminal_diagnostics = {}
     if execute and launch_config.get("task_type") == "meta":
         judged_iteration_trace = build_judged_iteration_trace(
@@ -890,6 +890,10 @@ def _run_minecraft_experiment_attempt(
                 runtime_launch_config.get("task_name", ""),
             ),
             final_score=score,
+            agent_iteration_limit=runtime_result.get("agent_iteration_limit"),
+            agent_iteration_limit_source=runtime_result.get(
+                "agent_iteration_limit_source"
+            ),
         )
         judged_terminal_diagnostics = build_judged_terminal_diagnostics(
             summary=summary,
@@ -2387,15 +2391,17 @@ def _read_json(path: Path, *, default):
         return json.load(f)
 
 
-def _read_agent_history(runtime_root: Path, runtime_task_name: str) -> list:
+def _read_agent_history(runtime_root: Path, runtime_task_name: str) -> list | None:
     if not runtime_task_name:
-        return []
+        return None
     path = runtime_root / "result" / runtime_task_name / "Alice_history.json"
+    if not path.exists():
+        return None
     try:
         history = _read_json(path, default=[])
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return []
-    return history if isinstance(history, list) else []
+        return None
+    return history if isinstance(history, list) else None
 
 
 def _remove_runtime_result(path: Path) -> None:

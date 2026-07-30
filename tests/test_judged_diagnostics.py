@@ -1,30 +1,7 @@
-from types import SimpleNamespace
-
 from benchmarks.minecraft.judged_diagnostics import (
     build_judged_iteration_trace,
     build_judged_terminal_diagnostics,
 )
-from env.movement_diagnostics import movement_completion
-
-
-def test_movement_completion_uses_judger_strict_axis_tolerance():
-    target = SimpleNamespace(x=5, y=-60, z=5)
-
-    boundary = movement_completion(
-        SimpleNamespace(x=5, y=-59, z=5),
-        target,
-        1,
-    )
-    reached = movement_completion(
-        SimpleNamespace(x=5, y=-59.001, z=5),
-        target,
-        1,
-    )
-
-    assert boundary["target_reached"] is False
-    assert boundary["axis_delta"] == {"x": 0.0, "y": 1.0, "z": 0.0}
-    assert reached["target_reached"] is True
-    assert reached["completion_semantics"] == "all_axis_deltas_strictly_below_tolerance"
 
 
 def test_iteration_trace_distinguishes_tool_success_from_task_success():
@@ -51,13 +28,24 @@ def test_iteration_trace_distinguishes_tool_success_from_task_success():
             "final_answer": "arrived",
         }],
         final_score={"status": "failure", "progress": 0},
+        agent_iteration_limit=11,
+        agent_iteration_limit_source="test runtime max_turn",
     )
 
-    assert trace[0]["tool_status"] is True
-    assert trace[0]["post_action_world_state"]["available"] is True
-    assert trace[0]["task_state_after"] == "unknown"
-    assert trace[1]["model_response_type"] == "final_answer"
-    assert trace[1]["judger_progress_after"] == 0
+    assert trace["agent_iteration"] == {
+        "available": True,
+        "source": "Alice_history.json outer dict episodes",
+        "limit": 11,
+        "limit_source": "test runtime max_turn",
+        "limit_available": True,
+        "used": 1,
+    }
+    assert trace["entries"][0]["tool_status"] is True
+    assert trace["entries"][0]["outer_episode_index"] == 1
+    assert trace["entries"][0]["action_index_in_episode"] == 1
+    assert trace["entries"][0]["post_action_world_state"]["available"] is True
+    assert trace["entries"][1]["model_response_type"] == "final_answer"
+    assert trace["entries"][1]["judger_progress_after"] == 0
 
 
 def test_terminal_diagnostics_identifies_external_judger_iteration_source():
@@ -68,7 +56,8 @@ def test_terminal_diagnostics_identifies_external_judger_iteration_source():
                 "progress": 0,
                 "end_reason": "max iteration out",
                 "iteration": {
-                    "source": "external_judger_history_episode_count",
+                    "source": "Alice_history.json outer episode count",
+                    "owner": "external_meta_judger",
                     "limit": 1,
                     "used": 1,
                     "terminal_observations": 3,
@@ -87,12 +76,22 @@ def test_terminal_diagnostics_identifies_external_judger_iteration_source():
             "task_scenario": "move",
             "evaluation_arg": {"x": 5, "y": -60, "z": 5},
         },
-        trace=[],
+        trace={
+            "agent_iteration": {
+                "available": True,
+                "source": "Alice_history.json outer dict episodes",
+                "limit": 9,
+                "used": 2,
+            },
+            "entries": [],
+        },
         runtime_snapshot={"summary": {"terminal_state": "failure"}},
     )
 
-    assert diagnostics["judger_iteration_source"] == "external_judger_history_episode_count"
-    assert diagnostics["judger_iteration_limit"] == 1
+    assert diagnostics["agent_iteration"]["limit"] == 9
+    assert diagnostics["agent_iteration"]["used"] == 2
+    assert diagnostics["judger_iteration"]["source"] == "Alice_history.json outer episode count"
+    assert diagnostics["judger_iteration"]["limit"] == 1
     assert diagnostics["root_cause_category"] == "task_not_satisfied"
     assert diagnostics["runtime_task_dag_state"]["terminal_state"] == "failure"
     assert diagnostics["artifact_admission_causality"] == {
@@ -137,13 +136,101 @@ def test_issue_439_legacy_actions_expose_missing_world_state_evidence():
         runtime_snapshot={"summary": {"terminal_state": "failure"}},
     )
 
-    assert [item["model_response_type"] for item in trace] == [
+    assert trace["agent_iteration"]["used"] == 1
+    assert len(trace["entries"]) == 4
+    assert [item["model_response_type"] for item in trace["entries"]] == [
         "parse_error",
         "structured_action",
         "structured_action",
         "final_answer",
     ]
-    assert trace[2]["tool_completion_semantics"] == "legacy_status_only"
-    assert trace[2]["post_action_world_state"]["available"] is False
-    assert diagnostics["root_cause_category"] == "world_state_not_observed"
-    assert diagnostics["judger_iteration_source"] is None
+    assert trace["entries"][0]["action_index_in_episode"] is None
+    assert trace["entries"][1]["action_index_in_episode"] == 1
+    assert trace["entries"][2]["action_index_in_episode"] == 2
+    assert trace["entries"][2]["tool_completion_semantics"] == "legacy_status_only"
+    assert trace["entries"][2]["post_action_world_state"]["available"] is False
+    assert diagnostics["root_cause_category"] == "completion_contract_mismatch"
+    assert diagnostics["root_cause_evidence"]["final_position_reconstructable"] is False
+    assert diagnostics["actual_terminal_state"]["reason"] == (
+        "post-action position was not captured by the previous runtime"
+    )
+    assert diagnostics["judger_iteration"]["available"] is False
+
+
+def test_multiple_history_episodes_are_distinct_from_trace_entries():
+    trace = build_judged_iteration_trace(
+        action_log={
+            "Alice": [
+                {"action": "navigateTo", "result": {"status": True}},
+                {"action": "navigateTo", "result": {"status": True}},
+            ],
+        },
+        agent_history=[
+            {"action_list": [{"action": {"tool": "navigateTo"}}]},
+            {"action_list": [{"action": {"tool": "navigateTo"}}]},
+        ],
+        final_score={},
+    )
+
+    assert trace["outer_episode_count"] == 2
+    assert trace["agent_iteration"]["used"] == 2
+    assert [entry["outer_episode_index"] for entry in trace["entries"]] == [1, 2]
+
+
+def test_one_episode_can_contain_parse_retry_and_multiple_actions():
+    trace = build_judged_iteration_trace(
+        action_log={
+            "Alice": [
+                {"action": "navigateTo", "result": {"status": True}},
+                {"action": "navigateTo", "result": {"status": True}},
+            ],
+        },
+        agent_history=[{
+            "action_list": [
+                {"action": {"tool": "_Exception"}, "feedback": "invalid"},
+                {"action": {"tool": "navigateTo"}},
+                {"action": {"tool": "navigateTo"}},
+            ],
+        }],
+        final_score={},
+    )
+
+    assert trace["agent_iteration"]["used"] == 1
+    assert len(trace["entries"]) == 3
+    assert [entry["action_index_in_episode"] for entry in trace["entries"]] == [
+        None,
+        1,
+        2,
+    ]
+
+
+def test_missing_history_does_not_infer_agent_iterations():
+    trace = build_judged_iteration_trace(
+        action_log={"Alice": [{"action": "navigateTo", "result": {"status": True}}]},
+        agent_history=None,
+        final_score={},
+    )
+
+    assert trace["outer_episode_count"] is None
+    assert trace["agent_iteration"] == {
+        "available": False,
+        "source": None,
+        "limit": None,
+        "limit_source": None,
+        "limit_available": False,
+        "used": None,
+        "reason": "not captured by runtime",
+    }
+    assert trace["entries"][0]["outer_episode_index"] is None
+
+
+def test_malformed_history_elements_are_not_counted_as_episodes():
+    trace = build_judged_iteration_trace(
+        action_log={"Alice": [{"action": "navigateTo", "result": {"status": True}}]},
+        agent_history=[None, {"action_list": [{"action": {"tool": "navigateTo"}}]}],
+        final_score={},
+    )
+
+    assert trace["outer_episode_count"] == 1
+    assert trace["malformed_outer_episode_count"] == 1
+    assert trace["agent_iteration"]["used"] == 1

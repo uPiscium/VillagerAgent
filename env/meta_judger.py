@@ -790,7 +790,8 @@ def handle(this):
                 history = json.load(stream)
             used = len(history) if isinstance(history, list) else None
         return {
-            "source": "external_judger_history_episode_count",
+            "source": "Alice_history.json outer episode count",
+            "owner": "external_meta_judger",
             "limit": max_iter,
             "used": used,
             "terminal_observations": max_iter_flag,

@@ -1371,6 +1371,15 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
             "exit_code": None,
             "timeout_reason": None,
         }), encoding="utf-8")
+        history_path = runtime_root / "result" / launch_config["task_name"] / "Alice_history.json"
+        history_path.parent.mkdir(parents=True)
+        history_path.write_text(json.dumps([{
+            "action_list": [{
+                "action": {"tool": "navigateTo", "tool_input": {"x": 5, "y": -60, "z": 5}},
+                "feedback": {"status": True},
+            }],
+            "final_answer": "arrived",
+        }]), encoding="utf-8")
         result = _runtime_result_snapshot(status="success")
         result.update({
             "score": {
@@ -1382,6 +1391,8 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
             "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
             "controller": {"shutdown_complete": True, "active_assignments": {}},
             "collection_errors": [],
+            "agent_iteration_limit": 12,
+            "agent_iteration_limit_source": "VillagerBench.step max_turn",
         })
         return result
 
@@ -1407,7 +1418,13 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
     )
     assert terminal_diagnostics["score_status"] == "success"
     assert terminal_diagnostics["root_cause_category"] is None
-    assert (output_dir / "judged_iteration_trace.json").is_file()
+    iteration_trace = json.loads(
+        (output_dir / "judged_iteration_trace.json").read_text(encoding="utf-8")
+    )
+    assert iteration_trace["schema_version"] == 1
+    assert iteration_trace["outer_episode_count"] == 1
+    assert iteration_trace["agent_iteration"]["limit"] == 12
+    assert terminal_diagnostics["agent_iteration"] == iteration_trace["agent_iteration"]
     diagnostics = json.loads((output_dir / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
     retained_diagnostics_path = (
         output_dir / summary["runtime_root"] / "meta_judger_diagnostics.json"

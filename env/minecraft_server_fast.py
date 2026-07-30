@@ -204,9 +204,21 @@ async def move_to_pos(request: Request):
     x, y, z = data.get('x'), data.get('y'), data.get('z')
     # Judged coordinate tasks require every axis to be within one block.
     target = Vec3(x, y, z)
-    tag, msg = move_to(pathfinder, bot, Vec3, 1, target)
-    completion = movement_completion(bot.entity.position, target, 1)
-    done = tag and completion["target_reached"]
+    tag, msg = move_to(
+        pathfinder,
+        bot,
+        Vec3,
+        1,
+        target,
+        completion_policy=STRICT_PER_AXIS,
+    )
+    completion = evaluate_movement_completion(
+        bot.entity.position,
+        target,
+        1,
+        policy=STRICT_PER_AXIS,
+    )
+    done = movement_status(tag, completion)
     # lookAtPlayer(bot, entity['position'])
     return JSONResponse({'message': msg, 'status': done, **completion})
 

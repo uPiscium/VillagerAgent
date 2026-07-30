@@ -8,6 +8,17 @@ import start_with_config
 from env.minecraft_client import MinecraftBridgeCleanupError
 
 
+def test_runtime_result_preserves_observed_agent_iteration_limit():
+    result = start_with_config._runtime_result(
+        env=SimpleNamespace(agent_iteration_limit=13, bridge_cleanup_result={}),
+        attempt_id="attempt-a",
+        task_name="task-a",
+    )
+
+    assert result["agent_iteration_limit"] == 13
+    assert result["agent_iteration_limit_source"] == "VillagerBench.step max_turn"
+
+
 def _install_harness(monkeypatch, run_minecraft_experiment):
     monkeypatch.setitem(
         sys.modules,

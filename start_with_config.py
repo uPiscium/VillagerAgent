@@ -107,6 +107,16 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
             "task_name": task_name,
         },
         "action_log": action_log,
+        "agent_iteration_limit": (
+            getattr(env, "agent_iteration_limit", None)
+            if env is not None
+            else None
+        ),
+        "agent_iteration_limit_source": (
+            "VillagerBench.step max_turn"
+            if env is not None and getattr(env, "agent_iteration_limit", None) is not None
+            else None
+        ),
         "runtime_task_dag_snapshot": runtime_snapshot,
         "task_graph_snapshot": task_graph_snapshot,
         "controller": controller_snapshot,

@@ -504,6 +504,7 @@ class VillagerBench:
         self.logger.debug("=" * 20 + " Env Step " + "=" * 20)
         self.logger.info(f"agent {agent_name}")
         self.logger.info("=" * 20 + " Env Step " + "=" * 20)
+        self.agent_iteration_limit = max_turn
         find_agent = False
         for agent in self.agent_pool:
             if agent.name == agent_name:
