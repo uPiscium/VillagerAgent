@@ -30,6 +30,10 @@ from benchmarks.minecraft.events import (
     finalize_attempt_events,
     validate_attempt_event_lifecycle,
 )
+from benchmarks.minecraft.judged_diagnostics import (
+    build_judged_iteration_trace,
+    build_judged_terminal_diagnostics,
+)
 from benchmarks.minecraft.run_lock import (
     MinecraftTargetLock,
     MinecraftTargetLockBusyError,
@@ -876,6 +880,35 @@ def _run_minecraft_experiment_attempt(
                     "event_lifecycle_valid": False,
                     "event_terminal_count": 0,
                 })
+    judged_iteration_trace = {}
+    judged_terminal_diagnostics = {}
+    if execute and launch_config.get("task_type") == "meta":
+        judged_iteration_trace = build_judged_iteration_trace(
+            action_log=action_log,
+            agent_history=_read_agent_history(
+                runtime_root,
+                runtime_launch_config.get("task_name", ""),
+            ),
+            final_score=score,
+            agent_iteration_limit=runtime_result.get("agent_iteration_limit"),
+            agent_iteration_limit_source=runtime_result.get(
+                "agent_iteration_limit_source"
+            ),
+        )
+        judged_terminal_diagnostics = build_judged_terminal_diagnostics(
+            summary=summary,
+            launch_config=launch_config,
+            trace=judged_iteration_trace,
+            runtime_snapshot=runtime_task_dag_snapshot,
+        )
+        summary.update({
+            "judged_iteration_trace_available": True,
+            "judged_terminal_diagnostics_available": True,
+            "judged_root_cause_category": judged_terminal_diagnostics.get(
+                "root_cause_category"
+            ),
+        })
+
     metrics = build_minecraft_metrics(
         summary=summary,
         action_log=action_log,
@@ -893,6 +926,14 @@ def _run_minecraft_experiment_attempt(
     artifact = sanitize_artifact_value(artifact, secret_values=secret_values)
     decision_support = sanitize_artifact_value(decision_support, secret_values=secret_values)
     metrics = sanitize_artifact_value(metrics, secret_values=secret_values)
+    judged_iteration_trace = sanitize_artifact_value(
+        judged_iteration_trace,
+        secret_values=secret_values,
+    )
+    judged_terminal_diagnostics = sanitize_artifact_value(
+        judged_terminal_diagnostics,
+        secret_values=secret_values,
+    )
     summary = sanitize_artifact_value(summary, secret_values=secret_values)
     persisted_summary = {**summary, "output_dir": "."}
     _write_json(output_dir / "launch_config.json", sanitized_launch_config)
@@ -903,6 +944,12 @@ def _run_minecraft_experiment_attempt(
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
     _write_json(output_dir / "summary.json", persisted_summary)
+    if execute and launch_config.get("task_type") == "meta":
+        _write_json(output_dir / "judged_iteration_trace.json", judged_iteration_trace)
+        _write_json(
+            output_dir / "judged_terminal_diagnostics.json",
+            judged_terminal_diagnostics,
+        )
     public_meta_judger_diagnostics = _sanitize_retained_meta_judger_diagnostics(
         runtime_result_path.parent / "meta_judger_diagnostics.json",
         output_dir=output_dir,
@@ -2342,6 +2389,19 @@ def _read_json(path: Path, *, default):
         return default
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _read_agent_history(runtime_root: Path, runtime_task_name: str) -> list | None:
+    if not runtime_task_name:
+        return None
+    path = runtime_root / "result" / runtime_task_name / "Alice_history.json"
+    if not path.exists():
+        return None
+    try:
+        history = _read_json(path, default=[])
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return history if isinstance(history, list) else None
 
 
 def _remove_runtime_result(path: Path) -> None:

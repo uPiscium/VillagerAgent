@@ -8,6 +8,21 @@ import os
 import json
 from collections import deque
 
+try:
+    from env.movement_diagnostics import (
+        EUCLIDEAN_DISTANCE,
+        STRICT_PER_AXIS,
+        evaluate_movement_completion,
+        movement_status,
+    )
+except ImportError:
+    from movement_diagnostics import (
+        EUCLIDEAN_DISTANCE,
+        STRICT_PER_AXIS,
+        evaluate_movement_completion,
+        movement_status,
+    )
+
 if not os.environ.get("PYTEST_CURRENT_TEST") and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
 
@@ -715,10 +730,20 @@ def get_entity_by(qtype, env_info, name, username=""):
     return get_entities
 
 
-def move_to(pathfinder, bot, Vec3, RANGE_GOAL, pos):  # √
+def move_to(
+    pathfinder,
+    bot,
+    Vec3,
+    RANGE_GOAL,
+    pos,
+    *,
+    completion_policy=EUCLIDEAN_DISTANCE,
+):  # √
     global last_jump_time
     if pos is None:
         return False, "move failed, no target position"
+    if completion_policy not in {EUCLIDEAN_DISTANCE, STRICT_PER_AXIS}:
+        raise ValueError(f"unsupported movement completion policy: {completion_policy}")
     mv_ = pathfinder.Movements(bot)
     # #[DEBUG] print("Movements1",mv_)
     mv_.allow1by1towers = False
@@ -747,8 +772,20 @@ def move_to(pathfinder, bot, Vec3, RANGE_GOAL, pos):  # √
     range_to_block = 0
     if "pressure_plate" in block_name or "pressure_plate" in block_name_below:
         range_to_block = 1.4
-    while distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL and max_steps > 0 and distanceTo(
-            bot.entity.position, Vec3(pos.x, pos.y, pos.z)) > 1:
+    def target_pending():
+        if completion_policy == STRICT_PER_AXIS:
+            return not evaluate_movement_completion(
+                bot.entity.position,
+                pos,
+                RANGE_GOAL,
+                policy=completion_policy,
+            )["target_reached"]
+        return (
+            distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL
+            and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) > 1
+        )
+
+    while target_pending() and max_steps > 0:
         try_num = 3
         while try_num > 0:
             try:
@@ -779,7 +816,19 @@ def move_to(pathfinder, bot, Vec3, RANGE_GOAL, pos):  # √
                 last_jump_time = time.time()
             # bot.chat(f'bot seems like in an idle state.')
 
-    if max_steps <= 0 and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL + 1.5:
+    completion = evaluate_movement_completion(
+        bot.entity.position,
+        pos,
+        RANGE_GOAL,
+        policy=completion_policy,
+    )
+    failed = (
+        not completion["target_reached"]
+        if completion_policy == STRICT_PER_AXIS
+        else max_steps <= 0
+        and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL + 1.5
+    )
+    if failed:
         # # bot.chat('can not reach the position')
         if bot.blockAt(pos)['name'] == 'air':
             return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z}, your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}, you need to jump or use dirt block to reach the position"

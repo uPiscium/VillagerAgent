@@ -49,6 +49,22 @@ class ControllerShutdownError(RuntimeError):
     pass
 
 
+class JudgedTaskFailure(RuntimeError):
+    def __init__(self, payload: dict):
+        iteration = payload.get("iteration") if isinstance(payload.get("iteration"), dict) else {}
+        message = (
+            "judged task failed: "
+            f"status={payload.get('status')}, "
+            f"end_reason={payload.get('end_reason')}, "
+            f"progress={payload.get('progress', payload.get('score'))}, "
+            f"judger_iteration_source={iteration.get('source')}, "
+            f"judger_iterations={iteration.get('used')}/{iteration.get('limit')}, "
+            "diagnostics=judged_terminal_diagnostics.json"
+        )
+        super().__init__(message)
+        self.payload = dict(payload)
+
+
 class JudgedEvidenceConsistencyError(ControllerShutdownError):
     def __init__(self, message: str, *, agent_failures: dict):
         super().__init__(message)
@@ -759,7 +775,7 @@ class GlobalController:
         if status == Task.failure:
             self._record_failure(
                 "external_judger",
-                ControllerShutdownError("external judger reported task failure"),
+                JudgedTaskFailure(payload),
             )
         else:
             self._request_shutdown()
