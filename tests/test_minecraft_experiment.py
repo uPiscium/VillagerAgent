@@ -1387,6 +1387,22 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
                 "task_name": launch_config["task_name"],
                 "status": "success",
                 "score": 1,
+                "iteration": {
+                    "available": True,
+                    "owner": "external_meta_judger",
+                    "source": "Alice_history.json outer episode count",
+                    "source_available": True,
+                    "limit": 1,
+                    "limit_available": True,
+                    "used": None,
+                    "usage_available": False,
+                    "usage_unavailable_reason": {
+                        "code": "history_not_observable_at_terminal_evaluation",
+                        "message": "Alice_history.json was not observable at terminal evaluation",
+                    },
+                    "terminal_observations": 0,
+                    "terminal_observations_available": True,
+                },
             },
             "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
             "controller": {"shutdown_complete": True, "active_assignments": {}},
@@ -1417,6 +1433,7 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
         (output_dir / "judged_terminal_diagnostics.json").read_text(encoding="utf-8")
     )
     assert terminal_diagnostics["score_status"] == "success"
+    assert terminal_diagnostics["schema_version"] == 2
     assert terminal_diagnostics["root_cause_category"] is None
     iteration_trace = json.loads(
         (output_dir / "judged_iteration_trace.json").read_text(encoding="utf-8")
@@ -1425,6 +1442,12 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
     assert iteration_trace["outer_episode_count"] == 1
     assert iteration_trace["agent_iteration"]["limit"] == 12
     assert terminal_diagnostics["agent_iteration"] == iteration_trace["agent_iteration"]
+    assert terminal_diagnostics["agent_iteration"]["used"] == 1
+    assert terminal_diagnostics["judger_iteration"]["used"] is None
+    assert terminal_diagnostics["judger_iteration"]["usage_available"] is False
+    assert terminal_diagnostics["judger_iteration"]["usage_unavailable_reason"]["code"] == (
+        "history_not_observable_at_terminal_evaluation"
+    )
     diagnostics = json.loads((output_dir / "meta_judger_diagnostics.json").read_text(encoding="utf-8"))
     retained_diagnostics_path = (
         output_dir / summary["runtime_root"] / "meta_judger_diagnostics.json"
@@ -1452,6 +1475,66 @@ def test_minecraft_meta_execute_persists_run_local_load_diagnostics(tmp_path, mo
         for path in output_dir.rglob("*")
         if path.is_file()
     )
+
+
+def test_minecraft_failed_judger_preserves_measured_iteration_usage(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = _write_minecraft_config(tmp_path)
+
+    def failed_judger_result(launch_config, **kwargs):
+        result = _runtime_result_snapshot(status="failure")
+        result.update({
+            "score": {
+                "attempt_id": kwargs["attempt_id"],
+                "task_name": launch_config["task_name"],
+                "status": "failure",
+                "progress": 0,
+                "end_reason": "max iteration out",
+                "iteration": {
+                    "owner": "external_meta_judger",
+                    "source": "Alice_history.json outer episode count",
+                    "limit": 1,
+                    "used": 1,
+                    "terminal_observations": 3,
+                },
+            },
+            "bridge_cleanup": {"cleanup_complete": True, "processes": {}},
+            "controller": {"shutdown_complete": True, "active_assignments": {}},
+            "collection_errors": [],
+        })
+        return result
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._execute_real_runtime",
+        failed_judger_result,
+    )
+
+    summary = run_minecraft_experiment(
+        config_path=config_path,
+        output_root=tmp_path / "result",
+        run_name="failed_judger_iteration",
+        execute=True,
+        execute_timeout_seconds=30,
+    )
+
+    output_dir = tmp_path / "result" / "failed_judger_iteration"
+    terminal = json.loads(
+        (output_dir / "judged_terminal_diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert summary["artifact_admission"]["passed"] is False
+    assert terminal["judger_iteration"]["usage_available"] is True
+    assert terminal["judger_iteration"]["used"] == 1
+    assert terminal["judger_iteration"]["usage_unavailable_reason"] is None
+    manifest = validate_run_attempt(
+        output_dir,
+        attempt_id=summary["attempt_id"],
+        require_completed=False,
+    )
+    assert manifest["status"] == "failed"
+    assert not (output_dir / COMPLETION_MARKER_FILE).exists()
+    _assert_bundle_has_no_absolute_paths(output_dir)
 
 
 def test_minecraft_failure_sanitizes_retained_diagnostics_before_manifest(

@@ -88,10 +88,13 @@ def test_terminal_diagnostics_identifies_external_judger_iteration_source():
         runtime_snapshot={"summary": {"terminal_state": "failure"}},
     )
 
+    assert diagnostics["schema_version"] == 2
     assert diagnostics["agent_iteration"]["limit"] == 9
     assert diagnostics["agent_iteration"]["used"] == 2
     assert diagnostics["judger_iteration"]["source"] == "Alice_history.json outer episode count"
     assert diagnostics["judger_iteration"]["limit"] == 1
+    assert diagnostics["judger_iteration"]["usage_available"] is True
+    assert diagnostics["judger_iteration"]["used"] == 1
     assert diagnostics["root_cause_category"] == "task_not_satisfied"
     assert diagnostics["runtime_task_dag_state"]["terminal_state"] == "failure"
     assert diagnostics["artifact_admission_causality"] == {
@@ -155,6 +158,45 @@ def test_issue_439_legacy_actions_expose_missing_world_state_evidence():
         "post-action position was not captured by the previous runtime"
     )
     assert diagnostics["judger_iteration"]["available"] is False
+    assert diagnostics["judger_iteration"]["usage_available"] is False
+    assert diagnostics["judger_iteration"]["usage_unavailable_reason"]["code"] == (
+        "iteration_not_measured"
+    )
+
+
+def test_judger_usage_is_not_inferred_from_agent_iteration():
+    diagnostics = build_judged_terminal_diagnostics(
+        summary={
+            "final_score": {
+                "status": "success",
+                "iteration": {
+                    "source": "Alice_history.json outer episode count",
+                    "limit": 1,
+                    "used": None,
+                    "terminal_observations": 0,
+                    "usage_unavailable_reason": {
+                        "code": "history_not_observable_at_terminal_evaluation",
+                        "message": "history unavailable at terminal evaluation",
+                    },
+                },
+            },
+            "progress": 100,
+        },
+        launch_config={"task_scenario": "move", "evaluation_arg": {}},
+        trace={
+            "agent_iteration": {
+                "available": True,
+                "source": "Alice_history.json outer dict episodes",
+                "limit": 7,
+                "used": 1,
+            },
+            "entries": [],
+        },
+    )
+
+    assert diagnostics["agent_iteration"]["used"] == 1
+    assert diagnostics["judger_iteration"]["used"] is None
+    assert diagnostics["judger_iteration"]["usage_available"] is False
 
 
 def test_multiple_history_episodes_are_distinct_from_trace_entries():

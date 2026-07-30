@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from env.judger_iteration import normalize_iteration_metadata
+
 
 UNAVAILABLE = {
     "available": False,
@@ -227,28 +229,9 @@ def build_judged_terminal_diagnostics(
     )
     admission = summary.get("artifact_admission", {})
     invalid = admission.get("invalid", []) if isinstance(admission, dict) else []
-    judger_iteration = (
-        {
-            "available": True,
-            "source": iteration.get("source"),
-            "owner": iteration.get("owner", "external_meta_judger"),
-            "limit": iteration.get("limit"),
-            "used": iteration.get("used"),
-            "terminal_observations": iteration.get("terminal_observations"),
-        }
-        if iteration.get("source")
-        else {
-            "available": False,
-            "source": None,
-            "owner": "external_meta_judger",
-            "limit": None,
-            "used": None,
-            "terminal_observations": None,
-            "reason": "not captured by runtime",
-        }
-    )
+    judger_iteration = normalize_iteration_metadata(iteration)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "agent_iteration": trace.get("agent_iteration", {
             "available": False,
             "source": None,

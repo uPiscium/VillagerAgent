@@ -9,9 +9,11 @@ import os
 import math
 
 try:
+    from env.judger_iteration import build_iteration_metadata
     from env.judger_artifacts import TerminalArtifactWriter
     from env.runtime_paths import RuntimePaths, atomic_write_json, atomic_write_text
 except ImportError:
+    from judger_iteration import build_iteration_metadata
     from judger_artifacts import TerminalArtifactWriter
     from runtime_paths import RuntimePaths, atomic_write_json, atomic_write_text
 import argparse
@@ -773,7 +775,7 @@ def handle(this):
 
         return total_time
 
-    def iteration_evidence(config):
+    def iteration_evidence(config, *, measured_used=None):
         max_iter = (
             base_iter + 1
             if (
@@ -784,18 +786,36 @@ def handle(this):
             else base_iter
         )
         history_path = run_result_dir / "Alice_history.json"
-        used = None
-        if history_path.exists():
-            with history_path.open("r", encoding="utf-8") as stream:
-                history = json.load(stream)
-            used = len(history) if isinstance(history, list) else None
-        return {
-            "source": "Alice_history.json outer episode count",
-            "owner": "external_meta_judger",
-            "limit": max_iter,
-            "used": used,
-            "terminal_observations": max_iter_flag,
-        }
+        used = measured_used
+        unavailable_reason = None
+        if used is None:
+            if not history_path.exists():
+                unavailable_reason = {
+                    "code": "history_not_observable_at_terminal_evaluation",
+                    "message": (
+                        "Alice_history.json was not observable at terminal evaluation"
+                    ),
+                }
+            else:
+                try:
+                    with history_path.open("r", encoding="utf-8") as stream:
+                        history = json.load(stream)
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    history = None
+                if isinstance(history, list):
+                    used = len(history)
+                else:
+                    unavailable_reason = {
+                        "code": "history_malformed",
+                        "message": "Alice_history.json was not a readable episode list",
+                    }
+        return build_iteration_metadata(
+            source="Alice_history.json outer episode count",
+            limit=max_iter,
+            used=used,
+            terminal_observations=max_iter_flag,
+            usage_unavailable_reason=unavailable_reason,
+        )
 
     def expected_terminal_state(config):
         evaluation = config["evaluation_arg"]
@@ -1014,11 +1034,10 @@ def handle(this):
                         "use_time": calculate_action_time(),
                         "end_reason": "max iteration out",
                         "end_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_time)),
-                        "iteration": {
-                            **iteration_evidence(config),
-                            "used": now_iter,
-                            "terminal_observations": max_iter_flag,
-                        },
+                        "iteration": iteration_evidence(
+                            config,
+                            measured_used=now_iter,
+                        ),
                         "expected_terminal_state": expected_terminal_state(config),
                         "actual_terminal_state": last_observed_world_state,
                         "failure_reason": (
