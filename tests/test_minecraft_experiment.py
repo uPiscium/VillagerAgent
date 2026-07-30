@@ -1,11 +1,13 @@
 import json
 import os
+import shlex
 import signal
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from benchmarks.common.run_artifacts import (
     COMPLETION_MARKER_FILE,
@@ -90,6 +92,15 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
         output_root=tmp_path / "result",
         run_name="issue110",
         enable_dual_dag_task_selection=True,
+        command_text=[
+            "python",
+            "-m",
+            "benchmarks.minecraft.experiment",
+            "--config",
+            str(config_path),
+            "--output-root",
+            str(tmp_path / "result"),
+        ],
     )
 
     output_dir = tmp_path / "result" / "issue110"
@@ -148,6 +159,7 @@ def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
     assert runtime_snapshot["nodes"][0]["node_type"] == "runtime_task"
     assert artifact["task_state_source"] == "config_fixture"
     assert decision_support["task_state_source"] == "config_fixture"
+    _assert_bundle_has_no_absolute_paths(output_dir)
 
 
 def _nested_values(value):
@@ -159,6 +171,30 @@ def _nested_values(value):
             yield from _nested_values(child)
     else:
         yield value
+
+
+def _assert_bundle_has_no_absolute_paths(root: Path):
+    values = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix == ".json":
+            values.extend(_nested_values(json.loads(path.read_text(encoding="utf-8"))))
+        elif path.suffix == ".jsonl":
+            for line in path.read_text(encoding="utf-8").splitlines():
+                values.extend(_nested_values(json.loads(line)))
+        elif path.suffix in {".yaml", ".yml"}:
+            values.extend(_nested_values(yaml.safe_load(path.read_text(encoding="utf-8"))))
+        elif path.name == "command.txt":
+            values.extend(shlex.split(path.read_text(encoding="utf-8")))
+
+    absolute = [
+        value
+        for value in values
+        if isinstance(value, str)
+        and (Path(value).is_absolute() or PureWindowsPath(value).is_absolute())
+    ]
+    assert absolute == []
 
 
 def test_minecraft_experiment_sanitizes_run_names(tmp_path):

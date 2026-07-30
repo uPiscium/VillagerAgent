@@ -65,6 +65,11 @@ def test_minecraft_matrix_dry_run_writes_runs_and_common_summary(tmp_path):
     assert (matrix_dir / "matrix_summary.json").exists()
     assert (matrix_dir / "runs" / "bell_run" / "summary.json").exists()
     assert (matrix_dir / "runs" / "chest_run" / "metrics.json").exists()
+    persisted_run_summary = json.loads(
+        (matrix_dir / "runs" / "bell_run" / "summary.json").read_text(encoding="utf-8")
+    )
+    assert persisted_run_summary["output_dir"] == "."
+    assert summary["runs"][0]["run_dir"] == str(matrix_dir / "runs" / "bell_run")
     assert summary["runs"][0]["common_report"]["benchmark"] == "minecraft"
     assert summary["runs"][0]["execute_timeout_seconds"] == 600
     assert summary["runs"][0]["common_report"]["physical_action_count"] == 1

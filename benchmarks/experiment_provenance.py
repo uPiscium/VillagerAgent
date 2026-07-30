@@ -8,7 +8,7 @@ import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from subprocess import run as run_process
 
@@ -24,6 +24,17 @@ from benchmarks.common.sanitization import (
 PROVENANCE_SCHEMA_VERSION = "2.0.0"
 PROVENANCE_FILE = "provenance.json"
 _LOCK_FILES = ("flake.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "requirements.txt")
+_PATH_FIELD_NAMES = frozenset({
+    "artifact_dir",
+    "config",
+    "executable",
+    "json_output",
+    "matrix_provenance",
+    "output",
+    "path",
+    "report_dir",
+})
+_PATH_FIELD_SUFFIXES = ("_dir", "_file", "_path", "_paths", "_root")
 
 
 def standard_run_name(*parts: object) -> str:
@@ -48,32 +59,32 @@ def write_provenance(
     secret_values = collect_secret_values(resolved_config)
     argv = _command_argv(command)
     repository_root = _repository_root()
-    safe_argv = _sanitize_public_paths(
+    safe_argv = _sanitize_argv_paths(
         sanitize_command(argv, secret_values=secret_values),
         repository_root=repository_root,
     )
     sanitized_command = shlex.join(safe_argv)
-    settings = _sanitize_public_paths(
+    settings = _sanitize_path_fields(
         sanitize_artifact_value(resolved_config, secret_values=secret_values),
         repository_root=repository_root,
     )
-    repository = _sanitize_public_paths(
+    repository = _sanitize_path_fields(
         git_identity(repository_root, required=True, name="villageragent"),
         repository_root=repository_root,
     )
-    lock_identity = _sanitize_public_paths(
+    lock_identity = _sanitize_path_fields(
         dependency_lock_identity(repository_root),
         repository_root=repository_root,
     )
     recorded_assets = [
-        _sanitize_public_paths(
+        _sanitize_path_fields(
             sanitize_artifact_value(item, secret_values=secret_values),
             repository_root=repository_root,
         )
         for item in (assets or [])
     ]
     recorded_assets.extend(
-        _sanitize_public_paths(
+        _sanitize_path_fields(
             sanitize_artifact_value(item, secret_values=secret_values),
             repository_root=repository_root,
         )
@@ -139,7 +150,7 @@ def finalize_provenance(output_dir: Path, *, status: str) -> dict[str, Any]:
 def update_provenance_assets(output_dir: Path, assets: list[dict[str, Any]]) -> dict[str, Any]:
     path = output_dir / PROVENANCE_FILE
     provenance = json.loads(path.read_text(encoding="utf-8"))
-    updates = _sanitize_public_paths(
+    updates = _sanitize_path_fields(
         sanitize_artifact_value(assets),
         repository_root=_repository_root(),
     )
@@ -162,7 +173,7 @@ def update_provenance_settings(output_dir: Path, resolved_config: Any) -> dict[s
     path = output_dir / PROVENANCE_FILE
     provenance = json.loads(path.read_text(encoding="utf-8"))
     secret_values = collect_secret_values(resolved_config)
-    settings = _sanitize_public_paths(
+    settings = _sanitize_path_fields(
         sanitize_artifact_value(resolved_config, secret_values=secret_values),
         repository_root=_repository_root(),
     )
@@ -325,23 +336,64 @@ def _command_argv(command: str | list[str]) -> list[str]:
         return [command]
 
 
-def _sanitize_public_paths(value: Any, *, repository_root: Path) -> Any:
+def _sanitize_path_fields(value: Any, *, repository_root: Path, field_name: str = "") -> Any:
     if isinstance(value, dict):
         return {
-            key: _sanitize_public_paths(child, repository_root=repository_root)
+            key: _sanitize_path_fields(
+                child,
+                repository_root=repository_root,
+                field_name=str(key),
+            )
             for key, child in value.items()
         }
     if isinstance(value, list):
-        return [_sanitize_public_paths(item, repository_root=repository_root) for item in value]
-    if isinstance(value, str):
-        flag, separator, argument = value.partition("=")
-        if separator and Path(argument).is_absolute():
-            return f"{flag}={_public_path(argument, repository_root=repository_root)}"
+        return [
+            _sanitize_path_fields(
+                item,
+                repository_root=repository_root,
+                field_name=field_name,
+            )
+            for item in value
+        ]
+    if isinstance(value, str) and _is_path_field(field_name):
         return _public_path(value, repository_root=repository_root)
     return value
 
 
+def _sanitize_argv_paths(argv: list[str], *, repository_root: Path) -> list[str]:
+    sanitized = []
+    path_value_expected = False
+    for index, argument in enumerate(argv):
+        flag, separator, value = argument.partition("=")
+        if separator and flag.startswith("--") and _is_path_field(flag.lstrip("-")):
+            sanitized.append(f"{flag}={_public_path(value, repository_root=repository_root)}")
+            path_value_expected = False
+            continue
+        if index == 0 or path_value_expected:
+            sanitized.append(_public_path(argument, repository_root=repository_root))
+            path_value_expected = False
+            continue
+        sanitized.append(argument)
+        path_value_expected = argument.startswith("--") and _is_path_field(argument.lstrip("-"))
+    return sanitized
+
+
+def _is_path_field(field_name: str) -> bool:
+    normalized = field_name.lower().replace("-", "_")
+    return normalized in _PATH_FIELD_NAMES or normalized.endswith(_PATH_FIELD_SUFFIXES)
+
+
 def _public_path(value: str, *, repository_root: Path) -> str:
+    windows_candidate = PureWindowsPath(value)
+    if windows_candidate.is_absolute():
+        windows_root = PureWindowsPath(str(repository_root))
+        if windows_root.is_absolute():
+            try:
+                relative = windows_candidate.relative_to(windows_root)
+            except ValueError:
+                return "<external>"
+            return relative.as_posix() or "."
+        return "<external>"
     candidate = Path(value)
     if not candidate.is_absolute():
         return value
