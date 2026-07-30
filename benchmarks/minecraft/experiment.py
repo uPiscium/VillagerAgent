@@ -16,6 +16,8 @@ from benchmarks.experiment_provenance import (
     file_identity,
     finalize_provenance,
     model_identity,
+    project_public_argv_paths,
+    project_public_path_fields,
     standard_run_name,
     update_provenance_assets,
     update_provenance_settings,
@@ -152,6 +154,14 @@ def run_minecraft_experiment(
             finalize_provenance(
                 attempt_state["output_dir"],
                 status="timeout" if isinstance(exc, (TimeoutError, MinecraftExecuteTimeoutError)) else "failure",
+            )
+            _sanitize_retained_meta_judger_diagnostics(
+                attempt_state.get(
+                    "runtime_result_path",
+                    attempt_state["output_dir"] / ".runtime" / "runtime_result.json",
+                ).parent / "meta_judger_diagnostics.json",
+                output_dir=attempt_state["output_dir"],
+                secret_values=attempt_state.get("secret_values", ()),
             )
             _sanitize_runtime_checkpoint(
                 attempt_state.get(
@@ -893,13 +903,15 @@ def _run_minecraft_experiment_attempt(
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
     _write_json(output_dir / "summary.json", persisted_summary)
-    if meta_judger_diagnostics:
+    public_meta_judger_diagnostics = _sanitize_retained_meta_judger_diagnostics(
+        runtime_result_path.parent / "meta_judger_diagnostics.json",
+        output_dir=output_dir,
+        secret_values=secret_values,
+    )
+    if public_meta_judger_diagnostics:
         _write_json(
             output_dir / "meta_judger_diagnostics.json",
-            sanitize_artifact_value(
-                _relativize_output_paths(meta_judger_diagnostics, output_dir=output_dir),
-                secret_values=secret_values,
-            ),
+            public_meta_judger_diagnostics,
         )
     if execute and not retain_runtime_result:
         _remove_runtime_result(runtime_result_path)
@@ -1362,21 +1374,33 @@ def validate_judged_artifact_consistency(
         raise ValueError("inconsistent judged artifact: " + "; ".join(errors))
 
 
-def _relativize_output_paths(value, *, output_dir: Path):
-    absolute_output = str(output_dir.resolve())
-    if isinstance(value, dict):
-        return {
-            key: _relativize_output_paths(item, output_dir=output_dir)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            _relativize_output_paths(item, output_dir=output_dir)
-            for item in value
-        ]
-    if isinstance(value, str):
-        return value.replace(absolute_output, ".")
-    return value
+def _sanitize_retained_meta_judger_diagnostics(
+    path: Path,
+    *,
+    output_dir: Path,
+    secret_values: tuple[str, ...],
+) -> dict:
+    if not path.exists():
+        return {}
+    diagnostics = _read_json(path, default={})
+    if not isinstance(diagnostics, dict):
+        return {}
+    public_diagnostics = project_public_path_fields(
+        diagnostics,
+        repository_root=output_dir.resolve(),
+    )
+    command = diagnostics.get("command")
+    if isinstance(command, list):
+        public_diagnostics["command"] = project_public_argv_paths(
+            [str(argument) for argument in command],
+            repository_root=output_dir.resolve(),
+        )
+    public_diagnostics = sanitize_artifact_value(
+        public_diagnostics,
+        secret_values=secret_values,
+    )
+    _write_json(path, public_diagnostics)
+    return public_diagnostics
 
 
 def _execute_real_runtime(

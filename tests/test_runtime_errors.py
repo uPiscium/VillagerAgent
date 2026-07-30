@@ -205,6 +205,8 @@ def test_ollama_chat_model_prefers_nonempty_content_over_reasoning():
 
 
 def test_meta_reset_bounds_missing_load_status_and_persists_diagnostics(monkeypatch, tmp_path):
+    launched_commands = []
+
     class FakeProcess:
         pid = 4321
 
@@ -217,7 +219,11 @@ def test_meta_reset_bounds_missing_load_status_and_persists_diagnostics(monkeypa
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(env_module, "LOAD_WAIT_SECONDS", 2)
     monkeypatch.setattr(env_module.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(env_module.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(
+        env_module.subprocess,
+        "Popen",
+        lambda command, **_kwargs: launched_commands.append(command) or FakeProcess(),
+    )
     environment = _meta_environment()
 
     with pytest.raises(Exception, match="server failed to start"):
@@ -228,6 +234,9 @@ def test_meta_reset_bounds_missing_load_status_and_persists_diagnostics(monkeypa
     assert diagnostics["exit_code"] is None
     assert diagnostics["timeout_reason"] == "load_status did not reach loaded within 2 seconds"
     assert [entry["status"] for entry in diagnostics["load_status_history"]] == ["missing", "missing"]
+    runtime_root_index = launched_commands[0].index("--runtime-root") + 1
+    assert launched_commands[0][runtime_root_index] == str(tmp_path.resolve())
+    assert diagnostics["command"] == launched_commands[0]
     assert (tmp_path / "data" / "meta_judger.stdout.log").exists()
     assert (tmp_path / "data" / "meta_judger.stderr.log").exists()
 

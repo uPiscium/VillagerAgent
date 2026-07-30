@@ -59,32 +59,32 @@ def write_provenance(
     secret_values = collect_secret_values(resolved_config)
     argv = _command_argv(command)
     repository_root = _repository_root()
-    safe_argv = _sanitize_argv_paths(
+    safe_argv = project_public_argv_paths(
         sanitize_command(argv, secret_values=secret_values),
         repository_root=repository_root,
     )
     sanitized_command = shlex.join(safe_argv)
-    settings = _sanitize_path_fields(
+    settings = project_public_path_fields(
         sanitize_artifact_value(resolved_config, secret_values=secret_values),
         repository_root=repository_root,
     )
-    repository = _sanitize_path_fields(
+    repository = project_public_path_fields(
         git_identity(repository_root, required=True, name="villageragent"),
         repository_root=repository_root,
     )
-    lock_identity = _sanitize_path_fields(
+    lock_identity = project_public_path_fields(
         dependency_lock_identity(repository_root),
         repository_root=repository_root,
     )
     recorded_assets = [
-        _sanitize_path_fields(
+        project_public_path_fields(
             sanitize_artifact_value(item, secret_values=secret_values),
             repository_root=repository_root,
         )
         for item in (assets or [])
     ]
     recorded_assets.extend(
-        _sanitize_path_fields(
+        project_public_path_fields(
             sanitize_artifact_value(item, secret_values=secret_values),
             repository_root=repository_root,
         )
@@ -105,7 +105,7 @@ def write_provenance(
         "argv": safe_argv,
         "command": sanitized_command,
         "interpreter": {
-            "executable": _public_path(sys.executable, repository_root=repository_root),
+            "executable": project_public_path(sys.executable, repository_root=repository_root),
             "implementation": platform.python_implementation(),
             "python_version": platform.python_version(),
         },
@@ -150,7 +150,7 @@ def finalize_provenance(output_dir: Path, *, status: str) -> dict[str, Any]:
 def update_provenance_assets(output_dir: Path, assets: list[dict[str, Any]]) -> dict[str, Any]:
     path = output_dir / PROVENANCE_FILE
     provenance = json.loads(path.read_text(encoding="utf-8"))
-    updates = _sanitize_path_fields(
+    updates = project_public_path_fields(
         sanitize_artifact_value(assets),
         repository_root=_repository_root(),
     )
@@ -173,7 +173,7 @@ def update_provenance_settings(output_dir: Path, resolved_config: Any) -> dict[s
     path = output_dir / PROVENANCE_FILE
     provenance = json.loads(path.read_text(encoding="utf-8"))
     secret_values = collect_secret_values(resolved_config)
-    settings = _sanitize_path_fields(
+    settings = project_public_path_fields(
         sanitize_artifact_value(resolved_config, secret_values=secret_values),
         repository_root=_repository_root(),
     )
@@ -336,10 +336,10 @@ def _command_argv(command: str | list[str]) -> list[str]:
         return [command]
 
 
-def _sanitize_path_fields(value: Any, *, repository_root: Path, field_name: str = "") -> Any:
+def project_public_path_fields(value: Any, *, repository_root: Path, field_name: str = "") -> Any:
     if isinstance(value, dict):
         return {
-            key: _sanitize_path_fields(
+            key: project_public_path_fields(
                 child,
                 repository_root=repository_root,
                 field_name=str(key),
@@ -348,7 +348,7 @@ def _sanitize_path_fields(value: Any, *, repository_root: Path, field_name: str 
         }
     if isinstance(value, list):
         return [
-            _sanitize_path_fields(
+            project_public_path_fields(
                 item,
                 repository_root=repository_root,
                 field_name=field_name,
@@ -356,21 +356,21 @@ def _sanitize_path_fields(value: Any, *, repository_root: Path, field_name: str 
             for item in value
         ]
     if isinstance(value, str) and _is_path_field(field_name):
-        return _public_path(value, repository_root=repository_root)
+        return project_public_path(value, repository_root=repository_root)
     return value
 
 
-def _sanitize_argv_paths(argv: list[str], *, repository_root: Path) -> list[str]:
+def project_public_argv_paths(argv: list[str], *, repository_root: Path) -> list[str]:
     sanitized = []
     path_value_expected = False
     for index, argument in enumerate(argv):
         flag, separator, value = argument.partition("=")
         if separator and flag.startswith("--") and _is_path_field(flag.lstrip("-")):
-            sanitized.append(f"{flag}={_public_path(value, repository_root=repository_root)}")
+            sanitized.append(f"{flag}={project_public_path(value, repository_root=repository_root)}")
             path_value_expected = False
             continue
         if index == 0 or path_value_expected:
-            sanitized.append(_public_path(argument, repository_root=repository_root))
+            sanitized.append(project_public_path(argument, repository_root=repository_root))
             path_value_expected = False
             continue
         sanitized.append(argument)
@@ -383,7 +383,7 @@ def _is_path_field(field_name: str) -> bool:
     return normalized in _PATH_FIELD_NAMES or normalized.endswith(_PATH_FIELD_SUFFIXES)
 
 
-def _public_path(value: str, *, repository_root: Path) -> str:
+def project_public_path(value: str, *, repository_root: Path) -> str:
     windows_candidate = PureWindowsPath(value)
     if windows_candidate.is_absolute():
         windows_root = PureWindowsPath(str(repository_root))
