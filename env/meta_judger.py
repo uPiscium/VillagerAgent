@@ -53,6 +53,22 @@ run_result_dir = runtime_paths.run_result_dir(task_name)
 run_result_dir.mkdir(parents=True, exist_ok=True)
 terminal_writer = TerminalArtifactWriter(runtime_paths, run_result_dir)
 
+with runtime_paths.meta_setting.open("r", encoding="utf-8") as stream:
+    runtime_config = json.load(stream)
+seed_contract_value = runtime_config.get("seed_contract")
+if seed_contract_value is None:
+    rng = random.Random()
+else:
+    from benchmarks.minecraft.seed_contract import SeedScope, resolve_seed_contract
+
+    seed_resolution = resolve_seed_contract(
+        seed_contract_value,
+        supported_scopes=(SeedScope.PYTHON_RANDOM, SeedScope.META_JUDGER),
+        applied_scopes=(SeedScope.PYTHON_RANDOM, SeedScope.META_JUDGER),
+    )
+    rng = seed_resolution.contract.random()
+    atomic_write_json(runtime_paths.root / "seed_contract.json", seed_resolution.to_dict())
+
 mineflayer = require('mineflayer')
 pathfinder = require('mineflayer-pathfinder')
 collectBlock = require('mineflayer-collectblock')
@@ -168,7 +184,7 @@ def handleViewer(*args):
                 time.sleep(.1)
             bot.chat(f"/setblock {x} {ory + current_height} {z} grass_block")
             time.sleep(.1)
-            random.shuffle(neighbor_list)
+            rng.shuffle(neighbor_list)
             for dx, dz in neighbor_list:
                 nx, nz = x + dx, z + dz
                 if nx <= orx or nx > orx + room_width or nz <= orz or nz > orz + room_width:
@@ -186,9 +202,9 @@ def handleViewer(*args):
                         next_height = round(neighbor_height / neighbor_count)
                     else:
                         if current_height > 1:
-                            next_height = current_height + random.choices([-1, 0], weights=[58, 42])[0] #-1的权重越大，越陡峭，但是-1的权重不宜太小
+                            next_height = current_height + rng.choices([-1, 0], weights=[58, 42])[0] #-1的权重越大，越陡峭，但是-1的权重不宜太小
                         else:
-                            next_height = current_height + random.choices([-1, 0], weights=[75, 25])[0]
+                            next_height = current_height + rng.choices([-1, 0], weights=[75, 25])[0]
                     if next_height == 0:
                         continue
                     height_vis[nx][nz] = next_height
@@ -219,8 +235,8 @@ def handleViewer(*args):
         return ory + 1
     
     def random_position(x1, z1, x2, z2, y_range, invalid_pos = []):
-        randx = random.randint(x1, x2)
-        randz = random.randint(z1, z2)
+        randx = rng.randint(x1, x2)
+        randz = rng.randint(z1, z2)
         while True:
             cover = False
             for pos in invalid_pos:
@@ -228,12 +244,12 @@ def handleViewer(*args):
                     cover = True
                     break
             if cover:
-                randx = random.randint(x1, x2)
-                randz = random.randint(z1, z2)
+                randx = rng.randint(x1, x2)
+                randz = rng.randint(z1, z2)
             else:
                 break
         sur_y = get_surface_y(randx, randz)
-        randy = sur_y + random.randint(1 , y_range) - 1
+        randy = sur_y + rng.randint(1 , y_range) - 1
         return randx, randy, randz
     
     def generate_recipe_hint(goal_item): # 为了避免recipe_hint太长，已弃用
@@ -338,10 +354,10 @@ def handleViewer(*args):
     # generate_hill(peakx, peakz, hill_height)
     # 生成土丘
 
-    feature = random.choice(feature_list)
+    feature = rng.choice(feature_list)
     with open("data/template_houses.json", "r") as f:
         template_houses = json.load(f)
-    house = random.choice(template_houses[feature])
+    house = rng.choice(template_houses[feature])
     write_load_phase("placing_structure")
     bot.chat(f"/tp {crx} {ory + 1} {crz}")
     time.sleep(.2) 
@@ -353,7 +369,7 @@ def handleViewer(*args):
     time.sleep(.2)
     bot.chat(f"/tp {tx} {get_surface_y(tx, tz)} {tz}")
     time.sleep(.2)
-    bot.chat(f"/place feature {random.choices(tree_list, tree_weight)[0]}")
+    bot.chat(f"/place feature {rng.choices(tree_list, tree_weight)[0]}")
     time.sleep(.2)
     # 生成房屋和树
 
@@ -418,14 +434,14 @@ def handleViewer(*args):
         hint_recipes = []
         with open("data/recipes.json", "r") as f:
             recipes = json.load(f)
-        random.shuffle(recipes)
+        rng.shuffle(recipes)
         for recipe in recipes:
             if recipe["result"]["name"] == goal_item:
                 hint_recipes.append(recipe)
                 for ingredients in recipe["ingredients"]:
                     ingredients_list.append(ingredients)
                 break
-        random.shuffle(ingredients_list)
+        rng.shuffle(ingredients_list)
         
         if arg_dict["step"] == 2: # 两步合成长度        
             rm_flag, rm_ingredient = False, {}
@@ -589,7 +605,7 @@ def handleViewer(*args):
             elif arg_dict["item_position"] == "chest":
                 set_chest([], [{"name": "fishing_rod", "count": 1}], 3)
         elif arg_dict["action"] == "toggle":
-            facing = random.choice(["west", "east", "north", "south"])
+            facing = rng.choice(["west", "east", "north", "south"])
             if "trapdoor" not in arg_dict['target'] and "fence" not in arg_dict['target']:
                 bot.chat(f"/setblock {arg_dict['x']} {arg_dict['y']} {arg_dict['z']} {arg_dict['target']}[facing={facing},half=lower]")
                 bot.chat(f"/setblock {arg_dict['x']} {arg_dict['y'] + 1} {arg_dict['z']} {arg_dict['target']}[facing={facing},half=upper]")
@@ -622,7 +638,7 @@ def handleViewer(*args):
                 while bed_y > ory + 3 or (bed_x, bed_y, bed_z) in bed_pos:    # 避免生成在太高的地方
                     bed_x, bed_y, bed_z = random_position(orx + wall_width + 1, orz + wall_width + 1, orx + wall_width + room_width - 2, orz + wall_width + room_width - 2, 1) 
                 bed_pos.append((bed_x, bed_y, bed_z))
-                facing = random.choice(["west", "east", "north", "south"])
+                facing = rng.choice(["west", "east", "north", "south"])
                 bed_offset = {
                     "west": [1, 0, 0],
                     "east": [-1, 0, 0],
@@ -640,7 +656,7 @@ def handleViewer(*args):
             text = arg_dict["other_arg"][0]
             # bot.chat(f"/setblock {x} {y} {z} {target}[facing=north]{{Text1:\"{{\\\"text\\\":\\\"{text}\\\"}}\"}}")
             # bot.chat(f"/setblock {x} {y} {z} {target}{{Text1:\"{{\\\"text\\\":\\\"{text}\\\"}}\"}}")
-            bot.chat(f"/setblock {x} {y} {z} {target}[rotation={random.randint(0, 9)}]{{Text1:'{{\"text\":\"{text}\"}}'}}")
+            bot.chat(f"/setblock {x} {y} {z} {target}[rotation={rng.randint(0, 9)}]{{Text1:'{{\"text\":\"{text}\"}}'}}")
 
         elif arg_dict["action"] == "chat":
             other_agent_name = "Bob"

@@ -1,0 +1,29 @@
+{"command": "/execute in minecraft:overworld run forceload add 4 2 21 19", "order": 1}
+{"command": "/fill 4 -61 2 21 -61 19 minecraft:stone", "order": 2}
+{"command": "/fill 4 -60 2 21 -56 19 minecraft:air", "order": 3}
+{"command": "/fill 9 -60 2 15 -60 8 minecraft:stone", "order": 4}
+{"command": "/gamemode survival @p", "order": 5}
+{"command": "/clear @p", "order": 6}
+{"command": "/effect clear @p", "order": 7}
+{"command": "/attribute @p minecraft:generic.max_health base set 20", "order": 8}
+{"command": "/effect give @p minecraft:instant_health 1 255 true", "order": 9}
+{"command": "/effect give @p minecraft:saturation 1 255 true", "order": 10}
+{"command": "/effect clear @p", "order": 11}
+{"command": "/gamerule doDaylightCycle false", "order": 12}
+{"command": "/gamerule doWeatherCycle false", "order": 13}
+{"command": "/gamerule doMobSpawning false", "order": 14}
+{"command": "/gamerule spawnRadius 0", "order": 15}
+{"command": "/setworldspawn 14 -59 5 0", "order": 16}
+{"command": "/time set 6000", "order": 17}
+{"command": "/weather clear", "order": 18}
+{"command": "/difficulty peaceful", "order": 19}
+{"command": "/kill @e[type=minecraft:item]", "order": 20}
+{"command": "/difficulty normal", "order": 21}
+{"command": "/scoreboard objectives remove va_baseline", "order": 22}
+{"command": "/scoreboard objectives add va_baseline dummy", "order": 23}
+{"command": "/scoreboard players set src_8519378f5d71195a va_baseline 1", "order": 24}
+{"command": "/scoreboard players set baseline_obstructed va_baseline 1", "order": 25}
+{"command": "/fill 12 -60 3 12 -57 7 minecraft:stone", "order": 26}
+{"command": "/fill 12 -59 7 12 -58 7 minecraft:air", "order": 27}
+{"command": "/execute in minecraft:overworld run tp @p 14.0 -59.0 5.0 0 0", "order": 28}
+{"command": "/execute in minecraft:overworld run forceload remove 4 2 21 19", "order": 29}

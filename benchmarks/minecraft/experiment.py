@@ -42,6 +42,7 @@ from benchmarks.minecraft.run_lock import (
     MinecraftTargetQuarantinedError,
     minecraft_target_lock_key,
 )
+from benchmarks.minecraft.seed_contract import SeedContract, SeedScope, resolve_seed_contract
 from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
 from env.runtime_paths import RuntimePaths
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
@@ -206,6 +207,7 @@ def _run_minecraft_experiment_attempt(
     runtime and then captures the same public artifact set from the run outputs.
     """
     launch_config = _load_config(config_path, config_index=config_index, execute=execute)
+    seed_resolution = _resolve_minecraft_seed_contract(launch_config)
     secret_values = collect_secret_values(launch_config)
     selected_run_name = standard_run_name(run_name or launch_config.get("task_name") or _default_run_name(config_path))
     output_dir = Path(output_root) / selected_run_name
@@ -260,6 +262,8 @@ def _run_minecraft_experiment_attempt(
         runtime_llm_config=runtime_llm_config,
         attempt_id=attempt_id,
     )
+    if seed_resolution is not None:
+        effective_settings["seed_contract"] = seed_resolution.to_dict()
     write_provenance(
         output_dir,
         benchmark="minecraft",
@@ -274,9 +278,7 @@ def _run_minecraft_experiment_attempt(
         ),
     )
     if execute:
-        from model.ollama_config import make_ollama_llm_config
-
-        runtime_llm_config = make_ollama_llm_config()
+        runtime_llm_config = _runtime_llm_config(launch_config)
         runtime_secret_values = collect_secret_values(runtime_llm_config)
         secret_values = tuple(dict.fromkeys((*secret_values, *runtime_secret_values)))
         attempt_state["secret_values"] = secret_values
@@ -300,6 +302,8 @@ def _run_minecraft_experiment_attempt(
         runtime_llm_config=runtime_llm_config,
         attempt_id=attempt_id,
     )
+    if seed_resolution is not None:
+        effective_settings["seed_contract"] = seed_resolution.to_dict()
     effective_settings["runtime"] = {
         "root": f".runtime/attempts/{attempt_id}",
         "result": f".runtime/attempts/{attempt_id}/runtime_result.json",
@@ -673,6 +677,8 @@ def _run_minecraft_experiment_attempt(
         "terminal_event_type": None,
         "finished_at": None,
     }
+    if seed_resolution is not None:
+        summary["seed_contract"] = seed_resolution.to_dict()
     if execute and launch_config.get("task_type") == "meta" and score.get("status") == "success":
         try:
             validate_judged_artifact_consistency(
@@ -937,6 +943,8 @@ def _run_minecraft_experiment_attempt(
     summary = sanitize_artifact_value(summary, secret_values=secret_values)
     persisted_summary = {**summary, "output_dir": "."}
     _write_json(output_dir / "launch_config.json", sanitized_launch_config)
+    if seed_resolution is not None:
+        _write_json(output_dir / "seed_contract.json", seed_resolution.to_dict())
     _write_json(output_dir / "action_log.json", action_log)
     _write_json(output_dir / "task_graph_snapshot.json", task_graph_snapshot)
     _write_json(output_dir / "runtime_dual_dag_snapshot.json", runtime_task_dag_snapshot)
@@ -1309,11 +1317,27 @@ def validate_minecraft_config(config: dict, *, context: str = "config", execute:
         raise ValueError(f"{context}.document_file must be a string or null")
     if config.get("task_selection_policy") not in (None, *TASK_SELECTION_POLICIES):
         raise ValueError(f"{context}.task_selection_policy must be one of: {', '.join(TASK_SELECTION_POLICIES)}")
+    seed_contract = SeedContract.from_value(config.get("seed_contract"))
+    if seed_contract is not None:
+        config["seed_contract"] = seed_contract.to_dict()
     _validate_smoke_tasks(config, context=context)
     action_log = config.get("smoke_action_log", {})
     if action_log is not None and not isinstance(action_log, dict):
         raise ValueError(f"{context}.smoke_action_log must be an object")
     return config
+
+
+def _resolve_minecraft_seed_contract(config: dict):
+    if config.get("seed_contract") is None:
+        return None
+    supported = set()
+    if config.get("task_type") == "meta":
+        supported.update({SeedScope.PYTHON_RANDOM, SeedScope.META_JUDGER})
+    return resolve_seed_contract(
+        config["seed_contract"],
+        supported_scopes=supported,
+        applied_scopes=supported,
+    )
 
 
 def _validate_smoke_tasks(config: dict, *, context: str) -> None:
@@ -1476,9 +1500,7 @@ def _execute_real_runtime(
     attempt_id: str | None = None,
 ) -> dict:
     from start_with_config import run
-    from model.ollama_config import make_ollama_llm_config
-
-    llm_config = make_ollama_llm_config()
+    llm_config = _runtime_llm_config(launch_config)
     config = dict(launch_config)
     document = config.get("evaluation_arg", {}) if config.get("task_type") == "meta" else {}
     runtime_root = runtime_root or runtime_result_path.parent
@@ -1507,7 +1529,26 @@ def _execute_real_runtime(
         runtime_paths=RuntimePaths.isolated(runtime_root),
         attempt_id=attempt_id,
         require_action_evidence=bool(config.get("require_action_evidence", True)),
+        seed_contract=config.get("seed_contract"),
     )
+
+
+def _runtime_llm_config(launch_config: dict) -> dict:
+    from model.ollama_config import make_ollama_llm_config
+
+    key_env = launch_config.get("api_key_env")
+    if key_env is None:
+        return make_ollama_llm_config()
+    if not isinstance(key_env, str) or not key_env.strip():
+        raise RuntimeError("api_key_env must be a non-empty environment variable name")
+    api_key = os.environ.get(key_env)
+    if not api_key:
+        raise RuntimeError(f"required model credential environment variable is not set: {key_env}")
+    api_model = launch_config.get("api_model")
+    api_base = launch_config.get("api_base")
+    if not all(isinstance(value, str) and value.strip() for value in (api_model, api_base)):
+        raise RuntimeError("real Minecraft execution requires api_model and api_base")
+    return make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=api_key)
 
 
 def _execute_real_runtime_bounded(

@@ -1,0 +1,41 @@
+{
+  "absolute_path_findings": false,
+  "approved": true,
+  "archive_valid": true,
+  "baseline_id": "baseline_open",
+  "checks": {
+    "all_three_probes_reachable": true,
+    "archive_hash": true,
+    "canonical_definition": true,
+    "canonical_provenance_hashes": true,
+    "cleanup_complete": true,
+    "complete_provenance": true,
+    "deterministic_archive": true,
+    "exact_initial_state": true,
+    "manifest_provenance_consistent": true,
+    "preparation_commands": true,
+    "probe_diagonal_reachable": true,
+    "probe_long_distance_reachable": true,
+    "probe_near_reachable": true,
+    "quiescent_clone": true,
+    "recorded_approval_consistent": true,
+    "safe_restore": true,
+    "semantic_observation": true,
+    "world_manifest": true,
+    "world_structure": true,
+    "zero_credential_findings": true,
+    "zero_path_findings": true
+  },
+  "cleanup_valid": true,
+  "credential_findings": false,
+  "findings": [],
+  "initial_state_valid": true,
+  "safe_extraction_valid": true,
+  "schema_version": 1,
+  "variant_reachability": {
+    "diagonal": true,
+    "long_distance": true,
+    "near": true
+  },
+  "world_structure_valid": true
+}
