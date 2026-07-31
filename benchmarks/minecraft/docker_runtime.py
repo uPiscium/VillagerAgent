@@ -529,7 +529,7 @@ class DockerMatrixExecutor:
         return {
             "task_type": "meta", "task_idx": 0, "agent_num": 1, "task_goal": run.prompt,
             "task_scenario": "move", "host": "127.0.0.1", "port": port, "task_name": run.run_id,
-            "evaluation_arg": {"target": "", **run.evaluation_target.as_dict(), "position_convention": run.position_convention, "facing": "", "item_position": "inventory", "tool": "", "action": "", "step": 1, "other_arg": []},
+            "evaluation_arg": {"target": "", **run.evaluation_target.as_dict(), "position_convention": run.position_convention, "initial_state": {**run.initial_state.as_dict(), "position_convention": run.position_convention}, "facing": "", "item_position": "inventory", "tool": "", "action": "", "step": 1, "other_arg": []},
             "world_id": run.baseline_id, "world_snapshot_path": run.snapshot_path,
             "world_snapshot_sha256": run.snapshot_sha256, "server_version": MINECRAFT_VERSION,
             "world_initialization": PRESERVE_RESTORED_SNAPSHOT,

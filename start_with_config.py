@@ -19,6 +19,7 @@ from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
 from env.world_initialization import resolve_world_initialization
 from benchmarks.minecraft.position_contract import (
     PositionConvention,
+    entity_feet_position,
     resolve_position_convention,
 )
 
@@ -359,6 +360,17 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             raise ValueError(
                 "preserved Minecraft movement target position convention does not match runtime"
             )
+        if resolved_world_initialization == "preserve_restored_snapshot":
+            initial_state = document.get("initial_state")
+            if (
+                not isinstance(initial_state, dict)
+                or initial_state.get("position_convention")
+                != resolved_position_convention.value
+            ):
+                raise ValueError(
+                    "preserved Minecraft initial state position convention does not match runtime"
+                )
+            entity_feet_position(initial_state)
         meta_setting["task_scenario"] = task_scenario
         meta_setting["evaluation_arg"] = document
         meta_setting["world_initialization"] = resolved_world_initialization

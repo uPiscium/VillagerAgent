@@ -295,6 +295,9 @@ def test_matrix_executor_preserves_the_restored_snapshot(monkeypatch):
         evaluation_target=SimpleNamespace(
             as_dict=lambda: {"x": 5, "y": -60, "z": 5}
         ),
+        initial_state=SimpleNamespace(
+            as_dict=lambda: {"x": 14, "y": -59, "z": 5}
+        ),
         run_id="diagonal-seed-0-open",
         baseline_id="baseline_open",
         snapshot_path="baseline-open.tar.gz",
@@ -309,6 +312,12 @@ def test_matrix_executor_preserves_the_restored_snapshot(monkeypatch):
     assert config["world_initialization"] == "preserve_restored_snapshot"
     assert config["position_convention"] == "entity_feet"
     assert config["evaluation_arg"]["position_convention"] == "entity_feet"
+    assert config["evaluation_arg"]["initial_state"] == {
+        "x": 14,
+        "y": -59,
+        "z": 5,
+        "position_convention": "entity_feet",
+    }
     run.position_convention = "support_block"
     with pytest.raises(DockerRuntimeError, match="entity_feet"):
         executor._config(run, 25565, None)
