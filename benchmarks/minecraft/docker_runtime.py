@@ -61,7 +61,12 @@ _SAFE_OUTPUT = re.compile(r"[\x20-\x7e]{1,300}\Z")
 
 
 class DockerRuntimeError(SnapshotAcquisitionError):
-    pass
+    def __init__(self, message: str, *, diagnostics: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.failure_detail = {
+            "reason": "docker_runtime_error",
+            "runtime_diagnostics": diagnostics or {},
+        }
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -138,12 +143,31 @@ class DockerServer:
         try:
             result = self.runner(argv, check=False, capture_output=True, text=True, timeout=timeout)
         except (OSError, subprocess.SubprocessError) as exc:
-            raise DockerRuntimeError(f"runtime command failed: {type(exc).__name__}") from exc
+            raise DockerRuntimeError(
+                f"runtime command failed: {type(exc).__name__}",
+                diagnostics={
+                    "operation": argv[1] if len(argv) > 1 else "unknown",
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
         if check and result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip().splitlines()
-            candidate = detail[-1][:160] if detail else ""
+            safe_output = [
+                line[:160]
+                for line in detail[-5:]
+                if _SAFE_OUTPUT.fullmatch(line)
+                and not any(marker in line for marker in ("/", "\\", "="))
+            ]
+            candidate = safe_output[-1] if safe_output else ""
             safe = candidate if _SAFE_OUTPUT.fullmatch(candidate) and not any(marker in candidate for marker in ("/", "\\", "=")) else "command rejected"
-            raise DockerRuntimeError(f"runtime command failed: {safe}")
+            raise DockerRuntimeError(
+                f"runtime command failed: {safe}",
+                diagnostics={
+                    "operation": argv[1] if len(argv) > 1 else "unknown",
+                    "exit_code": result.returncode,
+                    "safe_output": safe_output,
+                },
+            )
         return result
 
     def verify_image(self) -> str:
@@ -219,8 +243,7 @@ class DockerServer:
             self.running = False
 
     def restart_and_verify_marker(self, baseline_id: str) -> int:
-        self.stop()
-        self._run(["docker", "start", self.name], timeout=60)
+        self._run(["docker", "restart", "--time", "30", self.name], timeout=60)
         self.running = True
         self._wait_healthy()
         port = self._published_port()
@@ -514,6 +537,7 @@ class DockerMatrixExecutor:
         if canonical_world_tree_identity(restored_world.world_directory) != restored_world.tree_identity:
             raise DockerRuntimeError("independently restored world tree changed before startup")
         server = DockerServer(restored_world.world_directory.parent, runner=self.runner)
+        attempt_started = False
         try:
             port = server.create_start()
             jar = restored_world.world_directory.parent / SERVER_JAR_PATH
@@ -527,6 +551,7 @@ class DockerMatrixExecutor:
             config_path = output_dir / "matrix_launch_config.json"
             config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             experiment_dir = output_dir / "bundle"
+            attempt_started = True
             summary = _run_with_experiment_manifest(
                 experiment_dir,
                 lambda: run_minecraft_experiment(
@@ -543,9 +568,26 @@ class DockerMatrixExecutor:
                 raise DockerRuntimeError("judged Minecraft experiment failed")
             result = Path(summary["output_dir"])
         except BaseException as exc:
-            if not server.cleanup():
-                raise DockerRuntimeError("matrix server cleanup could not be verified") from exc
-            raise
+            cleanup_ok = server.cleanup()
+            if cleanup_ok:
+                failure_detail = getattr(exc, "failure_detail", None)
+                if not isinstance(failure_detail, dict):
+                    failure_detail = {
+                        "reason": "matrix_runtime_error",
+                        "runtime_diagnostics": {"error_type": type(exc).__name__},
+                    }
+                    setattr(exc, "failure_detail", failure_detail)
+                failure_detail.update({
+                    "attempt_started": attempt_started,
+                    "cleanup": {"attempted": True, "passed": True},
+                })
+                raise
+            error = DockerRuntimeError("matrix server cleanup could not be verified")
+            error.failure_detail.update({
+                "attempt_started": attempt_started,
+                "cleanup": {"attempted": True, "passed": cleanup_ok},
+            })
+            raise error from exc
         if not server.cleanup():
             raise DockerRuntimeError("matrix server cleanup could not be verified")
         return result

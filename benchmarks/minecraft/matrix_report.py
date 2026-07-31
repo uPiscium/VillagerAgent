@@ -47,8 +47,8 @@ def generate_matrix_report(
     if not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0:
         raise MatrixReportValidationError("expected_run_count must be a positive integer")
     skipped = sum(record.get("status") == "skipped" for record in ordered)
-    started = sum(record.get("status") != "skipped" for record in ordered)
-    completed = sum(record.get("status") in {"passed", "failed"} for record in ordered)
+    started = sum(record.get("attempts", 0) > 0 for record in ordered)
+    completed = sum(record.get("status") != "skipped" for record in ordered)
     passed = sum(record.get("passed") is True for record in ordered)
     failed = sum(record.get("status") != "skipped" and record.get("passed") is not True for record in ordered)
     gate_passed = expected == 12 and len(ordered) == expected and passed == expected and failed == skipped == 0

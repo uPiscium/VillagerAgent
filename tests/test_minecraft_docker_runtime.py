@@ -177,6 +177,32 @@ def test_restart_refreshes_dynamic_host_port_before_runtime_use(tmp_path):
     assert server.create_start() == 49152
     assert server.restart_and_verify_marker("baseline_open") == 49153
     assert server.port == 49153
+    assert ["docker", "restart", "--time", "30", server.name] in fake.calls
+    assert not any(call[:2] == ["docker", "stop"] for call in fake.calls)
+
+
+def test_runtime_error_retains_sanitized_structured_command_diagnostics(tmp_path):
+    def failing(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            "",
+            "internal path /private/data\nport allocation failed\nfailed to start containers: safe-name\n",
+        )
+
+    server = DockerServer(tmp_path, runner=failing)
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server._run(["docker", "start", "safe-name"])
+
+    assert captured.value.failure_detail["runtime_diagnostics"] == {
+        "operation": "start",
+        "exit_code": 1,
+        "safe_output": [
+            "port allocation failed",
+            "failed to start containers: safe-name",
+        ],
+    }
 
 
 def test_cleanup_attempts_stop_remove_and_proves_absence(tmp_path):
