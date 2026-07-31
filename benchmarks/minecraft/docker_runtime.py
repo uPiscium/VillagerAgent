@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from benchmarks.minecraft.matrix_spec import MatrixRunSpec, load_matrix_spec
+from benchmarks.common.run_artifacts import finalize_run_directory, prepare_run_directory
 from benchmarks.minecraft.snapshot_acquisition import (
     BASELINE_DEFINITIONS,
     SOURCE_ARCHIVE_SHA256,
@@ -64,6 +65,32 @@ class DockerRuntimeError(SnapshotAcquisitionError):
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _run_with_experiment_manifest(
+    experiment_dir: Path, execute: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    producer = "benchmarks.minecraft.docker_runtime"
+    attempt_id = prepare_run_directory(experiment_dir, producer=producer)
+    try:
+        summary = execute()
+    except BaseException:
+        finalize_run_directory(
+            experiment_dir,
+            attempt_id=attempt_id,
+            producer=producer,
+            status="failed",
+            stamp_nested=False,
+        )
+        raise
+    finalize_run_directory(
+        experiment_dir,
+        attempt_id=attempt_id,
+        producer=producer,
+        status="failed" if summary.get("error") is not None else "completed",
+        stamp_nested=False,
+    )
+    return summary
 
 
 def _sha(path: Path, algorithm: str = "sha256") -> str:
@@ -499,10 +526,18 @@ class DockerMatrixExecutor:
             config = self._config(run, port, restored_world)
             config_path = output_dir / "matrix_launch_config.json"
             config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            summary = run_minecraft_experiment(
-                config_path=config_path, output_root=output_dir / "bundle", run_name=run.run_id,
-                execute=True, execute_timeout_seconds=self.matrix_identity["generation"]["timeout_seconds"],
-                task_selection_policy="dual-dag", command_text="minecraft finalized matrix executor",
+            experiment_dir = output_dir / "bundle"
+            summary = _run_with_experiment_manifest(
+                experiment_dir,
+                lambda: run_minecraft_experiment(
+                    config_path=config_path,
+                    output_root=experiment_dir,
+                    run_name=run.run_id,
+                    execute=True,
+                    execute_timeout_seconds=self.matrix_identity["generation"]["timeout_seconds"],
+                    task_selection_policy="dual-dag",
+                    command_text="minecraft finalized matrix executor",
+                ),
             )
             if summary.get("error") is not None:
                 raise DockerRuntimeError("judged Minecraft experiment failed")
