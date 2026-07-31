@@ -16,7 +16,7 @@ def position(x, y, z):
 
 def test_judged_exact_axis_boundary_is_not_reached():
     completion = evaluate_movement_completion(
-        position(5, -59, 5),
+        position(5.5, -59, 5.483812240562806),
         position(5, -60, 5),
         1,
         policy=STRICT_PER_AXIS,
@@ -24,7 +24,11 @@ def test_judged_exact_axis_boundary_is_not_reached():
 
     assert completion["target_reached"] is False
     assert movement_status(True, completion) is False
-    assert completion["axis_delta"] == {"x": 0.0, "y": 1.0, "z": 0.0}
+    assert completion["axis_delta"] == {
+        "x": 0.5,
+        "y": 1.0,
+        "z": 0.4838122405628056,
+    }
     assert completion["completion_policy"] == STRICT_PER_AXIS
 
 

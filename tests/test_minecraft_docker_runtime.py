@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from benchmarks.minecraft.docker_runtime import (
     PINNED_IMAGE,
     PINNED_IMAGE_DIGEST,
     DockerAcquisitionRuntime,
+    DockerMatrixExecutor,
     DockerRuntimeError,
     DockerServer,
     runtime_digest,
@@ -201,6 +203,32 @@ def test_matrix_main_lazily_registers_builtin(monkeypatch, tmp_path):
         "--runtime-adapter", "minecraft-1.19.2-local",
     ]) == 0
     assert calls == [(False, str(premanifest))]
+
+
+def test_matrix_executor_preserves_the_restored_snapshot(monkeypatch):
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_BASE", "http://model.test/v1")
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV", "MODEL_KEY")
+    monkeypatch.setenv("MODEL_KEY", "secret")
+    executor = DockerMatrixExecutor({
+        "model": {"name": "model", "digest": "sha256:model"},
+        "generation": {"timeout_seconds": 60},
+    })
+    run = SimpleNamespace(
+        prompt="Move to (5, -60, 5). You can go there directly.",
+        evaluation_target=SimpleNamespace(
+            as_dict=lambda: {"x": 5, "y": -60, "z": 5}
+        ),
+        run_id="diagonal-seed-0-open",
+        baseline_id="baseline_open",
+        snapshot_path="baseline-open.tar.gz",
+        snapshot_sha256="a" * 64,
+        seed=0,
+        seed_scopes=SimpleNamespace(requested=("meta_judger",)),
+    )
+
+    config = executor._config(run, 25565, None)
+
+    assert config["world_initialization"] == "preserve_restored_snapshot"
 
 
 @pytest.mark.skipif(os.environ.get("VILLAGER_RUN_DOCKER_INTEGRATION") != "1", reason="opt-in Docker integration")

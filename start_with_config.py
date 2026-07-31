@@ -16,6 +16,7 @@ from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
+from env.world_initialization import resolve_world_initialization
 
 start_time = time.time()
 from pipeline.controller_tiny import GlobalController
@@ -309,7 +310,7 @@ def _with_runtime_paths(function):
 
 
 @_with_runtime_paths
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None):
     start_time = time.time()
 
     if task_type == "meta" and not task_scenario:
@@ -338,6 +339,9 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
     if task_type == "meta":
         meta_setting["task_scenario"] = task_scenario
         meta_setting["evaluation_arg"] = document
+        meta_setting["world_initialization"] = resolve_world_initialization(
+            world_initialization
+        )
         if seed_contract is not None:
             meta_setting["seed_contract"] = seed_contract
     atomic_write_json(runtime_paths.meta_setting, meta_setting)

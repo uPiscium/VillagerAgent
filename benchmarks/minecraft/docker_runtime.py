@@ -39,6 +39,7 @@ from benchmarks.minecraft.world_snapshot import (
     canonical_world_tree_identity,
     restore_world_snapshot,
 )
+from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
 
 
 ADAPTER_ID = "minecraft-1.19.2-local"
@@ -478,6 +479,7 @@ class DockerMatrixExecutor:
             "evaluation_arg": {"target": "", **run.evaluation_target.as_dict(), "facing": "", "item_position": "inventory", "tool": "", "action": "", "step": 1, "other_arg": []},
             "world_id": run.baseline_id, "world_snapshot_path": run.snapshot_path,
             "world_snapshot_sha256": run.snapshot_sha256, "server_version": MINECRAFT_VERSION,
+            "world_initialization": PRESERVE_RESTORED_SNAPSHOT,
             "server_protocol": "760", "api_model": model["name"], "api_base": api_base,
             "api_key_env": key_env, "model_digest": model["digest"],
             "max_task_num": 1,
