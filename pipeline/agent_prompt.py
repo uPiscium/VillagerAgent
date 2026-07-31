@@ -61,7 +61,9 @@ emojis like:
 *** milestone ***
 {{milestone_description}}
 
-At least two Action before the Final Answer.
+Use only the actions needed to complete the task. If an observation reports
+target_reached=true or that the task is complete, immediately return the Final
+Answer without calling another tool.
 '''
 
 idle_prompt_w_emoji = ''' 
@@ -113,7 +115,9 @@ But this time, you can not use any emoji because the system can not support it.
 *** milestone ***
 {{milestone_description}}
 
-At least two Action before the Final Answer.
+Use only the actions needed to complete the task. If an observation reports
+target_reached=true or that the task is complete, immediately return the Final
+Answer without calling another tool.
 '''
 
 idle_prompt_wo_emoji = ''' 
@@ -160,5 +164,7 @@ agent_cooper_prompt = '''
 You need to work as the leader use api control your team(include yourself and other agents) to complete the task.
 Your team members are:
 {{team_members}}
-At least two Action before the Final Answer.
+Use only the actions needed to complete the task. If an observation reports
+target_reached=true or that the task is complete, immediately return the Final
+Answer without calling another tool.
 '''
