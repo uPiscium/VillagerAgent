@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,30 @@ def test_isolated_runtime_paths_stay_under_attempt_root(tmp_path):
     assert paths.recipe_hint == tmp_path / "attempt-a" / "data" / "recipe_hint.json"
     assert paths.build_map == tmp_path / "attempt-a" / "data" / "map.json"
     assert paths.map_description == tmp_path / "attempt-a" / "data" / "map_description.json"
+
+
+def test_runtime_subprocess_environment_supports_direct_bridge_entrypoint(tmp_path):
+    repository_root = Path(__file__).resolve().parents[1]
+    base = dict(os.environ, PYTHONPATH="/existing/python/path")
+    environment = RuntimePaths.isolated(tmp_path / "attempt").subprocess_environment(
+        base
+    )
+
+    assert environment["PYTHONPATH"].split(os.pathsep) == [
+        str(repository_root),
+        "/existing/python/path",
+    ]
+    completed = subprocess.run(
+        [sys.executable, "env/minecraft_server_fast.py", "--help"],
+        cwd=repository_root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "usage:" in completed.stdout
 
 
 def test_runtime_generated_documents_do_not_cross_attempt_roots(tmp_path):

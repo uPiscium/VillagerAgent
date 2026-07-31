@@ -150,6 +150,12 @@ class RuntimePaths:
         environment = dict(os.environ if base is None else base)
         environment["VILLAGER_RUNTIME_ROOT"] = str(self.root.resolve())
         environment["VILLAGER_RUNTIME_LAYOUT"] = self.layout
+        repository_root = str(Path(__file__).resolve().parents[1])
+        python_path = environment.get("PYTHONPATH", "")
+        entries = [entry for entry in python_path.split(os.pathsep) if entry]
+        environment["PYTHONPATH"] = os.pathsep.join(
+            [repository_root, *(entry for entry in entries if entry != repository_root)]
+        )
         return environment
 
     @contextmanager
