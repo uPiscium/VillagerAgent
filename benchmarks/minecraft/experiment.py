@@ -1530,6 +1530,8 @@ def _execute_real_runtime(
         attempt_id=attempt_id,
         require_action_evidence=bool(config.get("require_action_evidence", True)),
         seed_contract=config.get("seed_contract"),
+        world_initialization=config.get("world_initialization"),
+        position_convention=config.get("position_convention"),
     )
 
 

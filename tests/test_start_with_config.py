@@ -146,7 +146,31 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(start_with_config, "load_agent_api_key_list", lambda: [])
     monkeypatch.setattr(start_with_config, "configure_ollama_agent", lambda *_args, **_kwargs: None)
 
-    evaluation_arg = {"action": "move", "x": 1, "y": 2, "z": 3}
+    evaluation_arg = {
+        "action": "move",
+        "x": 1,
+        "y": 2,
+        "z": 3,
+        "position_convention": "entity_feet",
+    }
+    with pytest.raises(ValueError, match="position convention is required"):
+        start_with_config.run(
+            "model",
+            "http://localhost:11434/v1",
+            "meta",
+            0,
+            1,
+            False,
+            1,
+            "move safely",
+            "",
+            "127.0.0.1",
+            25565,
+            "meta-smoke",
+            document=evaluation_arg,
+            task_scenario="move",
+            world_initialization="preserve_restored_snapshot",
+        )
     with pytest.raises(StopAfterMetaSetting):
         start_with_config.run(
             "model",
@@ -163,13 +187,40 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
             "meta-smoke",
             document=evaluation_arg,
             task_scenario="move",
+            world_initialization="preserve_restored_snapshot",
+            position_convention="entity_feet",
         )
 
     setting = json.loads((tmp_path / ".cache" / "meta_setting.json").read_text(encoding="utf-8"))
     assert setting["task_scenario"] == "move"
     assert setting["evaluation_arg"] == evaluation_arg
+    assert setting["world_initialization"] == "preserve_restored_snapshot"
+    assert setting["position_convention"] == "entity_feet"
     assert isinstance(setting["attempt_id"], str) and setting["attempt_id"]
     assert environment.attempt_id == setting["attempt_id"]
+
+
+def test_run_rejects_unknown_world_initialization(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="unsupported world initialization mode"):
+        start_with_config.run(
+            "model",
+            "http://localhost:11434/v1",
+            "meta",
+            0,
+            1,
+            False,
+            1,
+            "move safely",
+            "",
+            "127.0.0.1",
+            25565,
+            "meta-smoke",
+            document={"action": "move", "x": 1, "y": 2, "z": 3},
+            task_scenario="move",
+            world_initialization="unknown",
+        )
 
 
 def test_attempt_id_resolver_preserves_explicit_identity():

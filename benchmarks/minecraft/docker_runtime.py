@@ -4,6 +4,7 @@ import base64
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -39,6 +40,8 @@ from benchmarks.minecraft.world_snapshot import (
     canonical_world_tree_identity,
     restore_world_snapshot,
 )
+from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
+from benchmarks.minecraft.position_contract import PositionConvention
 
 
 ADAPTER_ID = "minecraft-1.19.2-local"
@@ -268,10 +271,11 @@ class DockerAcquisitionRuntime:
     ) -> dict[str, Any]:
         payload = {
             "initial": definition.initial_position.as_dict(),
+            "position_convention": definition.position_convention,
             "blocks": [item.as_dict() for item in central_wall_v1.blocks],
             "opening": [item.as_dict() for item in central_wall_v1.opening],
             "targets": [
-                {"variant_id": name, **target.as_dict(), "tolerance": 1.0}
+                {"variant_id": name, **target.as_dict(), "tolerance": 1.0, "position_convention": definition.position_convention}
                 for name, target in definition.targets
             ],
         }
@@ -319,6 +323,10 @@ class DockerAcquisitionRuntime:
 
     @staticmethod
     def _validate_probe(definition: BaselineDefinition, observed: dict[str, Any]) -> None:
+        if definition.position_convention != PositionConvention.ENTITY_FEET.value:
+            raise DockerRuntimeError("baseline position convention is not entity_feet")
+        if observed.get("state", {}).get("position_convention") != definition.position_convention:
+            raise DockerRuntimeError("probe state position convention did not match")
         if observed.get("commands_executed") != len(definition.preparation_commands):
             raise DockerRuntimeError("probe did not execute every preparation command")
         if observed.get("save_acknowledged") is not True:
@@ -346,7 +354,36 @@ class DockerAcquisitionRuntime:
         if any(item.get("observed") != "minecraft:air" for item in observed.get("opening", [])) or len(observed.get("opening", [])) != len(expected_opening):
             raise DockerRuntimeError("obstacle opening evidence did not match")
         probes = observed.get("probes")
-        if not isinstance(probes, list) or len(probes) != 3 or any(item.get("reachable") is not True for item in probes):
+        expected_targets = {
+            name: target.as_dict() for name, target in definition.targets
+        }
+        probe_contract_valid = isinstance(probes, list) and len(probes) == 3 and all(
+            item.get("reachable") is True
+            and item.get("position_convention") == definition.position_convention
+            and item.get("target", {}).get("position_convention") == definition.position_convention
+            and item.get("variant_id") in expected_targets
+            and item.get("support_block_type") not in {
+                None,
+                "minecraft:air",
+                "minecraft:water",
+                "minecraft:lava",
+            }
+            and item.get("support_block_collision_box") == "block"
+            and item.get("support_block_shapes") == [[0, 0, 0, 1, 1, 1]]
+            and item.get("falling") is False
+            and all(
+                item.get("target", {}).get(axis) == expected_targets[item["variant_id"]][axis]
+                for axis in ("x", "y", "z")
+            )
+            and all(
+                isinstance(item.get("delta", {}).get(axis), (int, float))
+                and math.isfinite(item["delta"][axis])
+                and item["delta"][axis] < item.get("target", {}).get("tolerance", 0)
+                for axis in ("x", "y", "z")
+            )
+            for item in probes
+        )
+        if not probe_contract_valid:
             evidence = [
                 {
                     "variant_id": item.get("variant_id"),
@@ -400,6 +437,7 @@ class DockerAcquisitionRuntime:
             ReachabilityProbeResult(
                 item["variant_id"], definition.target(item["variant_id"]), True,
                 "pathfinder strict deltas x={x:.3f},y={y:.3f},z={z:.3f}".format(**item["delta"]),
+                definition.position_convention,
             )
             for item in observed["probes"]
         )
@@ -472,12 +510,16 @@ class DockerMatrixExecutor:
         key_env = os.environ.get("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV")
         if not api_base or not key_env or not os.environ.get(key_env):
             raise DockerRuntimeError("matrix model endpoint or credential environment is unavailable")
+        if run.position_convention != PositionConvention.ENTITY_FEET.value:
+            raise DockerRuntimeError("matrix run position convention must be entity_feet")
         return {
             "task_type": "meta", "task_idx": 0, "agent_num": 1, "task_goal": run.prompt,
             "task_scenario": "move", "host": "127.0.0.1", "port": port, "task_name": run.run_id,
-            "evaluation_arg": {"target": "", **run.evaluation_target.as_dict(), "facing": "", "item_position": "inventory", "tool": "", "action": "", "step": 1, "other_arg": []},
+            "evaluation_arg": {"target": "", **run.evaluation_target.as_dict(), "position_convention": run.position_convention, "facing": "", "item_position": "inventory", "tool": "", "action": "", "step": 1, "other_arg": []},
             "world_id": run.baseline_id, "world_snapshot_path": run.snapshot_path,
             "world_snapshot_sha256": run.snapshot_sha256, "server_version": MINECRAFT_VERSION,
+            "world_initialization": PRESERVE_RESTORED_SNAPSHOT,
+            "position_convention": run.position_convention,
             "server_protocol": "760", "api_model": model["name"], "api_base": api_base,
             "api_key_env": key_env, "model_digest": model["digest"],
             "max_task_num": 1,

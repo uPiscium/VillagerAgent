@@ -23,9 +23,10 @@ from benchmarks.minecraft.matrix_validation import (
     SCANNER_SHA256,
     scanner_implementation_sha256,
 )
+from benchmarks.minecraft.position_contract import PositionConvention
 
 
-MATRIX_SCHEMA_VERSION = 1
+MATRIX_SCHEMA_VERSION = 2
 MATRIX_RUN_COUNT = 12
 LIFECYCLE_STATES = frozenset({"draft", "validated", "finalized"})
 SHA256_LENGTH = 64
@@ -96,6 +97,7 @@ class MatrixRunSpec:
     prompt: str
     initial_state: MovementTarget
     evaluation_target: MovementTarget
+    position_convention: str
     expected_completion_policy: str
     expected_completion_semantics: str
     target_tolerance: float
@@ -242,6 +244,7 @@ def matrix_spec_to_dict(spec: MatrixSpec) -> dict[str, Any]:
                 "prompt": run.prompt,
                 "initial_state": run.initial_state.as_dict(),
                 "evaluation_target": run.evaluation_target.as_dict(),
+                "position_convention": run.position_convention,
                 "expected_completion_policy": run.expected_completion_policy,
                 "expected_completion_semantics": run.expected_completion_semantics,
                 "target_tolerance": run.target_tolerance,
@@ -361,6 +364,8 @@ def _validate_runs(spec: MatrixSpec, root: Path) -> None:
             run.prompt != variant.prompt
             or run.initial_state != variant.initial_position
             or run.evaluation_target != variant.target
+            or run.position_convention != variant.position_convention
+            or run.position_convention != PositionConvention.ENTITY_FEET.value
             or run.expected_completion_policy != variant.completion_policy
             or run.expected_completion_semantics != variant.completion_semantics
             or run.target_tolerance != variant.tolerance
@@ -431,7 +436,7 @@ def _parse_baseline(raw: Any) -> BaselineIdentity:
 def _parse_run(raw: Any) -> MatrixRunSpec:
     _require_keys(
         raw,
-        {"order", "run_id", "variant", "seed", "baseline_id", "snapshot_path", "snapshot_sha256", "prompt", "initial_state", "evaluation_target", "expected_completion_policy", "expected_completion_semantics", "target_tolerance", "variant_definition_sha256", "seed_scopes"},
+        {"order", "run_id", "variant", "seed", "baseline_id", "snapshot_path", "snapshot_sha256", "prompt", "initial_state", "evaluation_target", "position_convention", "expected_completion_policy", "expected_completion_semantics", "target_tolerance", "variant_definition_sha256", "seed_scopes"},
         "run",
     )
     target = _parse_record(MovementTarget, raw["evaluation_target"], "evaluation_target", {"x", "y", "z"})
@@ -447,6 +452,7 @@ def _parse_run(raw: Any) -> MatrixRunSpec:
         baseline_id=raw["baseline_id"], snapshot_path=raw["snapshot_path"],
         snapshot_sha256=raw["snapshot_sha256"], prompt=raw["prompt"],
         initial_state=initial_state, evaluation_target=target,
+        position_convention=raw["position_convention"],
         expected_completion_policy=raw["expected_completion_policy"],
         expected_completion_semantics=raw["expected_completion_semantics"],
         target_tolerance=raw["target_tolerance"],

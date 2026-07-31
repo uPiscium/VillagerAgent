@@ -1,0 +1,52 @@
+{
+  "cases": [
+    {
+      "id": "issue_445_failed_run",
+      "position_convention": "entity_feet",
+      "observed": {"x": 5.5, "y": -59.0, "z": 5.483812240562806},
+      "target": {"x": 5, "y": -60, "z": 5},
+      "tolerance": 1.0,
+      "reached": false
+    },
+    {
+      "id": "exact_target",
+      "position_convention": "entity_feet",
+      "observed": {"x": 5, "y": -60, "z": 5},
+      "target": {"x": 5, "y": -60, "z": 5},
+      "tolerance": 1.0,
+      "reached": true
+    },
+    {
+      "id": "strict_each_axis",
+      "position_convention": "entity_feet",
+      "observed": {"x": 0.99, "y": 0.99, "z": 0.99},
+      "target": {"x": 0, "y": 0, "z": 0},
+      "tolerance": 1.0,
+      "reached": true
+    },
+    {
+      "id": "exact_y_boundary",
+      "position_convention": "entity_feet",
+      "observed": {"x": 0, "y": 1, "z": 0},
+      "target": {"x": 0, "y": 0, "z": 0},
+      "tolerance": 1.0,
+      "reached": false
+    },
+    {
+      "id": "negative_coordinates",
+      "position_convention": "entity_feet",
+      "observed": {"x": -0.1, "y": -59.0, "z": -4.2},
+      "target": {"x": -0.5, "y": -59.0, "z": -4.5},
+      "tolerance": 1.0,
+      "reached": true
+    },
+    {
+      "id": "wrong_convention",
+      "position_convention": "support_block",
+      "observed": {"x": 5.5, "y": -59.0, "z": 5.5},
+      "target": {"x": 5, "y": -60, "z": 5},
+      "tolerance": 1.0,
+      "error": "TypeError"
+    }
+  ]
+}

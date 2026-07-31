@@ -81,6 +81,7 @@ def run_finalized_matrix(
                 expected_target=run.evaluation_target.as_dict(),
                 expected_completion_policy=run.expected_completion_policy,
                 expected_completion_semantics=run.expected_completion_semantics,
+                expected_position_convention=run.position_convention,
                 expected_seed_contract={
                     "seed": run.seed,
                     "requested_scopes": list(run.seed_scopes.requested),
@@ -181,6 +182,7 @@ def _enrich_record(
         },
         "baseline": {"id": run.baseline_id, "sha256": run.snapshot_sha256},
         "target": run.evaluation_target.as_dict(),
+        "position_convention": run.position_convention,
         "attempts": 1,
         "action": {
             "count": observed.get("action_count"),
@@ -214,7 +216,9 @@ def _failed_record(run: MatrixRunSpec, reason: str) -> dict[str, Any]:
         "matrix_index": run.order, "run_name": run.run_id, "attempt_id": "not-started",
         "status": "failed", "passed": False, "variant": run.variant, "seed": run.seed,
         "baseline": {"id": run.baseline_id, "sha256": run.snapshot_sha256},
-        "target": run.evaluation_target.as_dict(), "attempts": 1,
+        "target": run.evaluation_target.as_dict(),
+        "position_convention": run.position_convention,
+        "attempts": 1,
         "action": {}, "diagnostics": {"available": False}, "manifests": {},
         "cleanup": {"passed": False}, "safety": {"passed": False},
         "checks": [], "errors": [{"check": "runner", "message": reason}],

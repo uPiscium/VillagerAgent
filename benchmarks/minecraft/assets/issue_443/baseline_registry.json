@@ -37,8 +37,17 @@
     },
     "markdown": {
       "path": "benchmarks/minecraft/assets/issue_443/approval/baseline_approval_report.md",
-      "sha256": "c8f764fd4e5ba3281d3f0ee5f600c2d388f26f036379cb4f67a0db79ae3ae5c1"
+      "sha256": "137cecc6f7dd914378f177e18faf7b89e60b51c6600b39cc176b02221925e824"
     }
+  },
+  "position_contract": {
+    "attestation": {
+      "path": "benchmarks/minecraft/assets/issue_443/approval/position_contract_attestation.json",
+      "sha256": "5c00bb500a4f7d25035223261dcfc9c65490e9ab20b693d2b24f0c756aefa3ea"
+    },
+    "convention": "entity_feet",
+    "matrix_block_shape_contract": "full_block_floor_and_platform_only",
+    "total_reachable_conditions": 6
   },
   "runtime": {
     "adapter": "minecraft-1.19.2-local",

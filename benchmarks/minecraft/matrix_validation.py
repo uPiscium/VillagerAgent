@@ -51,6 +51,7 @@ def validate_matrix_run(
     expected_target: dict[str, float] | None = None,
     expected_completion_policy: str | None = None,
     expected_completion_semantics: str | None = None,
+    expected_position_convention: str | None = None,
     expected_seed_contract: dict[str, Any] | None = None,
     write: bool = False,
     output_path: str | Path | None = None,
@@ -132,6 +133,12 @@ def validate_matrix_run(
         and _strict_axis_deltas(movement.get("axis_delta"), effective_tolerance)
     )
     check("movement.strict_per_axis", movement_ok, "movement completion is not strict per-axis success")
+    if expected_position_convention is not None:
+        check(
+            "movement.position_convention",
+            movement.get("position_convention") == expected_position_convention,
+            "movement position convention does not match the matrix premanifest",
+        )
     if expected_target is not None:
         score_target = score.get("expected_terminal_state", {}).get("player_position")
         check(
@@ -151,6 +158,43 @@ def validate_matrix_run(
     diagnostics = _read_object(run_dir / "judged_terminal_diagnostics.json")
     trace = _read_object(run_dir / "judged_iteration_trace.json")
     check("diagnostics.schema_2", diagnostics.get("schema_version") == 2, "terminal diagnostics schema is not 2")
+    if expected_position_convention is not None:
+        score_expected_convention = score.get("expected_terminal_state", {}).get(
+            "position_convention"
+        )
+        score_actual_convention = score.get("actual_terminal_state", {}).get(
+            "position_convention"
+        )
+        diagnostics_expected_convention = diagnostics.get(
+            "expected_terminal_state", {}
+        ).get("position_convention")
+        diagnostics_actual_convention = diagnostics.get(
+            "actual_terminal_state", {}
+        ).get("position_convention")
+        check(
+            "score.position_convention",
+            score_expected_convention == expected_position_convention
+            and score_actual_convention == expected_position_convention,
+            "score position convention evidence is missing or inconsistent",
+        )
+        check(
+            "diagnostics.position_convention",
+            diagnostics_expected_convention == expected_position_convention
+            and diagnostics_actual_convention == expected_position_convention,
+            "terminal diagnostics position convention is missing or inconsistent",
+        )
+        check(
+            "position_convention.consistent",
+            {
+                movement.get("position_convention"),
+                score_expected_convention,
+                score_actual_convention,
+                diagnostics_expected_convention,
+                diagnostics_actual_convention,
+            }
+            == {expected_position_convention},
+            "position convention differs across runtime evidence",
+        )
     check(
         "diagnostics.terminal_success",
         diagnostics.get("score_status") in (None, "success")
@@ -240,6 +284,7 @@ def validate_matrix_run(
             "agent_iteration": diag_agent,
             "judger_iteration": judger,
             "seed_contract": seed_resolution,
+            "position_convention": movement.get("position_convention"),
         },
         "scanner": {
             "identity": SCANNER_ID,

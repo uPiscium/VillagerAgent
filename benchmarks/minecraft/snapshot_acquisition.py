@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
 
 from benchmarks.minecraft.matrix_variants import VARIANT_ORDER, MovementTarget, get_movement_variant
+from benchmarks.minecraft.position_contract import PositionConvention
 from benchmarks.minecraft.world_snapshot import (
     WorldSnapshotDescriptor,
     canonical_world_tree_identity,
@@ -165,6 +166,10 @@ class BaselineDefinition:
     preparation_commands: tuple[str, ...]
 
     @property
+    def position_convention(self) -> str:
+        return PositionConvention.ENTITY_FEET.value
+
+    @property
     def initial_position(self) -> MovementTarget:
         return self.initial_state.position
 
@@ -298,6 +303,7 @@ class ReachabilityProbeResult:
     target: MovementTarget
     reachable: bool
     evidence: str
+    position_convention: str = PositionConvention.ENTITY_FEET.value
 
 
 @dataclass(frozen=True)
@@ -816,6 +822,7 @@ def _provenance_dict(
             {
                 "variant_id": probe.variant_id,
                 "target": probe.target.as_dict(),
+                "position_convention": probe.position_convention,
                 "reachable": probe.reachable,
                 "evidence": probe.evidence,
             }
@@ -903,6 +910,7 @@ def _probe_objects_valid(probes: Sequence[ReachabilityProbeResult], definition: 
         probe.variant_id == variant_id
         and probe.target == target
         and probe.reachable is True
+        and probe.position_convention == definition.position_convention
         and isinstance(probe.evidence, str)
         and bool(probe.evidence)
         for probe, (variant_id, target) in zip(probes, definition.targets)
