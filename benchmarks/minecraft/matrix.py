@@ -353,11 +353,13 @@ def _premanifest_main(argv: list[str]) -> int:
         write_finalized_matrix_spec(finalized, args.output)
         print(json.dumps({"premanifest": args.output, "premanifest_sha256": finalized.premanifest_sha256}, indent=2))
         return 0
+    executor = None
     if args.runtime_adapter == "minecraft-1.19.2-local":
         from benchmarks.minecraft.docker_runtime import register_builtin_runtimes
 
-        register_builtin_runtimes(matrix_premanifest=args.premanifest)
-    executor = RUNTIME_ADAPTERS.get(args.runtime_adapter)
+        executor = register_builtin_runtimes(matrix_premanifest=args.premanifest)
+    if executor is None:
+        executor = RUNTIME_ADAPTERS.get(args.runtime_adapter)
     if executor is None:
         parser.error(
             f"unsupported runtime adapter {args.runtime_adapter!r}; no local-world-capable adapter is available"
