@@ -14,6 +14,7 @@ from benchmarks.minecraft.docker_runtime import (
     DockerRuntimeError,
     DockerServer,
     _offline_player_uuid,
+    _run_with_experiment_manifest,
     _write_probe_operator,
     pinned_runtime_identity,
     register_builtin_runtimes,
@@ -139,6 +140,34 @@ def test_runtime_authorizes_probe_and_meta_judger_operators(tmp_path):
             "bypassesPlayerLimit": True,
         },
     ]
+
+
+def test_matrix_experiment_parent_manifest_preserves_child_attempt(tmp_path):
+    experiment = tmp_path / "experiment"
+    child_attempt = "child-attempt"
+
+    def execute():
+        child = experiment / "diagonal-s17-baseline_open"
+        child.mkdir()
+        (child / "attempt.json").write_text(
+            json.dumps({"attempt_id": child_attempt}), encoding="utf-8"
+        )
+        (child / "summary.json").write_text("{}", encoding="utf-8")
+        return {"error": None, "output_dir": str(child)}
+
+    summary = _run_with_experiment_manifest(experiment, execute)
+
+    manifest = json.loads(
+        (experiment / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    child = json.loads(
+        (experiment / "diagonal-s17-baseline_open" / "attempt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["error"] is None
+    assert manifest["status"] == "completed"
+    assert child["attempt_id"] == child_attempt
 
 
 def test_restart_refreshes_dynamic_host_port_before_runtime_use(tmp_path):
