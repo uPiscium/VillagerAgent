@@ -580,16 +580,23 @@ def _active_session_lock(world: Path) -> bool:
         return True
 
 
-def _write_probe_operator(data_root: Path) -> None:
-    digest = bytearray(hashlib.md5(b"OfflinePlayer:VAProbe").digest())
+def _offline_player_uuid(name: str) -> str:
+    digest = bytearray(hashlib.md5(f"OfflinePlayer:{name}".encode("utf-8")).digest())
     digest[6] = (digest[6] & 0x0F) | 0x30
     digest[8] = (digest[8] & 0x3F) | 0x80
-    payload = [{
-        "uuid": str(uuid.UUID(bytes=bytes(digest))),
-        "name": "VAProbe",
-        "level": 4,
-        "bypassesPlayerLimit": True,
-    }]
+    return str(uuid.UUID(bytes=bytes(digest)))
+
+
+def _write_probe_operator(data_root: Path) -> None:
+    payload = [
+        {
+            "uuid": _offline_player_uuid(name),
+            "name": name,
+            "level": 4,
+            "bypassesPlayerLimit": True,
+        }
+        for name in ("VAProbe", "meta_judger")
+    ]
     path = data_root / "ops.json"
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")

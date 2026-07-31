@@ -214,18 +214,19 @@ def handleViewer(*args):
     write_load_phase("spawned")
     for name in agent_names:
         bot.chat(f'/op {name}')
-        time.sleep(.2)
+        time.sleep(1)
 
     if world_initialization == PRESERVE_RESTORED_SNAPSHOT:
         bot.chat("/gamemode spectator")
         for name in agent_names:
             bot.chat(f"/gamemode survival {name}")
+            time.sleep(1)
             bot.chat(
                 "/execute in minecraft:overworld run tp "
                 f"{name} {initial_entity_feet.x} {initial_entity_feet.y} "
                 f"{initial_entity_feet.z} 0 0"
             )
-        time.sleep(1)
+            time.sleep(1)
         write_load_phase("loaded")
         atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
         global start_time
