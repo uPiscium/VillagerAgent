@@ -31,8 +31,9 @@ from benchmarks.minecraft.snapshot_acquisition import (
 
 
 class CommandFake:
-    def __init__(self):
+    def __init__(self, ports=(49152,)):
         self.calls = []
+        self.ports = iter(ports)
 
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
@@ -46,7 +47,11 @@ class CommandFake:
         if argv[:2] == ["docker", "inspect"] and "--format" in argv:
             return subprocess.CompletedProcess(argv, 0, "healthy\n", "")
         if argv[:2] == ["docker", "port"]:
-            return subprocess.CompletedProcess(argv, 0, "127.0.0.1:49152\n", "")
+            return subprocess.CompletedProcess(
+                argv, 0, f"127.0.0.1:{next(self.ports)}\n", ""
+            )
+        if argv[:2] == ["docker", "exec"] and "scoreboard players get" in argv[-1]:
+            return subprocess.CompletedProcess(argv, 0, "marker has 1 [va_baseline]\n", "")
         if argv[:2] == ["docker", "inspect"]:
             return subprocess.CompletedProcess(argv, 1, "", "not found")
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -112,6 +117,15 @@ def test_matrix_registration_rejects_stale_runtime_composite(monkeypatch):
     with pytest.raises(DockerRuntimeError, match="pinned adapter"):
         register_builtin_runtimes(matrix_premanifest="premanifest.json")
     assert identity["name"] not in MATRIX_RUNTIME_ADAPTERS
+
+
+def test_restart_refreshes_dynamic_host_port_before_runtime_use(tmp_path):
+    fake = CommandFake(ports=(49152, 49153))
+    server = DockerServer(tmp_path, runner=fake)
+
+    assert server.create_start() == 49152
+    assert server.restart_and_verify_marker("baseline_open") == 49153
+    assert server.port == 49153
 
 
 def test_cleanup_attempts_stop_remove_and_proves_absence(tmp_path):
