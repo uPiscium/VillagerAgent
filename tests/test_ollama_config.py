@@ -3,8 +3,10 @@ import json
 import sys
 import types
 
+import pytest
+
 from model import ollama_config
-from model.ollama_config import OLLAMA_API_BASE, OLLAMA_API_KEY, OLLAMA_MODEL, configure_ollama_agent, load_agent_api_key_list, make_ollama_llm_config
+from model.ollama_config import OLLAMA_API_BASE, OLLAMA_API_KEY, OLLAMA_MODEL, configure_ollama_agent, load_agent_api_key_list, make_ollama_llm_config, normalize_ollama_api_base
 
 
 def test_ollama_default_endpoint_is_local_openai_compatible_url():
@@ -13,6 +15,28 @@ def test_ollama_default_endpoint_is_local_openai_compatible_url():
 
 def test_ollama_default_model_is_local_smoke_model():
     assert OLLAMA_MODEL == "gemma4:12b"
+
+
+def test_ollama_root_origin_resolves_to_same_origin_openai_v1_base():
+    assert normalize_ollama_api_base("http://10.255.255.5:11434") == (
+        "http://10.255.255.5:11434/v1"
+    )
+    assert normalize_ollama_api_base("http://10.255.255.5:11434/v1/") == (
+        "http://10.255.255.5:11434/v1"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://user:secret@localhost:11434",
+        "http://localhost:11434/api",
+        "http://localhost:11434?fallback=1",
+    ],
+)
+def test_ollama_api_base_rejects_identity_and_path_drift(value):
+    with pytest.raises(ValueError, match="Ollama API base"):
+        normalize_ollama_api_base(value)
 
 
 def test_load_agent_api_key_list_falls_back_to_ollama_key_when_file_missing(tmp_path):
