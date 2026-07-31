@@ -18,6 +18,7 @@ try:
     )
     from benchmarks.minecraft.position_contract import (
         PositionConvention,
+        entity_feet_position,
         resolve_position_convention,
     )
     from env.movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
@@ -32,6 +33,7 @@ except ImportError:
     )
     from benchmarks.minecraft.position_contract import (
         PositionConvention,
+        entity_feet_position,
         resolve_position_convention,
     )
     from movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
@@ -82,6 +84,7 @@ position_convention = resolve_position_convention(
     runtime_config.get("position_convention"),
     required=world_initialization == PRESERVE_RESTORED_SNAPSHOT,
 )
+initial_state = runtime_config.get("evaluation_arg", {}).get("initial_state")
 if (
     world_initialization == PRESERVE_RESTORED_SNAPSHOT
     and position_convention != PositionConvention.ENTITY_FEET
@@ -95,6 +98,15 @@ if (
     raise ValueError(
         "preserved Minecraft movement target position convention does not match runtime"
     )
+if world_initialization == PRESERVE_RESTORED_SNAPSHOT:
+    if (
+        not isinstance(initial_state, dict)
+        or initial_state.get("position_convention") != position_convention.value
+    ):
+        raise ValueError(
+            "preserved Minecraft initial state position convention does not match runtime"
+        )
+    initial_entity_feet = entity_feet_position(initial_state)
 seed_contract_value = runtime_config.get("seed_contract")
 if seed_contract_value is None:
     rng = random.Random()
@@ -206,6 +218,14 @@ def handleViewer(*args):
 
     if world_initialization == PRESERVE_RESTORED_SNAPSHOT:
         bot.chat("/gamemode spectator")
+        for name in agent_names:
+            bot.chat(f"/gamemode survival {name}")
+            bot.chat(
+                "/execute in minecraft:overworld run tp "
+                f"{name} {initial_entity_feet.x} {initial_entity_feet.y} "
+                f"{initial_entity_feet.z} 0 0"
+            )
+        time.sleep(1)
         write_load_phase("loaded")
         atomic_write_json(runtime_paths.load_status, {"status": "loaded"})
         global start_time

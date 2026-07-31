@@ -152,6 +152,12 @@ def test_run_preserves_required_meta_judger_settings(monkeypatch, tmp_path):
         "y": 2,
         "z": 3,
         "position_convention": "entity_feet",
+        "initial_state": {
+            "x": 14,
+            "y": -59,
+            "z": 5,
+            "position_convention": "entity_feet",
+        },
     }
     with pytest.raises(ValueError, match="position convention is required"):
         start_with_config.run(
