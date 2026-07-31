@@ -313,7 +313,7 @@ def test_matrix_main_lazily_registers_builtin(monkeypatch, tmp_path):
 
     def register(*, acquisition=False, matrix_premanifest=None):
         calls.append((acquisition, matrix_premanifest))
-        MATRIX_RUNTIME_ADAPTERS["minecraft-1.19.2-local"] = executor
+        return executor
 
     monkeypatch.setattr("benchmarks.minecraft.docker_runtime.register_builtin_runtimes", register)
     monkeypatch.setattr(

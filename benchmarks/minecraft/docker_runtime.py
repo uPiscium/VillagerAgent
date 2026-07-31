@@ -578,7 +578,10 @@ class DockerMatrixExecutor:
         }
 
 
-def register_builtin_runtimes(*, acquisition: bool = False, matrix_premanifest: str | Path | None = None) -> None:
+def register_builtin_runtimes(
+    *, acquisition: bool = False, matrix_premanifest: str | Path | None = None
+) -> DockerMatrixExecutor | None:
+    matrix_executor = None
     if acquisition:
         from benchmarks.minecraft.snapshot_acquisition import register_acquisition_runtime
 
@@ -597,9 +600,11 @@ def register_builtin_runtimes(*, acquisition: bool = False, matrix_premanifest: 
         for field, env_name in (("provider", "VILLAGER_MINECRAFT_MODEL_PROVIDER"), ("name", "VILLAGER_MINECRAFT_MODEL_NAME"), ("digest", "VILLAGER_MINECRAFT_MODEL_DIGEST")):
             if os.environ.get(env_name) != getattr(spec.model, field):
                 raise DockerRuntimeError("configured matrix model identity does not match the premanifest")
-        RUNTIME_ADAPTERS[ADAPTER_ID] = DockerMatrixExecutor({
+        matrix_executor = DockerMatrixExecutor({
             "runtime": vars(spec.runtime), "model": vars(spec.model), "generation": vars(spec.generation),
         })
+        RUNTIME_ADAPTERS[ADAPTER_ID] = matrix_executor
+    return matrix_executor
 
 
 def _active_session_lock(world: Path) -> bool:
