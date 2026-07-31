@@ -1,0 +1,32 @@
+{
+  "archive_and_tree_hashes_unchanged": true,
+  "attestation_basis": [
+    "Mineflayer bot.entity.position is the entity feet position",
+    "Minecraft entity Pos and teleport coordinates use the entity feet position",
+    "The probe GoalBlock targets the entity feet block",
+    "Both approved baselines recorded strict Y delta 0.000 for every canonical target"
+  ],
+  "baselines": [
+    {
+      "archive_sha256": "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b",
+      "baseline_id": "baseline_open",
+      "reachable_variants": ["near", "diagonal", "long_distance"],
+      "tree_sha256": "3e743096c7b0a5bde0784c126bf9a36f0b3bd38901c964d6d5a3118181ad3594"
+    },
+    {
+      "archive_sha256": "da502d68911ec1a1cbed953df54d1baf7a0e277c4da50656a3e7f2b36fef5237",
+      "baseline_id": "baseline_obstructed",
+      "reachable_variants": ["near", "diagonal", "long_distance"],
+      "tree_sha256": "823758d8bb60a9ba7907e7cab2c8e036911ba564da3e5e83977e5ca517814d4b"
+    }
+  ],
+  "canonical_targets": {
+    "diagonal": {"x": 5, "y": -60, "z": 5},
+    "long_distance": {"x": 20, "y": -60, "z": 18},
+    "near": {"x": 10, "y": -59, "z": 5}
+  },
+  "matrix_block_shape_contract": "full_block_floor_and_platform_only",
+  "position_convention": "entity_feet",
+  "schema_version": 1,
+  "total_reachable_conditions": 6
+}

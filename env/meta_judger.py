@@ -16,6 +16,11 @@ try:
         PRESERVE_RESTORED_SNAPSHOT,
         resolve_world_initialization,
     )
+    from benchmarks.minecraft.position_contract import (
+        PositionConvention,
+        resolve_position_convention,
+    )
+    from env.movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
 except ImportError:
     from judger_iteration import build_iteration_metadata
     from judger_artifacts import TerminalArtifactWriter
@@ -24,6 +29,11 @@ except ImportError:
         PRESERVE_RESTORED_SNAPSHOT,
         resolve_world_initialization,
     )
+    from benchmarks.minecraft.position_contract import (
+        PositionConvention,
+        resolve_position_convention,
+    )
+    from movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
 import argparse
 from minecraft_define import *
 from env_api import *
@@ -66,6 +76,23 @@ with runtime_paths.meta_setting.open("r", encoding="utf-8") as stream:
 world_initialization = resolve_world_initialization(
     runtime_config.get("world_initialization")
 )
+position_convention = resolve_position_convention(
+    runtime_config.get("position_convention"),
+    required=world_initialization == PRESERVE_RESTORED_SNAPSHOT,
+)
+if (
+    world_initialization == PRESERVE_RESTORED_SNAPSHOT
+    and position_convention != PositionConvention.ENTITY_FEET
+):
+    raise ValueError("preserved Minecraft worlds require entity_feet position convention")
+if (
+    world_initialization == PRESERVE_RESTORED_SNAPSHOT
+    and runtime_config.get("evaluation_arg", {}).get("position_convention")
+    != position_convention.value
+):
+    raise ValueError(
+        "preserved Minecraft movement target position convention does not match runtime"
+    )
 seed_contract_value = runtime_config.get("seed_contract")
 if seed_contract_value is None:
     rng = random.Random()
@@ -137,6 +164,7 @@ max_time = 180
 base_iter = 1
 max_iter_flag = 0
 last_observed_world_state = {"available": False, "reason": "no entity position observed"}
+last_movement_completion = None
 
 environment_set_time = 10
 info_count = 0
@@ -862,6 +890,7 @@ def handle(this):
                 },
                 "axis_tolerance": 1,
                 "comparison": "strictly_less_than",
+                "position_convention": config.get("position_convention"),
             })
         else:
             expected["evaluation_arg"] = evaluation
@@ -1119,12 +1148,13 @@ def handle(this):
 
 @On(bot, 'messagestr')
 def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
-    global score, info_count, last_observed_world_state
+    global score, info_count, last_observed_world_state, last_movement_completion
     with runtime_paths.meta_setting.open("r", encoding="utf-8") as f:
         config = json.load(f)
     arg_dict = config["evaluation_arg"]
 
     def calculate_score(inventory, pos):
+        global last_movement_completion
         if config["task_scenario"] == "craft":
             goal_item = aligned_item_name(arg_dict["target"])
             for item in inventory:
@@ -1135,8 +1165,15 @@ def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
             x = float(pos[0][:-1])
             y = float(pos[1][:-1])
             z = float(pos[2][:-1])
-            if abs(x - arg_dict['x']) < 1 and abs(y - arg_dict['y']) < 1 and abs(z - arg_dict['z']) < 1:
-                return 100 
+            last_movement_completion = evaluate_movement_completion(
+                Vec3(x, y, z),
+                Vec3(arg_dict["x"], arg_dict["y"], arg_dict["z"]),
+                1,
+                policy=STRICT_PER_AXIS,
+                position_convention=config.get("position_convention"),
+            )
+            if last_movement_completion["target_reached"]:
+                return 100
             
         elif config["task_scenario"] == "useitem":
             goal_item = aligned_item_name(arg_dict["target"])
@@ -1270,6 +1307,17 @@ def handleChat(_, message, messagePosition, jsonMsg, sender, *args):
                 inventory = data.get("Inventory", [])
                 pos = data.get("Pos", [])
                 score = calculate_score(inventory, pos)
+                if (
+                    config["task_scenario"] == "move"
+                    and last_observed_world_state.get("available") is True
+                    and isinstance(last_movement_completion, dict)
+                ):
+                    last_observed_world_state["position_convention"] = config.get(
+                        "position_convention"
+                    )
+                    last_observed_world_state[
+                        "movement_completion"
+                    ] = last_movement_completion
             elif config["task_scenario"] == "interact" and arg_dict["action"] == "sign":
                 inventory = data.get("Inventory", [])
                 pos = data.get("Pos", [])

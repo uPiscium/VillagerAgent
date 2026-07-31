@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "issue": 445,
+  "failed_revision": "d283405e45959543dbd27060347cb4fdb5f977ac",
+  "failed_attempt": "98de438d74d24cc696108d4a71b83a1b",
+  "task_prompt": "Move from current position [14, -59, 5] to the target location [5, -60, 5].",
+  "task_goal": "Move to (5, -60, 5). You can go there directly.",
+  "classification": {
+    "selected_position_convention": "entity_feet",
+    "coordinate_contract_bug": false,
+    "canonical_target_valid": true,
+    "root_cause": "legacy_meta_judger_overwrote_the_runtime_world",
+    "evidence": [
+      "The failed run used the legacy meta-move-world-v1 snapshot rather than an approved matrix baseline.",
+      "The meta-judger recorded clearing_arena, placing_structure, and building_arena_shell phases.",
+      "Both moves to entity-feet target (5, -60, 5) returned the non-air target-cell blocked branch.",
+      "Approved baseline probes independently reached all six baseline/variant conditions, including entity-feet Y -60 with Y delta 0.000."
+    ]
+  },
+  "failed_run_contract": {
+    "variant_id": "diagonal_equivalent_legacy_canary",
+    "seed": 0,
+    "baseline_id": "meta-move-world-v1",
+    "approved_matrix_baseline": false,
+    "target": {"x": 5, "y": -60, "z": 5},
+    "target_position_convention": "implicit_entity_feet",
+    "tolerance": 1.0,
+    "movement_policy": "strict_per_axis",
+    "completion_semantics": "all_axis_deltas_strictly_below_tolerance",
+    "model": {
+      "provider": "ollama",
+      "name": "gemma4:12b",
+      "digest": "4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c",
+      "endpoint": "http://ollama.arc.upiscium.dev/v1"
+    },
+    "runtime": {
+      "minecraft_version": "1.19.2",
+      "composite_digest": null,
+      "composite_digest_status": "unavailable_in_failed_bundle"
+    },
+    "snapshot": {
+      "path": "result/minecraft/issue_243_assets/meta-move-world-v1.tar.gz",
+      "archive_sha256": "8519378f5d71195ac67294acb318994ef660afdba92eada7289faa9be9f74673",
+      "tree_sha256": null,
+      "tree_sha256_status": "unavailable_in_failed_bundle"
+    },
+    "iteration_limits": {
+      "agent_limit": 7,
+      "agent_used": 1,
+      "external_judger_limit": 1,
+      "external_judger_used": 1,
+      "terminal_observations": 3
+    }
+  },
+  "failure": {
+    "status": "failure",
+    "end_reason": "max iteration out",
+    "root_cause_category": "task_not_satisfied",
+    "final_entity_feet": {"x": 5.5, "y": -59.0, "z": 5.483812240562806},
+    "final_block_cell": {"x": 5, "y": -59, "z": 5},
+    "final_support_block_coordinate": {"x": 5, "y": -60, "z": 5},
+    "target_entity_feet": {"x": 5, "y": -60, "z": 5},
+    "absolute_axis_delta": {"x": 0.5, "y": 1.0, "z": 0.4838122405628056},
+    "signed_remaining_delta": {"x": -0.5, "y": -1.0, "z": -0.4838122405628056},
+    "target_cell_state": {
+      "coordinate": {"x": 5, "y": -60, "z": 5},
+      "is_air": false,
+      "block_type": null,
+      "evidence": "move_to returned its bot.blockAt(target) non-air blocked branch"
+    },
+    "surrounding_block_states": {
+      "available": false,
+      "reason": "not captured by the failed bundle"
+    },
+    "collision_box": {
+      "available": false,
+      "reason": "not captured by the failed bundle"
+    },
+    "pathfinder_goal": {
+      "type": "GoalNear",
+      "requested": {"x": 5, "y": -60, "z": 5},
+      "range": 0,
+      "position_domain": "entity_feet",
+      "evidence_status": "reconstructed_from_failed_revision_movement_implementation"
+    }
+  },
+  "artifact_extraction": {
+    "action_log": "available",
+    "agent_history": "available_as_bounded_judged_iteration_trace",
+    "evaluation_target": "available",
+    "judged_iteration_diagnostics": "available",
+    "observation_log": "available_as_post_action_and_terminal_observations",
+    "surrounding_block_states": "not_captured",
+    "task_prompt": "available",
+    "terminal_diagnostics": "available"
+  },
+  "position_transitions": [
+    {
+      "action": 1,
+      "requested_entity_feet": {"x": 5, "y": -59, "z": 5},
+      "observed_entity_feet": {"x": 5.96077435205473, "y": -58.82324072493576, "z": 5.489548338767077},
+      "status": true,
+      "message": "move to 5 -59 5"
+    },
+    {
+      "action": 2,
+      "requested_entity_feet": {"x": 5, "y": -60, "z": 5},
+      "observed_entity_feet": {"x": 5.5, "y": -59.0, "z": 5.483812240562806},
+      "status": false,
+      "message": "target cell was non-air; entity-feet target was not reached",
+      "absolute_axis_delta": {"x": 0.5, "y": 1.0, "z": 0.4838122405628056}
+    },
+    {
+      "action": 3,
+      "requested_entity_feet": {"x": 5, "y": -59, "z": 5},
+      "observed_entity_feet": {"x": 5.5, "y": -59.0, "z": 5.483812240562806},
+      "status": true,
+      "message": "move to 5 -59 5"
+    },
+    {
+      "action": 4,
+      "requested_entity_feet": {"x": 5, "y": -60, "z": 5},
+      "observed_entity_feet": {"x": 5.5, "y": -59.0, "z": 5.483812240562806},
+      "status": false,
+      "message": "target cell was non-air; entity-feet target was not reached",
+      "absolute_axis_delta": {"x": 0.5, "y": 1.0, "z": 0.4838122405628056}
+    }
+  ],
+  "approved_baselines": {
+    "position_convention": "entity_feet",
+    "archive_and_tree_hashes_unchanged": true,
+    "baseline_open": {
+      "archive_sha256": "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b",
+      "tree_sha256": "3e743096c7b0a5bde0784c126bf9a36f0b3bd38901c964d6d5a3118181ad3594",
+      "reachable_variants": 3
+    },
+    "baseline_obstructed": {
+      "archive_sha256": "da502d68911ec1a1cbed953df54d1baf7a0e277c4da50656a3e7f2b36fef5237",
+      "tree_sha256": "823758d8bb60a9ba7907e7cab2c8e036911ba564da3e5e83977e5ca517814d4b",
+      "reachable_variants": 3
+    },
+    "total_reachable_conditions": 6
+  },
+  "source_artifacts": [
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/action_log.json",
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/config.resolved.json",
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/judged_iteration_trace.json",
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/judged_terminal_diagnostics.json",
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/meta_judger_diagnostics.json",
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/provenance.json",
+    "result/minecraft/issue_443_five_execute_d283405_run_04/minecraft_judged_meta/summary.json",
+    "benchmarks/minecraft/assets/issue_443/baseline_registry.json",
+    "benchmarks/minecraft/assets/issue_443/baseline_open/baseline_provenance.json",
+    "benchmarks/minecraft/assets/issue_443/baseline_obstructed/baseline_provenance.json"
+  ]
+}

@@ -17,14 +17,28 @@ import platform
 
 try:
     from env.runtime_paths import RuntimePaths, read_json_artifact
+    from benchmarks.minecraft.position_contract import resolve_position_convention
+    from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
 except ImportError:
     from runtime_paths import RuntimePaths, read_json_artifact
+    from benchmarks.minecraft.position_contract import resolve_position_convention
+    from world_initialization import PRESERVE_RESTORED_SNAPSHOT
 
 # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
 os.environ["REQ_TIMEOUT"] = "1800000"
 app = FastAPI()
 runtime_paths = RuntimePaths.from_environment()
 msg_list = []  # 用于存储消息队列，每次获取后清除当前的消息队列
+
+
+def configured_position_convention():
+    result = read_json_artifact(runtime_paths.meta_setting)
+    config = result.value if result.state == "valid" and isinstance(result.value, dict) else {}
+    convention = resolve_position_convention(
+        config.get("position_convention"),
+        required=config.get("world_initialization") == PRESERVE_RESTORED_SNAPSHOT,
+    )
+    return convention.value if convention is not None else None
 # python minecraft_server_fast.py -U Tom
 parser = argparse.ArgumentParser()
 parser.add_argument('-P', '--port', type=int, default=25565)
@@ -204,6 +218,7 @@ async def move_to_pos(request: Request):
     x, y, z = data.get('x'), data.get('y'), data.get('z')
     # Judged coordinate tasks require every axis to be within one block.
     target = Vec3(x, y, z)
+    position_convention = configured_position_convention()
     tag, msg = move_to(
         pathfinder,
         bot,
@@ -211,13 +226,21 @@ async def move_to_pos(request: Request):
         1,
         target,
         completion_policy=STRICT_PER_AXIS,
+        position_convention=position_convention,
     )
     completion = evaluate_movement_completion(
         bot.entity.position,
         target,
         1,
         policy=STRICT_PER_AXIS,
+        position_convention=position_convention,
     )
+    if position_convention is not None:
+        completion["pathfinder_goal"] = {
+            "type": "GoalNear",
+            "target": {"x": float(x), "y": float(y), "z": float(z)},
+            "position_convention": position_convention,
+        }
     done = movement_status(tag, completion)
     # lookAtPlayer(bot, entity['position'])
     return JSONResponse({'message': msg, 'status': done, **completion})

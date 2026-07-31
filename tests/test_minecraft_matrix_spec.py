@@ -2,7 +2,7 @@ import copy
 import hashlib
 import json
 import subprocess
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -58,6 +58,7 @@ def _payload(tmp_path):
                     "prompt": variant.prompt,
                     "initial_state": variant.initial_position.as_dict(),
                     "evaluation_target": variant.target.as_dict(),
+                    "position_convention": variant.position_convention,
                     "expected_completion_policy": variant.completion_policy,
                     "expected_completion_semantics": variant.completion_semantics,
                     "target_tolerance": variant.tolerance,
@@ -69,7 +70,7 @@ def _payload(tmp_path):
                     },
                 })
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "matrix_id": "minecraft-judged-test-matrix",
         "lifecycle_state": "draft",
         "premanifest_sha256": None,
@@ -177,7 +178,9 @@ def test_baselines_with_same_sha_identity_fail_closed(tmp_path):
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (lambda p: p.update(schema_version=2), "schema version"),
+        (lambda p: p.update(schema_version=1), "schema version"),
+        (lambda p: p["runs"][0].pop("position_convention"), "schema mismatch"),
+        (lambda p: p["runs"][0].update(position_convention="support_block"), "movement contract"),
         (lambda p: p["runs"].pop(), "exactly 12 runs"),
         (lambda p: p["runs"][1].update(run_id=p["runs"][0]["run_id"]), "IDs must be unique"),
         (lambda p: p["runs"].reverse(), "explicitly ordered"),
@@ -232,8 +235,13 @@ def test_variants_have_fixed_in_arena_targets_and_final_target_semantics():
     assert all(
         variant.evaluation == "final_position_strict_per_axis"
         and variant.completion_policy == "strict_per_axis"
+        and variant.position_convention == "entity_feet"
         for variant in MOVEMENT_VARIANTS.values()
     )
+    diagonal = MOVEMENT_VARIANTS["diagonal"]
+    assert replace(
+        diagonal, position_convention="support_block"
+    ).definition_sha256 != diagonal.definition_sha256
 
 
 def test_input_payload_is_not_retained_mutably(tmp_path):

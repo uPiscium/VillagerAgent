@@ -157,6 +157,36 @@ def test_rejects_explicit_agent_derived_judger_usage(tmp_path):
     assert "iterations.owners_independent" in {item["check"] for item in record["errors"]}
 
 
+@pytest.mark.parametrize(
+    ("mutate", "check_id"),
+    [
+        (lambda files: files["movement"].pop("position_convention"), "movement.position_convention"),
+        (
+            lambda files: files["summary"]["final_score"][
+                "actual_terminal_state"
+            ].update(position_convention="support_block"),
+            "score.position_convention",
+        ),
+        (
+            lambda files: files["terminal"]["actual_terminal_state"].pop(
+                "position_convention"
+            ),
+            "diagnostics.position_convention",
+        ),
+    ],
+)
+def test_matrix_position_convention_evidence_fails_closed(tmp_path, mutate, check_id):
+    matrix, _ = _bundle(tmp_path, mutate=mutate)
+
+    record = validate_matrix_run(
+        matrix,
+        run_name="run-b",
+        expected_position_convention="entity_feet",
+    )
+
+    assert check_id in {item["check"] for item in record["errors"]}
+
+
 def _bundle(tmp_path, *, mutate=None, extra_text=None):
     matrix = tmp_path / "matrix"
     run = matrix / "runs" / "run-b"
@@ -165,6 +195,7 @@ def _bundle(tmp_path, *, mutate=None, extra_text=None):
         "status": True,
         "completion_policy": "strict_per_axis",
         "completion_semantics": "all_axis_deltas_strictly_below_tolerance",
+        "position_convention": "entity_feet",
         "target_reached": True,
         "target_tolerance": 1.0,
         "axis_delta": {"x": 0.1, "y": 0.2, "z": 0.3},
@@ -195,7 +226,13 @@ def _bundle(tmp_path, *, mutate=None, extra_text=None):
             "attempt_id": "attempt-b",
             "run_name": "run-b",
             "progress": 100,
-            "final_score": {"status": "success", "score": 100, "progress": 100},
+            "final_score": {
+                "status": "success",
+                "score": 100,
+                "progress": 100,
+                "expected_terminal_state": {"position_convention": "entity_feet"},
+                "actual_terminal_state": {"position_convention": "entity_feet"},
+            },
             "score_ownership_verified": True,
             "child_protocol": {"status": "completed", "result_valid": True, "result_written": True},
             "artifact_admission": {"passed": True, "missing": [], "invalid": []},
@@ -210,7 +247,13 @@ def _bundle(tmp_path, *, mutate=None, extra_text=None):
         "metrics": {"action_count": 1, "failed_action_count": 0},
         "movement": movement,
         "trace": {"schema_version": 1, "outer_episode_count": 1, "agent_iteration": agent_iteration, "entries": []},
-        "terminal": {"schema_version": 2, "agent_iteration": agent_iteration, "judger_iteration": judger_iteration},
+        "terminal": {
+            "schema_version": 2,
+            "agent_iteration": agent_iteration,
+            "judger_iteration": judger_iteration,
+            "expected_terminal_state": {"position_convention": "entity_feet"},
+            "actual_terminal_state": {"position_convention": "entity_feet"},
+        },
     }
     if mutate:
         mutate(files)

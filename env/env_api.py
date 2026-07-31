@@ -738,6 +738,7 @@ def move_to(
     pos,
     *,
     completion_policy=EUCLIDEAN_DISTANCE,
+    position_convention=None,
 ):  # √
     global last_jump_time
     if pos is None:
@@ -779,6 +780,7 @@ def move_to(
                 pos,
                 RANGE_GOAL,
                 policy=completion_policy,
+                position_convention=position_convention,
             )["target_reached"]
         return (
             distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL
@@ -821,6 +823,7 @@ def move_to(
         pos,
         RANGE_GOAL,
         policy=completion_policy,
+        position_convention=position_convention,
     )
     failed = (
         not completion["target_reached"]
@@ -829,11 +832,16 @@ def move_to(
         and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL + 1.5
     )
     if failed:
+        correction = (
+            f"position convention={completion.get('position_convention', 'legacy')}; "
+            f"axis delta={completion['axis_delta']}; "
+            f"remaining delta={completion['remaining_delta']}"
+        )
         # # bot.chat('can not reach the position')
         if bot.blockAt(pos)['name'] == 'air':
-            return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z}, your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}, you need to jump or use dirt block to reach the position"
+            return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z}, your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}; {correction}; target cell is air"
         else:
-            return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z}, your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}, the position is blocked, check the environment"
+            return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z}, your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}; {correction}; target cell is non-air"
 
     # bot.lookAt(pos.offset(0, 0, 0))
 

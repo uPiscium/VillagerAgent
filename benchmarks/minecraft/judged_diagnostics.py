@@ -185,6 +185,7 @@ def build_judged_terminal_diagnostics(
                 },
                 "axis_tolerance": 1,
                 "comparison": "strictly_less_than",
+                "position_convention": launch_config.get("position_convention"),
             })
         else:
             expected["evaluation_arg"] = evaluation
@@ -230,6 +231,15 @@ def build_judged_terminal_diagnostics(
     admission = summary.get("artifact_admission", {})
     invalid = admission.get("invalid", []) if isinstance(admission, dict) else []
     judger_iteration = normalize_iteration_metadata(iteration)
+    movement_completion = (
+        actual.get("movement_completion")
+        if isinstance(actual.get("movement_completion"), dict)
+        else None
+    )
+    if movement_completion is None and isinstance(last_action.get("tool_result"), dict):
+        candidate = last_action["tool_result"]
+        if isinstance(candidate.get("position_contract"), dict):
+            movement_completion = candidate
     return {
         "schema_version": 2,
         "agent_iteration": trace.get("agent_iteration", {
@@ -244,6 +254,11 @@ def build_judged_terminal_diagnostics(
         "last_observed_world_state": actual,
         "expected_terminal_state": expected,
         "actual_terminal_state": actual,
+        "position_contract": (
+            movement_completion.get("position_contract", {})
+            if isinstance(movement_completion, dict)
+            else {}
+        ),
         "score_status": score.get("status"),
         "end_reason": score.get("end_reason"),
         "progress": summary.get("progress"),
@@ -255,7 +270,18 @@ def build_judged_terminal_diagnostics(
                 "final_position_reconstructable": False,
             }
             if root_cause == "completion_contract_mismatch"
-            else {}
+            else (
+                {
+                    "position_convention": movement_completion.get(
+                        "position_convention"
+                    ),
+                    "axis_delta": movement_completion.get("axis_delta"),
+                    "remaining_delta": movement_completion.get("remaining_delta"),
+                }
+                if root_cause == "task_not_satisfied"
+                and isinstance(movement_completion, dict)
+                else {}
+            )
         ),
         "runtime_error": {
             "error_type": summary.get("error_type"),
@@ -319,7 +345,12 @@ def _action_trace_entry(
         "tool_result": result,
         "pre_action_world_state": dict(UNAVAILABLE),
         "post_action_world_state": (
-            {"available": True, "player_position": observed_position}
+            {
+                "available": True,
+                "player_position": observed_position,
+                "position_convention": result.get("position_convention"),
+                "movement_completion": result,
+            }
             if isinstance(observed_position, dict)
             else dict(UNAVAILABLE)
         ),

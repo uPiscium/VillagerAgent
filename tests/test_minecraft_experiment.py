@@ -386,6 +386,7 @@ def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monke
     config = _minecraft_config("meta_forwarding")
     config["task_scenario"] = "move"
     config["evaluation_arg"] = {"target": [1, 2, 3]}
+    config["position_convention"] = "entity_feet"
 
     monkeypatch.setattr(
         "model.ollama_config.make_ollama_llm_config",
@@ -413,6 +414,7 @@ def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monke
     assert captured["args"][14] == config["evaluation_arg"]
     assert captured["kwargs"]["task_scenario"] == "move"
     assert captured["kwargs"]["emit_controller_terminal_event"] is False
+    assert captured["kwargs"]["position_convention"] == "entity_feet"
 
 
 def test_minecraft_experiment_emits_one_terminal_event_when_finalization_raises(tmp_path, monkeypatch):

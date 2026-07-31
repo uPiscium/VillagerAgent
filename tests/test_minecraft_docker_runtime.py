@@ -91,14 +91,39 @@ def test_cleanup_attempts_stop_remove_and_proves_absence(tmp_path):
 
 
 def test_probe_validation_requires_all_commands_blocks_opening_and_paths():
+    def probes(definition):
+        return [
+            {
+                "variant_id": variant_id,
+                "target": {
+                    **target.as_dict(),
+                    "tolerance": 1.0,
+                    "position_convention": "entity_feet",
+                },
+                "position_convention": "entity_feet",
+                "delta": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "support_block_type": "minecraft:stone",
+                "support_block_collision_box": "block",
+                "support_block_shapes": [[0, 0, 0, 1, 1, 1]],
+                "falling": False,
+                "reachable": True,
+            }
+            for variant_id, target in definition.targets
+        ]
+
     observed = {
         "commands_executed": len(baseline_obstructed.preparation_commands),
         "save_acknowledged": True,
         "blocks": [{"observed": item.block} for item in central_wall_v1.blocks],
         "opening": [{"observed": "minecraft:air"} for _ in central_wall_v1.opening],
-        "probes": [{"reachable": True} for _ in range(3)],
+        "state": {"position_convention": "entity_feet"},
+        "probes": probes(baseline_obstructed),
     }
     DockerAcquisitionRuntime._validate_probe(baseline_obstructed, observed)
+    observed["state"].pop("position_convention")
+    with pytest.raises(DockerRuntimeError, match="state position convention"):
+        DockerAcquisitionRuntime._validate_probe(baseline_obstructed, observed)
+    observed["state"]["position_convention"] = "entity_feet"
     observed["probes"][1]["reachable"] = False
     with pytest.raises(DockerRuntimeError, match="strict tolerance"):
         DockerAcquisitionRuntime._validate_probe(baseline_obstructed, observed)
@@ -111,7 +136,8 @@ def test_probe_validation_requires_all_commands_blocks_opening_and_paths():
             for item in central_wall_v1.blocks
         ],
         "opening": [{"observed": "minecraft:air"} for _ in central_wall_v1.opening],
-        "probes": [{"reachable": True} for _ in range(3)],
+        "state": {"position_convention": "entity_feet"},
+        "probes": probes(baseline_open),
     }
     DockerAcquisitionRuntime._validate_probe(baseline_open, open_observed)
 
@@ -224,11 +250,17 @@ def test_matrix_executor_preserves_the_restored_snapshot(monkeypatch):
         snapshot_sha256="a" * 64,
         seed=0,
         seed_scopes=SimpleNamespace(requested=("meta_judger",)),
+        position_convention="entity_feet",
     )
 
     config = executor._config(run, 25565, None)
 
     assert config["world_initialization"] == "preserve_restored_snapshot"
+    assert config["position_convention"] == "entity_feet"
+    assert config["evaluation_arg"]["position_convention"] == "entity_feet"
+    run.position_convention = "support_block"
+    with pytest.raises(DockerRuntimeError, match="entity_feet"):
+        executor._config(run, 25565, None)
 
 
 @pytest.mark.skipif(os.environ.get("VILLAGER_RUN_DOCKER_INTEGRATION") != "1", reason="opt-in Docker integration")

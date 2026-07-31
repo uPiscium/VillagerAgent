@@ -133,6 +133,7 @@ def _premanifest(tmp_path):
                     "prompt": variant.prompt,
                     "initial_state": variant.initial_position.as_dict(),
                     "evaluation_target": variant.target.as_dict(),
+                    "position_convention": variant.position_convention,
                     "expected_completion_policy": variant.completion_policy,
                     "expected_completion_semantics": variant.completion_semantics,
                     "target_tolerance": variant.tolerance,
@@ -140,7 +141,7 @@ def _premanifest(tmp_path):
                     "seed_scopes": {"requested": ["meta_judger"], "supported": ["meta_judger"], "applied": ["meta_judger"]},
                 })
     payload = {
-        "schema_version": 1, "matrix_id": "minecraft-judged-test-matrix",
+        "schema_version": 2, "matrix_id": "minecraft-judged-test-matrix",
         "lifecycle_state": "draft", "premanifest_sha256": None,
         "revision": revision, "seeds": [17, 29], "baselines": baselines,
         "runtime": {"name": "runtime", "image": "runtime:fixed", "digest": "sha256:" + "1" * 64},
@@ -206,6 +207,7 @@ def _bundle(root: Path, run_name: str) -> Path:
     movement = {
         "status": True, "completion_policy": "strict_per_axis",
         "completion_semantics": "all_axis_deltas_strictly_below_tolerance",
+        "position_convention": "entity_feet",
         "target_reached": True, "target_tolerance": 1.0,
         "axis_delta": {"x": 0.1, "y": 0.1, "z": 0.1},
     }
@@ -219,7 +221,14 @@ def _bundle(root: Path, run_name: str) -> Path:
     files = {
         "summary.json": {"attempt_id": "attempt-" + run_name, "run_name": run_name, "progress": 100,
             "final_score": {"status": "success", "score": 100, "progress": 100,
-                "expected_terminal_state": {"player_position": get_movement_variant(run_name.split("-")[0]).target.as_dict()}},
+                "expected_terminal_state": {
+                    "player_position": get_movement_variant(run_name.split("-")[0]).target.as_dict(),
+                    "position_convention": "entity_feet",
+                },
+                "actual_terminal_state": {
+                    "available": True,
+                    "position_convention": "entity_feet",
+                }},
             "seed_contract": _seed_resolution(int(run_name.split("-")[1])),
             "score_ownership_verified": True,
             "child_protocol": {"status": "completed", "result_valid": True, "result_written": True},
@@ -231,7 +240,13 @@ def _bundle(root: Path, run_name: str) -> Path:
         "action_log.json": {"Alice": [{"action": "navigateTo", "result": movement}]},
         "metrics.json": {"action_count": 1, "failed_action_count": 0},
         "judged_iteration_trace.json": {"outer_episode_count": 1, "agent_iteration": agent, "entries": []},
-        "judged_terminal_diagnostics.json": {"schema_version": 2, "agent_iteration": agent, "judger_iteration": judger},
+        "judged_terminal_diagnostics.json": {
+            "schema_version": 2,
+            "agent_iteration": agent,
+            "judger_iteration": judger,
+            "expected_terminal_state": {"position_convention": "entity_feet"},
+            "actual_terminal_state": {"position_convention": "entity_feet"},
+        },
         "attempt.json": {"attempt_id": "attempt-" + run_name},
     }
     for name, value in files.items():

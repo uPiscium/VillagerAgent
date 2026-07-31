@@ -6,8 +6,10 @@ import math
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from benchmarks.minecraft.position_contract import PositionConvention
 
-VARIANT_SCHEMA_VERSION = 1
+
+VARIANT_SCHEMA_VERSION = 2
 VARIANT_ORDER = ("near", "diagonal", "long_distance")
 
 
@@ -35,6 +37,7 @@ class MovementVariant:
     target: MovementTarget
     prompt: str
     evaluation: str
+    position_convention: str
     completion_policy: str = "strict_per_axis"
     completion_semantics: str = "all_axis_deltas_strictly_below_tolerance"
     tolerance: float = 1.0
@@ -47,6 +50,7 @@ class MovementVariant:
             "target": self.target.as_dict(),
             "prompt": self.prompt,
             "evaluation": self.evaluation,
+            "position_convention": self.position_convention,
             "completion_policy": self.completion_policy,
             "completion_semantics": self.completion_semantics,
             "tolerance": self.tolerance,
@@ -67,6 +71,7 @@ def _variant(variant_id: str, x: float, y: float, z: float) -> MovementVariant:
         target=MovementTarget(x=x, y=y, z=z),
         prompt=f"Move to ({x:g}, {y:g}, {z:g}). You can go there directly.",
         evaluation="final_position_strict_per_axis",
+        position_convention=PositionConvention.ENTITY_FEET.value,
     )
 
 

@@ -2,6 +2,8 @@ from benchmarks.minecraft.judged_diagnostics import (
     build_judged_iteration_trace,
     build_judged_terminal_diagnostics,
 )
+from benchmarks.minecraft.position_contract import EntityFeetPosition
+from env.movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
 
 
 def test_iteration_trace_distinguishes_tool_success_from_task_success():
@@ -102,6 +104,47 @@ def test_terminal_diagnostics_identifies_external_judger_iteration_source():
         "runtime_task_dag": "external judger failure was propagated to the runtime task",
         "child_protocol": "judged task failure made the runtime child exit with an error status",
     }
+
+
+def test_issue_445_diagnostics_preserve_entity_feet_y_residual():
+    completion = evaluate_movement_completion(
+        EntityFeetPosition(5.5, -59.0, 5.483812240562806),
+        EntityFeetPosition(5.0, -60.0, 5.0),
+        1.0,
+        policy=STRICT_PER_AXIS,
+        position_convention="entity_feet",
+    )
+    actual = {
+        "available": True,
+        "player_position": completion["observed_position"],
+        "position_convention": "entity_feet",
+        "movement_completion": completion,
+    }
+    diagnostics = build_judged_terminal_diagnostics(
+        summary={
+            "final_score": {
+                "status": "failure",
+                "end_reason": "max iteration out",
+                "root_cause_category": "task_not_satisfied",
+                "expected_terminal_state": {
+                    "player_position": completion["requested_target"],
+                    "position_convention": "entity_feet",
+                },
+                "actual_terminal_state": actual,
+            }
+        },
+        launch_config={
+            "task_scenario": "move",
+            "position_convention": "entity_feet",
+            "evaluation_arg": {"x": 5, "y": -60, "z": 5},
+        },
+        trace={"entries": [], "agent_iteration": {"available": False}},
+    )
+
+    assert diagnostics["root_cause_category"] == "task_not_satisfied"
+    assert diagnostics["position_contract"]["target_convention"] == "entity_feet"
+    assert diagnostics["root_cause_evidence"]["axis_delta"]["y"] == 1.0
+    assert diagnostics["root_cause_evidence"]["remaining_delta"]["y"] == -1.0
 
 
 def test_issue_439_legacy_actions_expose_missing_world_state_evidence():

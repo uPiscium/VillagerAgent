@@ -20,6 +20,7 @@ def test_judged_exact_axis_boundary_is_not_reached():
         position(5, -60, 5),
         1,
         policy=STRICT_PER_AXIS,
+        position_convention="entity_feet",
     )
 
     assert completion["target_reached"] is False
@@ -30,6 +31,8 @@ def test_judged_exact_axis_boundary_is_not_reached():
         "z": 0.4838122405628056,
     }
     assert completion["completion_policy"] == STRICT_PER_AXIS
+    assert completion["position_convention"] == "entity_feet"
+    assert completion["remaining_delta"]["y"] == -1.0
 
 
 def test_judged_diagonal_within_each_axis_is_reached():
