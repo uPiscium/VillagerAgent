@@ -51,6 +51,7 @@ PINNED_IMAGE = f"docker.io/itzg/minecraft-server@{PINNED_IMAGE_DIGEST}"
 IMAGE_SOURCE_REVISION = "162bd9b5f19a0de2870407a4406506aeb0fe5a99"
 SERVER_METADATA_SHA1 = "ed548106acf3ac7e8205a6ee8fd2710facfa164f"
 SERVER_JAR_SHA1 = "f69c284232d7c7580bd89a5a4931c3581eae1378"
+SERVER_JAR_SHA256 = "b26727069ef5f61c704add9a378ac90e3d271fd7876c0bd3dcfbe9fd0bec4d96"
 DEFAULT_SOURCE_ARCHIVE = Path("result/minecraft/issue_243_assets/meta-move-world-v1.tar.gz")
 PROBE_PATH = Path(__file__).with_name("docker_probe.js")
 PACKAGE_LOCK_PATH = Path(__file__).resolve().parents[2] / "package-lock.json"
@@ -85,6 +86,14 @@ def runtime_digest(server_jar_sha256: str) -> str:
     }
     encoded = json.dumps(components, sort_keys=True, separators=(",", ":")).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def pinned_runtime_identity() -> dict[str, str]:
+    return {
+        "name": ADAPTER_ID,
+        "image": PINNED_IMAGE,
+        "digest": f"sha256:{runtime_digest(SERVER_JAR_SHA256)}",
+    }
 
 
 class DockerServer:
@@ -538,9 +547,11 @@ def register_builtin_runtimes(*, acquisition: bool = False, matrix_premanifest: 
         from benchmarks.minecraft.matrix import RUNTIME_ADAPTERS
 
         spec = load_matrix_spec(matrix_premanifest)
-        expected_runtime = {"name": ADAPTER_ID, "image": PINNED_IMAGE, "digest": spec.runtime.digest}
+        expected_runtime = pinned_runtime_identity()
         if vars(spec.runtime) != expected_runtime:
-            raise DockerRuntimeError("finalized premanifest runtime does not select the pinned adapter image")
+            raise DockerRuntimeError(
+                "finalized premanifest runtime identity does not match the pinned adapter"
+            )
         if spec.model.provider != "ollama":
             raise DockerRuntimeError("the judged Minecraft runtime currently requires an Ollama-compatible model")
         for field, env_name in (("provider", "VILLAGER_MINECRAFT_MODEL_PROVIDER"), ("name", "VILLAGER_MINECRAFT_MODEL_NAME"), ("digest", "VILLAGER_MINECRAFT_MODEL_DIGEST")):
