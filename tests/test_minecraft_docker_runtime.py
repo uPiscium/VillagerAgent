@@ -13,6 +13,8 @@ from benchmarks.minecraft.docker_runtime import (
     DockerMatrixExecutor,
     DockerRuntimeError,
     DockerServer,
+    _offline_player_uuid,
+    _write_probe_operator,
     pinned_runtime_identity,
     register_builtin_runtimes,
     runtime_digest,
@@ -117,6 +119,26 @@ def test_matrix_registration_rejects_stale_runtime_composite(monkeypatch):
     with pytest.raises(DockerRuntimeError, match="pinned adapter"):
         register_builtin_runtimes(matrix_premanifest="premanifest.json")
     assert identity["name"] not in MATRIX_RUNTIME_ADAPTERS
+
+
+def test_runtime_authorizes_probe_and_meta_judger_operators(tmp_path):
+    _write_probe_operator(tmp_path)
+
+    payload = json.loads((tmp_path / "ops.json").read_text(encoding="utf-8"))
+    assert payload == [
+        {
+            "uuid": _offline_player_uuid("VAProbe"),
+            "name": "VAProbe",
+            "level": 4,
+            "bypassesPlayerLimit": True,
+        },
+        {
+            "uuid": _offline_player_uuid("meta_judger"),
+            "name": "meta_judger",
+            "level": 4,
+            "bypassesPlayerLimit": True,
+        },
+    ]
 
 
 def test_restart_refreshes_dynamic_host_port_before_runtime_use(tmp_path):
