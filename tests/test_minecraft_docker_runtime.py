@@ -8,10 +8,13 @@ import pytest
 from benchmarks.minecraft.docker_runtime import (
     PINNED_IMAGE,
     PINNED_IMAGE_DIGEST,
+    SERVER_JAR_SHA256,
     DockerAcquisitionRuntime,
     DockerMatrixExecutor,
     DockerRuntimeError,
     DockerServer,
+    pinned_runtime_identity,
+    register_builtin_runtimes,
     runtime_digest,
 )
 from benchmarks.minecraft.matrix import RUNTIME_ADAPTERS as MATRIX_RUNTIME_ADAPTERS
@@ -75,6 +78,40 @@ def test_runtime_digest_is_deterministic_composite():
     assert first != runtime_digest("2" * 64)
     assert len(first) == 64
     int(first, 16)
+    assert pinned_runtime_identity() == {
+        "name": "minecraft-1.19.2-local",
+        "image": PINNED_IMAGE,
+        "digest": f"sha256:{runtime_digest(SERVER_JAR_SHA256)}",
+    }
+
+
+def test_matrix_registration_rejects_stale_runtime_composite(monkeypatch):
+    identity = pinned_runtime_identity()
+    spec = SimpleNamespace(
+        runtime=SimpleNamespace(**identity),
+        model=SimpleNamespace(
+            provider="ollama",
+            name="gemma4:12b",
+            digest="model-digest",
+        ),
+        generation=SimpleNamespace(timeout_seconds=600),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime.load_matrix_spec",
+        lambda _path: spec,
+    )
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_PROVIDER", "ollama")
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_NAME", "gemma4:12b")
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_DIGEST", "model-digest")
+    MATRIX_RUNTIME_ADAPTERS.pop(identity["name"], None)
+
+    register_builtin_runtimes(matrix_premanifest="premanifest.json")
+
+    assert isinstance(MATRIX_RUNTIME_ADAPTERS.pop(identity["name"]), DockerMatrixExecutor)
+    spec.runtime.digest = "sha256:" + "0" * 64
+    with pytest.raises(DockerRuntimeError, match="pinned adapter"):
+        register_builtin_runtimes(matrix_premanifest="premanifest.json")
+    assert identity["name"] not in MATRIX_RUNTIME_ADAPTERS
 
 
 def test_cleanup_attempts_stop_remove_and_proves_absence(tmp_path):
