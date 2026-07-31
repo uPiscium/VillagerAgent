@@ -739,8 +739,9 @@ def move_to(
     *,
     completion_policy=EUCLIDEAN_DISTANCE,
     position_convention=None,
+    navigation_timeout_seconds=None,
+    poll_interval_seconds=0.1,
 ):  # √
-    global last_jump_time
     if pos is None:
         return False, "move failed, no target position"
     if completion_policy not in {EUCLIDEAN_DISTANCE, STRICT_PER_AXIS}:
@@ -751,28 +752,37 @@ def move_to(
     mv_.canDig = False
     mv_.canOpenDoors = True
     # #[DEBUG] print("Movements2",mv_)
-    try_num = 3
-    while try_num > 0:
-        try:
-            bot.pathfinder.setMovements(mv_)
-            bot.pathfinder.setGoal(pathfinder.goals.GoalNear(pos.x, pos.y, pos.z, RANGE_GOAL))
-            break
-        except Exception as e:
-            # #[DEBUG] print(e)
-            try_num -= 1
-            time.sleep(1)
-
-    if int(distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z))) >= 50:
+    initial_distance = distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z))
+    if int(initial_distance) >= 50:
         return False, f"move failed, can not reach position {pos.x} {pos.y} {pos.z} your pos: {bot.entity.position.x} {bot.entity.position.y} {bot.entity.position.z}, the position is too far away"
 
-    max_steps = int(distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z))) + 30
-    ori_x,ori_y,ori_z = bot.entity.position.x , bot.entity.position.y, bot.entity.position.z
-    tiks = 0
     block_name = bot.blockAt(pos)['name']
     block_name_below = bot.blockAt(pos.offset(0, -1, 0))['name']
     range_to_block = 0
     if "pressure_plate" in block_name or "pressure_plate" in block_name_below:
         range_to_block = 1.4
+
+    def stop_pathfinder_goal():
+        try:
+            bot.pathfinder.setGoal(None)
+        except Exception:
+            pass
+
+    goal = pathfinder.goals.GoalNear(pos.x, pos.y, pos.z, range_to_block)
+    try_num = 3
+    while try_num > 0:
+        try:
+            bot.pathfinder.setMovements(mv_)
+            bot.pathfinder.setGoal(goal)
+            break
+        except Exception:
+            try_num -= 1
+            if try_num > 0:
+                time.sleep(1)
+    if try_num == 0:
+        stop_pathfinder_goal()
+        return False, f"move failed, can not start pathfinding to position {pos.x} {pos.y} {pos.z}"
+
     def target_pending():
         if completion_policy == STRICT_PER_AXIS:
             return not evaluate_movement_completion(
@@ -787,36 +797,14 @@ def move_to(
             and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) > 1
         )
 
-    while target_pending() and max_steps > 0:
-        try_num = 3
-        while try_num > 0:
-            try:
-                bot.pathfinder.setGoal(pathfinder.goals.GoalNear(pos.x, pos.y, pos.z, range_to_block))
-                x,y,z = bot.entity.position.x , bot.entity.position.y, bot.entity.position.z
-                tiks += 1
-                abs_dis = max(abs(ori_x-x), abs(ori_y-y), abs(ori_z-z))
-                mean_v = abs_dis / tiks
-                break
-            except Exception as e:
-                # #[DEBUG] print(e)
-                # bot.chat('exception')
-                try_num -= 1
-                time.sleep(1)
-                x,y,z = bot.entity.position.x , bot.entity.position.y, bot.entity.position.z
-                tiks += 1
-                abs_dis = max(abs(ori_x-x), abs(ori_y-y), abs(ori_z-z))
-                mean_v = abs_dis / tiks
-        # time.sleep(1)
-        # bot.chat(f'moving {max_steps}')
-        if mean_v < 0.2:
-            max_steps -= 1
-        if mean_v < 0.05 and last_jump_time < time.time() - 10:
-            x, y, z = bot.entity.position.x, bot.entity.position.y, bot.entity.position.z
-            # tp to the y+2
-            if bot.blockAt(Vec3(x, y + 1.2, z))['name'] == 'air':
-            #     bot.chat(f'/tp @s {x} {y + 1.2} {z}')
-                last_jump_time = time.time()
-            # bot.chat(f'bot seems like in an idle state.')
+    timeout_seconds = (
+        float(navigation_timeout_seconds)
+        if navigation_timeout_seconds is not None
+        else initial_distance + 30.0
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while target_pending() and time.monotonic() < deadline:
+        time.sleep(poll_interval_seconds)
 
     completion = evaluate_movement_completion(
         bot.entity.position,
@@ -828,11 +816,12 @@ def move_to(
     failed = (
         not completion["target_reached"]
         if completion_policy == STRICT_PER_AXIS
-        else max_steps <= 0
-        and distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL + 1.5
+        else distanceTo(bot.entity.position, Vec3(pos.x, pos.y, pos.z)) >= RANGE_GOAL + 1.5
     )
     if failed:
+        stop_pathfinder_goal()
         correction = (
+            f"navigation timeout={timeout_seconds:.1f}s; "
             f"position convention={completion.get('position_convention', 'legacy')}; "
             f"axis delta={completion['axis_delta']}; "
             f"remaining delta={completion['remaining_delta']}"
