@@ -21,6 +21,7 @@ try:
         resolve_position_convention,
     )
     from env.movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
+    from env.mineflayer_readiness import wait_for_spawn
 except ImportError:
     from judger_iteration import build_iteration_metadata
     from judger_artifacts import TerminalArtifactWriter
@@ -34,6 +35,7 @@ except ImportError:
         resolve_position_convention,
     )
     from movement_diagnostics import STRICT_PER_AXIS, evaluate_movement_completion
+    from mineflayer_readiness import wait_for_spawn
 import argparse
 from minecraft_define import *
 from env_api import *
@@ -1459,7 +1461,7 @@ def handleAttack(_, entity):
                     score = 100
 
 
-if not spawn_event.wait(timeout=60):
+if not wait_for_spawn(bot, spawn_event, timeout=60):
     write_load_phase("spawn_timeout")
     raise TimeoutError("meta judger did not receive the Mineflayer spawn event within 60 seconds")
 handleViewer()
