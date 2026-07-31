@@ -64,6 +64,7 @@ def run_finalized_matrix(
         if failure_reason is not None:
             records.append(_skipped_record(run, failure_reason))
             continue
+        restored = None
         try:
             current = _verified_finalized_spec(source, repo_root=repo_root)
             if current != spec:
@@ -96,7 +97,7 @@ def run_finalized_matrix(
         except Exception as exc:
             failure_reason = _safe_failure_reason(exc)
             failure_run = run.run_id
-            records.append(_failed_record(run, failure_reason))
+            records.append(_failed_record(run, failure_reason, exc=exc, restored=restored))
 
     for record in records:
         validation_path = root / "validations" / record["run_name"] / "matrix_run_validation.json"
@@ -210,19 +211,41 @@ def _enrich_record(
     }
 
 
-def _failed_record(run: MatrixRunSpec, reason: str) -> dict[str, Any]:
-    return {
+def _failed_record(
+    run: MatrixRunSpec,
+    reason: str,
+    *,
+    exc: Exception | None = None,
+    restored: RestoredWorld | None = None,
+) -> dict[str, Any]:
+    detail = getattr(exc, "failure_detail", {}) if exc is not None else {}
+    detail = detail if isinstance(detail, dict) else {}
+    attempt_not_started = detail.get("attempt_started") is False
+    cleanup = detail.get("cleanup")
+    cleanup = cleanup if isinstance(cleanup, dict) else {"passed": False}
+    record = {
         "schema_version": 1, "record_type": "minecraft_matrix_run_validation",
         "matrix_index": run.order, "run_name": run.run_id, "attempt_id": "not-started",
-        "status": "failed", "passed": False, "variant": run.variant, "seed": run.seed,
+        "status": "attempt_not_started" if attempt_not_started else "failed",
+        "passed": False, "variant": run.variant, "seed": run.seed,
         "baseline": {"id": run.baseline_id, "sha256": run.snapshot_sha256},
         "target": run.evaluation_target.as_dict(),
         "position_convention": run.position_convention,
-        "attempts": 1,
+        "attempts": 0 if attempt_not_started else 1,
         "action": {}, "diagnostics": {"available": False}, "manifests": {},
-        "cleanup": {"passed": False}, "safety": {"passed": False},
+        "cleanup": cleanup, "safety": {"passed": False},
         "checks": [], "errors": [{"check": "runner", "message": reason}],
     }
+    runtime_diagnostics = detail.get("runtime_diagnostics")
+    if isinstance(runtime_diagnostics, dict) and runtime_diagnostics:
+        record["runtime_diagnostics"] = runtime_diagnostics
+    if restored is not None:
+        record["restored_world"] = {
+            "snapshot_sha256": restored.descriptor.archive_sha256,
+            "tree_sha256": restored.tree_identity.manifest_sha256,
+            "file_count": restored.tree_identity.file_count,
+        }
+    return record
 
 
 def _skipped_record(run: MatrixRunSpec, reason: str) -> dict[str, Any]:

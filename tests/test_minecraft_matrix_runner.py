@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.minecraft.matrix import main
+from benchmarks.minecraft.docker_runtime import DockerRuntimeError
 from benchmarks.minecraft.matrix_runner import run_finalized_matrix
 from benchmarks.minecraft.matrix_spec import (
     finalize_matrix_spec,
@@ -83,6 +84,42 @@ def test_runner_stops_on_first_failure_and_marks_remaining_skipped(tmp_path):
     marker = json.loads((tmp_path / "matrix" / "_MATRIX_FAILED").read_text())
     assert marker["run"] == result["runs"][1]["run_name"]
     assert marker["skipped_count"] == 10
+
+
+def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
+    premanifest = _premanifest(tmp_path)
+
+    def executor(**_kwargs):
+        error = DockerRuntimeError(
+            "runtime command failed: failed to start containers",
+            diagnostics={
+                "operation": "restart",
+                "exit_code": 1,
+                "safe_output": ["failed to start containers"],
+            },
+        )
+        error.failure_detail.update({
+            "attempt_started": False,
+            "cleanup": {"attempted": True, "passed": True},
+        })
+        raise error
+
+    _attach_identity(executor, premanifest)
+
+    result = run_finalized_matrix(
+        premanifest, tmp_path / "matrix", executor=executor, repo_root=tmp_path
+    )
+
+    failed = result["runs"][0]
+    assert failed["status"] == "attempt_not_started"
+    assert failed["attempts"] == 0
+    assert failed["cleanup"] == {"attempted": True, "passed": True}
+    assert failed["runtime_diagnostics"] == {
+        "operation": "restart",
+        "exit_code": 1,
+        "safe_output": ["failed to start containers"],
+    }
+    assert result["runs"][1]["status"] == "skipped"
 
 
 def test_premanifest_cli_validates_serializes_and_run_fails_closed(tmp_path, capsys):
