@@ -154,6 +154,9 @@ class DockerServer:
         self._run(["docker", "start", self.name], timeout=60)
         self.running = True
         self._wait_healthy()
+        return self._published_port()
+
+    def _published_port(self) -> int:
         ports = self._run(["docker", "port", self.name, "25565/tcp"]).stdout.strip()
         try:
             self.port = int(ports.rsplit(":", 1)[-1])
@@ -188,15 +191,17 @@ class DockerServer:
             self._run(["docker", "stop", "--time", "30", self.name], timeout=45, check=False)
             self.running = False
 
-    def restart_and_verify_marker(self, baseline_id: str) -> None:
+    def restart_and_verify_marker(self, baseline_id: str) -> int:
         self.stop()
         self._run(["docker", "start", self.name], timeout=60)
         self.running = True
         self._wait_healthy()
+        port = self._published_port()
         for marker in (baseline_id, SOURCE_MARKER):
             response = self.rcon(f"scoreboard players get {marker} va_baseline")
             if not response.endswith("has 1 [va_baseline]"):
                 raise DockerRuntimeError("restored world scoreboard marker verification failed")
+        return port
 
     def cleanup(self) -> bool:
         self.stop()
@@ -490,7 +495,7 @@ class DockerMatrixExecutor:
             expected_digest = self.matrix_identity["runtime"]["digest"].removeprefix("sha256:")
             if runtime_digest(_sha(jar)) != expected_digest:
                 raise DockerRuntimeError("matrix runtime composite digest does not match the premanifest")
-            server.restart_and_verify_marker(run.baseline_id)
+            port = server.restart_and_verify_marker(run.baseline_id)
             config = self._config(run, port, restored_world)
             config_path = output_dir / "matrix_launch_config.json"
             config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
