@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 from benchmarks.minecraft.matrix import main
-from benchmarks.minecraft.docker_runtime import DockerRuntimeError
+from benchmarks.minecraft.docker_runtime import (
+    SERVER_JAR_PATH,
+    SERVER_JAR_SHA1,
+    DockerMatrixExecutor,
+    DockerRuntimeError,
+    DockerServer,
+)
 from benchmarks.minecraft.matrix_runner import run_finalized_matrix
 from benchmarks.minecraft.matrix_spec import (
     finalize_matrix_spec,
@@ -88,8 +94,10 @@ def test_runner_stops_on_first_failure_and_marks_remaining_skipped(tmp_path):
 
 def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
     premanifest = _premanifest(tmp_path)
+    calls = []
 
-    def executor(**_kwargs):
+    def executor(**kwargs):
+        calls.append(kwargs["run"].run_id)
         error = DockerRuntimeError(
             "runtime command failed: failed to start containers",
             diagnostics={
@@ -110,6 +118,7 @@ def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
         premanifest, tmp_path / "matrix", executor=executor, repo_root=tmp_path
     )
 
+    assert len(calls) == 1
     failed = result["runs"][0]
     assert failed["status"] == "attempt_not_started"
     assert failed["attempts"] == 0
@@ -119,7 +128,113 @@ def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
         "exit_code": 1,
         "safe_output": ["failed to start containers"],
     }
-    assert result["runs"][1]["status"] == "skipped"
+    remaining = result["runs"][1:]
+    assert all(row["status"] == "skipped" for row in remaining)
+    assert all(row["attempts"] == 0 for row in remaining)
+    assert result["started"] == 0
+    assert result["completed"] == 0
+    assert result["failed"] == 1
+    assert result["skipped"] == len(remaining) == 11
+
+
+def test_runner_propagates_real_restart_evidence_without_judged_attempt(
+    tmp_path, monkeypatch
+):
+    premanifest = _premanifest(tmp_path)
+    identity = json.loads(premanifest.read_text())
+    calls = []
+    judged_calls = []
+
+    def judged_execute(*_args, **_kwargs):
+        judged_calls.append(True)
+        raise AssertionError("restart failure must precede judged execution")
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment.run_minecraft_experiment", judged_execute
+    )
+
+    class RestartFailureRunner:
+        def __call__(self, argv, **_kwargs):
+            calls.append(list(argv))
+            if argv[:2] == ["docker", "restart"]:
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "daemon socket /var/run/docker.sock\n"
+                )
+            if argv[:4] == ["docker", "inspect", "--type", "container"]:
+                state = {
+                    "State": {
+                        "Status": "exited", "Running": False, "ExitCode": 1,
+                        "StartedAt": "2026-08-01T01:00:00Z",
+                        "FinishedAt": "2026-08-01T01:01:00Z",
+                        "Health": {
+                            "Status": "unhealthy", "FailingStreak": 2,
+                            "Log": [],
+                        },
+                    },
+                    "RestartCount": 0,
+                }
+                return subprocess.CompletedProcess(argv, 0, json.dumps(state), "")
+            return subprocess.CompletedProcess(argv, 0, "safe diagnostic\n", "")
+
+    fake_runner = RestartFailureRunner()
+
+    class FailingServer:
+        def __init__(self, data_root, **_kwargs):
+            self.data_root = data_root
+            (data_root / SERVER_JAR_PATH).write_bytes(b"jar")
+
+        def create_start(self):
+            return 25565
+
+        def restart_and_verify_marker(self, baseline_id):
+            server = DockerServer(self.data_root, runner=fake_runner)
+            server.restart_and_verify_marker(baseline_id)
+
+        def cleanup(self):
+            return True
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime.BASELINE_DEFINITIONS",
+        {"a": object()},
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime.DockerServer", FailingServer
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime._sha",
+        lambda _path, algorithm="sha256": (
+            SERVER_JAR_SHA1
+            if algorithm == "sha1"
+            else "jar-sha256"
+        ),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime.runtime_digest",
+        lambda _jar: identity["runtime"]["digest"].removeprefix("sha256:"),
+    )
+    executor = DockerMatrixExecutor({
+        "runtime": identity["runtime"],
+        "model": identity["model"],
+        "generation": identity["generation"],
+    })
+
+    result = run_finalized_matrix(
+        premanifest, tmp_path / "matrix", executor=executor, repo_root=tmp_path
+    )
+
+    failed = result["runs"][0]
+    assert failed["status"] == "attempt_not_started"
+    assert failed["attempts"] == 0
+    assert failed["cleanup"] == {"attempted": True, "passed": True}
+    evidence = failed["runtime_diagnostics"]["restart_failure_evidence"]
+    assert evidence["inspect_state"]["state"]["started_at"] == (
+        "2026-08-01T01:00:00Z"
+    )
+    assert evidence["inspect_state"]["state"]["health"]["failing_streak"] == 2
+    assert all(row["status"] == "skipped" for row in result["runs"][1:])
+    assert all(row["attempts"] == 0 for row in result["runs"])
+    assert judged_calls == []
+    assert not any(call[:2] == ["docker", "exec"] for call in calls)
 
 
 def test_premanifest_cli_validates_serializes_and_run_fails_closed(tmp_path, capsys):

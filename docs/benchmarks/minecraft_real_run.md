@@ -281,6 +281,16 @@ an approval, inspect a mutable Gist HEAD, or select the latest experiment.
 Development matrix premanifest mode is not production approval and must not be
 used as a substitute for this command.
 
+Restart diagnostics change both `docker_runtime.py` and the separately hashed
+diagnostics module, so they define a new composite runtime identity. The
+existing `minecraft-judged-production-v1` record remains pinned to the earlier
+identity and must fail admission with the diagnostics implementation; it must
+not be reused or rewritten in place. Before production collection can resume,
+generate and approve a new finalized premanifest for the merged diagnostics
+revision, add a new versioned registry record with a distinct experiment ID,
+and rerun the normal canary and gate sequence without retries or changes to
+experiment, model, or judging conditions.
+
 ## Validation Status For This Change
 
 The automated coverage validates the bounded execute artifact path without
