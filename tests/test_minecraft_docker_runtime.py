@@ -362,8 +362,8 @@ def test_restart_failure_collects_bounded_sanitized_evidence_before_cleanup(tmp_
         "exit_code": 0,
         "stdout": {
             "safe_output": [
-                "safe diagnostic line 3", "safe diagnostic line 4",
-                "safe diagnostic line 5", "safe diagnostic line 6",
+                "safe diagnostic line 4", "safe diagnostic line 5",
+                "safe diagnostic line 6", "[REDACTED]",
                 "internal [REDACTED]",
             ],
             "raw_bytes": len(("\n".join(
@@ -372,7 +372,7 @@ def test_restart_failure_collects_bounded_sanitized_evidence_before_cleanup(tmp_
                     "0123456789abcdef0123456789abcdef",
                 ]) + "\n").encode("utf-8")),
             "retained_safe_lines": 5, "redacted_line_count": 3,
-            "dropped_line_count": 3, "truncated": True,
+            "dropped_line_count": 4, "truncated": True,
         },
         "stderr": {
             "safe_output": [], "raw_bytes": 0, "retained_safe_lines": 0,

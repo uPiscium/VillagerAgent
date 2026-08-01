@@ -32,6 +32,7 @@ def test_strict_sanitizer_redacts_secrets_and_paths():
     )
     assert result["stdout"]["safe_output"] == [
         "safe diagnostic",
+        "[REDACTED]",
         "internal [REDACTED]",
     ]
     assert result["stdout"]["redacted_line_count"] == 2
@@ -74,6 +75,15 @@ def test_strict_sanitizer_partially_redacts_sensitive_assignments():
     )
     assert quoted["stdout"]["safe_output"] == ["login failed: [REDACTED]"]
 
+    authorization = sanitize_output(
+        b"restart failed: Authorization: Bearer hidden-value\n",
+        b"",
+        strict=True,
+    )
+    assert authorization["stdout"]["safe_output"] == [
+        "restart failed: [REDACTED]"
+    ]
+
 
 def test_restart_evidence_schema_keeps_records_for_invalid_target():
     calls = []
@@ -91,6 +101,11 @@ def test_restart_evidence_schema_keeps_records_for_invalid_target():
     assert all(evidence[key]["outcome"] == "not_attempted" for key in (
         "inspect_state", "logs_tail", "events_window", "ps_exact_name"
     ))
+    assert all(
+        evidence[key][stream]["truncated"] is False
+        for key in ("inspect_state", "logs_tail", "events_window", "ps_exact_name")
+        for stream in ("stdout", "stderr")
+    )
     assert calls == []
 
 
@@ -113,6 +128,33 @@ def test_custom_diagnostic_executor_is_the_only_runner_used():
     )
     assert evidence["collection_complete"] is True
     assert len(calls) == 4
+
+
+def test_injected_diagnostic_runner_enforces_per_stream_bounds():
+    stdout = b"prefix\n" + b"x" * (DIAGNOSTIC_STREAM_BYTES * 2)
+    stderr = b"safe stderr\n"
+
+    def runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout, stderr)
+
+    result = BoundedDiagnosticExecutor(runner)(["docker", "restart"], timeout=1)
+
+    assert result.stdout == b""
+    assert result.stdout_bytes == len(stdout)
+    assert result.stdout_truncated is True
+    assert result.stderr == stderr
+    assert result.stderr_bytes == len(stderr)
+    assert result.stderr_truncated is False
+
+
+def test_nonpositive_budget_is_not_attempted_without_fake_truncation():
+    result = BoundedDiagnosticExecutor(lambda *_args, **_kwargs: None)(
+        ["docker", "restart"], timeout=0
+    )
+
+    assert result.outcome == "not_attempted"
+    assert result.stdout_truncated is False
+    assert result.stderr_truncated is False
 
 
 def test_inspect_state_is_structured_and_health_output_is_partially_redacted():

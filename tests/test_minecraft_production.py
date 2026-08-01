@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from benchmarks.minecraft.approved_experiment import ApprovedExperimentError
+from benchmarks.minecraft.approved_experiment import (
+    ApprovedExperimentError,
+    get_approved_experiment,
+)
+from benchmarks.minecraft.docker_runtime import pinned_runtime_identity
 from benchmarks.minecraft.production import (
     ProductionAdmissionError,
     run_approved_production,
@@ -87,6 +91,44 @@ def test_failed_admission_starts_zero_judged_attempts(tmp_path, monkeypatch, fai
     with pytest.raises(ProductionAdmissionError):
         run_approved_production("approved-test", execution, tmp_path / "output")
     assert calls == {"executor": 0, "run": 0}
+
+
+def test_diagnostics_runtime_does_not_reuse_existing_approved_premanifest(
+    tmp_path, monkeypatch
+):
+    record = get_approved_experiment("minecraft-judged-production-v1")
+    assert pinned_runtime_identity() != dict(record.runtime_identity)
+    resolved = SimpleNamespace(record=record)
+    _valid_environment(monkeypatch, resolved)
+    calls = {"resolve": 0, "executor": 0, "run": 0}
+
+    def resolve(*_args, **_kwargs):
+        calls["resolve"] += 1
+        raise AssertionError("stale runtime must fail before artifact resolution")
+
+    def executor(*_args, **_kwargs):
+        calls["executor"] += 1
+
+    def run(*_args, **_kwargs):
+        calls["run"] += 1
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.resolve_approved_experiment", resolve
+    )
+    monkeypatch.setattr("benchmarks.minecraft.production.DockerMatrixExecutor", executor)
+    monkeypatch.setattr("benchmarks.minecraft.production.run_finalized_matrix", run)
+
+    with pytest.raises(
+        ProductionAdmissionError,
+        match="runtime implementation does not match the approval",
+    ):
+        run_approved_production(
+            "minecraft-judged-production-v1",
+            tmp_path / "unused-execution-worktree",
+            tmp_path / "unused-output",
+        )
+
+    assert calls == {"resolve": 0, "executor": 0, "run": 0}
 
 
 def test_successful_admission_passes_historical_worktree_to_registration_and_runner(

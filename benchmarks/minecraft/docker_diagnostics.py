@@ -18,8 +18,9 @@ _SENSITIVE_OUTPUT = re.compile(
     re.IGNORECASE,
 )
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)\b(?:token|password|passwd|secret|api[ _-]?key|credential|cookie|session)\s*[:=].*$"
+    r"(?i)\b(?:authorization|token|password|passwd|secret|api[ _-]?key|credential|cookie|session)\s*[:=].*$"
 )
+_BEARER_VALUE = re.compile(r"(?i)\bbearer\s+\S+.*$")
 _HIGH_ENTROPY_OUTPUT = re.compile(r"[A-Za-z0-9_-]{32,}")
 _MINECRAFT_LOG_PREFIX = re.compile(
     r"^\[[^\]\r\n]{1,40}\]\s+\[[A-Za-z0-9 _.-]{1,40}/(INFO|WARN|ERROR|FATAL)\]:\s*(.*)$"
@@ -37,6 +38,12 @@ _RESTART_EVIDENCE_KEYS = (
     "events_window",
     "ps_exact_name",
 )
+try:
+    _DIAGNOSTICS_IMPLEMENTATION_SHA256: str | None = hashlib.sha256(
+        Path(__file__).read_bytes()
+    ).hexdigest()
+except OSError:
+    _DIAGNOSTICS_IMPLEMENTATION_SHA256 = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,17 @@ def output_bytes(value: str | bytes | None) -> bytes:
     return value.encode("utf-8", errors="replace")
 
 
+def _bounded_output(value: str | bytes | None) -> tuple[bytes, int, bool]:
+    raw = output_bytes(value)
+    total = len(raw)
+    if total <= DIAGNOSTIC_STREAM_BYTES:
+        return raw, total, False
+    retained = raw[-DIAGNOSTIC_STREAM_BYTES:]
+    newline = retained.find(b"\n")
+    retained = b"" if newline < 0 else retained[newline + 1:]
+    return retained, total, True
+
+
 def _sanitize_stream(
     value: bytes,
     *,
@@ -86,6 +104,8 @@ def _sanitize_stream(
             line, sensitive_replacements = _SENSITIVE_ASSIGNMENT.subn(
                 "[REDACTED]", line
             )
+            line, bearer_replacements = _BEARER_VALUE.subn("[REDACTED]", line)
+            sensitive_replacements += bearer_replacements
             if sensitive_replacements:
                 redacted += 1
         valid = bool(_SAFE_OUTPUT.fullmatch(line))
@@ -150,8 +170,8 @@ def sanitize_output(
     }
 
 
-def diagnostics_implementation_sha256() -> str:
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+def diagnostics_implementation_sha256() -> str | None:
+    return _DIAGNOSTICS_IMPLEMENTATION_SHA256
 
 
 def _sanitized_text(value: Any) -> str:
@@ -239,7 +259,7 @@ class BoundedDiagnosticExecutor:
     def __call__(self, argv: list[str], *, timeout: float) -> DiagnosticCommandResult:
         if timeout <= 0:
             return DiagnosticCommandResult(
-                None, b"", b"", 0, 0, True, True, "not_attempted"
+                None, b"", b"", 0, 0, False, False, "not_attempted"
             )
         if self.runner is None:
             cleanup_reserve = min(0.5, timeout / 2)
@@ -251,23 +271,32 @@ class BoundedDiagnosticExecutor:
         try:
             result = self.runner(argv, check=False, capture_output=True, text=False, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            stdout, stderr = output_bytes(exc.stdout), output_bytes(exc.stderr)
+            stdout, stdout_bytes, _stdout_bounded = _bounded_output(exc.stdout)
+            stderr, stderr_bytes, _stderr_bounded = _bounded_output(exc.stderr)
             return DiagnosticCommandResult(
-                None, stdout, stderr, len(stdout), len(stderr), True, True, "timeout"
+                None,
+                stdout,
+                stderr,
+                stdout_bytes,
+                stderr_bytes,
+                True,
+                True,
+                "timeout",
             )
         except (OSError, subprocess.SubprocessError):
             return DiagnosticCommandResult(
                 None, b"", b"", 0, 0, False, False, "runner_error"
             )
-        stdout, stderr = output_bytes(result.stdout), output_bytes(result.stderr)
+        stdout, stdout_bytes, stdout_truncated = _bounded_output(result.stdout)
+        stderr, stderr_bytes, stderr_truncated = _bounded_output(result.stderr)
         return DiagnosticCommandResult(
             returncode=result.returncode,
             stdout=stdout,
             stderr=stderr,
-            stdout_bytes=len(stdout),
-            stderr_bytes=len(stderr),
-            stdout_truncated=False,
-            stderr_truncated=False,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            stdout_truncated=stdout_truncated,
+            stderr_truncated=stderr_truncated,
             outcome="ok" if result.returncode == 0 else "nonzero_exit",
         )
 
@@ -380,7 +409,7 @@ def empty_diagnostic_record(outcome: str) -> dict[str, Any]:
     return {
         "outcome": outcome,
         "exit_code": None,
-        **sanitize_output(b"", b"", strict=True, pre_truncated=True),
+        **sanitize_output(b"", b"", strict=True),
     }
 
 
