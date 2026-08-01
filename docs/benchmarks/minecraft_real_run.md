@@ -248,6 +248,39 @@ Record the following in a verification note before making any performance claims
 - Observed `summary.json` `progress`, `error`, `error_type`, and `timed_out` fields.
 - Any runtime failure mode.
 
+## Approved production matrix
+
+Use a newer control-plane checkout for the resolver and command, but execute from
+a clean detached worktree at the exact revision named by the approved bundle:
+
+```bash
+python -m benchmarks.minecraft.approved_experiment resolve \
+  --experiment minecraft-judged-production-v1 \
+  --execution-worktree /external/clean-approved-worktree \
+  --output /external/resolved-approved-experiment
+
+VILLAGER_MINECRAFT_MODEL_API_BASE=http://10.255.255.5:11434 \
+VILLAGER_MINECRAFT_MODEL_NAME=gemma4:12b \
+VILLAGER_MINECRAFT_MODEL_PROVIDER=ollama \
+VILLAGER_MINECRAFT_MODEL_DIGEST=4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c \
+VILLAGER_MINECRAFT_MODEL_API_KEY_ENV=OLLAMA_API_KEY \
+python -m benchmarks.minecraft.production \
+  --approved-experiment minecraft-judged-production-v1 \
+  --execution-worktree /external/clean-approved-worktree \
+  --output /external/minecraft-production-output
+```
+
+Set `OLLAMA_API_KEY` in the environment before the production command; do not put
+its value on the command line. The registry record is
+`configs/minecraft/approved-experiments/minecraft-judged-production-v1.json`.
+The resolver materializes the exact pinned premanifest and sanitized provenance;
+the production command repeats admission under `OUTPUT/admission` before Run 1.
+Both outputs must be new absolute paths outside all tracked worktrees. Endpoint,
+model identity, and credentials are environment-provided only. Do not regenerate
+an approval, inspect a mutable Gist HEAD, or select the latest experiment.
+Development matrix premanifest mode is not production approval and must not be
+used as a substitute for this command.
+
 ## Validation Status For This Change
 
 The automated coverage validates the bounded execute artifact path without

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "experiment_id": "minecraft-judged-production-v1",
+  "approved_source_revision": "b2e1f1f35878b8028bf6139ee4fd8d19b5337aa5",
+  "canonical_premanifest_identity": "cfb26bd54dbeedc76f7a3804867d3320de7afe1f619778fee1b1737a4509fa2f",
+  "runtime_identity": {
+    "name": "minecraft-1.19.2-local",
+    "image": "docker.io/itzg/minecraft-server@sha256:5b3e96bcd7dace8ab7be89c245dc9ba0b1573fdef2f01d3e101ac40e7843fa70",
+    "digest": "sha256:63e59662fd8d8b79d99b9910225455af4addfe5e80d5a65023cbaa8ca37c73d0"
+  },
+  "model_endpoint": "http://10.255.255.5:11434",
+  "artifact": {
+    "provider": "github-gist",
+    "owner": "upiscium",
+    "gist_id": "4751b97f0a345562e1b6dc5afa379b6e",
+    "revision": "b07eabc43e62f199990e475cb3848933382e3d36",
+    "path": "premanifest.json",
+    "byte_sha256": "716fe1bfc85ce683e18fbaca8641ebf9065992367635385255dafeabdfbe1760"
+  },
+  "expected": {
+    "model": {
+      "provider": "ollama",
+      "name": "gemma4:12b",
+      "digest": "4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c"
+    },
+    "seeds": [17, 29],
+    "baselines": [
+      {
+        "baseline_id": "baseline_open",
+        "path": "benchmarks/minecraft/assets/issue_443/baseline_open/baseline_open.tar.gz",
+        "sha256": "644707660d4fb073016830f2f89e78a1c348d7845d4964326c21a6076a137c1b"
+      },
+      {
+        "baseline_id": "baseline_obstructed",
+        "path": "benchmarks/minecraft/assets/issue_443/baseline_obstructed/baseline_obstructed.tar.gz",
+        "sha256": "da502d68911ec1a1cbed953df54d1baf7a0e277c4da50656a3e7f2b36fef5237"
+      }
+    ],
+    "generation": {
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "max_tokens": 1024,
+      "timeout_seconds": 600.0,
+      "max_iterations": 5
+    },
+    "execution": {
+      "mode": "sequential",
+      "stop_on_first_failure": true,
+      "retry_policy": "none"
+    },
+    "cleanup_policy": "independent_snapshot_per_run",
+    "ordered_runs": [
+      {"order": 0, "run_id": "near-s17-baseline_open", "variant": "near", "seed": 17, "baseline_id": "baseline_open", "variant_definition_sha256": "0f20dfeb2390f77baf20d9be550cac9bd3cde84e1145e734cfc45c80f61e08a7"},
+      {"order": 1, "run_id": "near-s17-baseline_obstructed", "variant": "near", "seed": 17, "baseline_id": "baseline_obstructed", "variant_definition_sha256": "0f20dfeb2390f77baf20d9be550cac9bd3cde84e1145e734cfc45c80f61e08a7"},
+      {"order": 2, "run_id": "near-s29-baseline_open", "variant": "near", "seed": 29, "baseline_id": "baseline_open", "variant_definition_sha256": "0f20dfeb2390f77baf20d9be550cac9bd3cde84e1145e734cfc45c80f61e08a7"},
+      {"order": 3, "run_id": "near-s29-baseline_obstructed", "variant": "near", "seed": 29, "baseline_id": "baseline_obstructed", "variant_definition_sha256": "0f20dfeb2390f77baf20d9be550cac9bd3cde84e1145e734cfc45c80f61e08a7"},
+      {"order": 4, "run_id": "diagonal-s17-baseline_open", "variant": "diagonal", "seed": 17, "baseline_id": "baseline_open", "variant_definition_sha256": "3d737a73c4a1122d2b362f704512e399938624e9a7b39acee87c57cd3ead115e"},
+      {"order": 5, "run_id": "diagonal-s17-baseline_obstructed", "variant": "diagonal", "seed": 17, "baseline_id": "baseline_obstructed", "variant_definition_sha256": "3d737a73c4a1122d2b362f704512e399938624e9a7b39acee87c57cd3ead115e"},
+      {"order": 6, "run_id": "diagonal-s29-baseline_open", "variant": "diagonal", "seed": 29, "baseline_id": "baseline_open", "variant_definition_sha256": "3d737a73c4a1122d2b362f704512e399938624e9a7b39acee87c57cd3ead115e"},
+      {"order": 7, "run_id": "diagonal-s29-baseline_obstructed", "variant": "diagonal", "seed": 29, "baseline_id": "baseline_obstructed", "variant_definition_sha256": "3d737a73c4a1122d2b362f704512e399938624e9a7b39acee87c57cd3ead115e"},
+      {"order": 8, "run_id": "long_distance-s17-baseline_open", "variant": "long_distance", "seed": 17, "baseline_id": "baseline_open", "variant_definition_sha256": "f67b5eb61dbc8192df843c9d42e9e416d7a1fd0b2fbd6b9095660bd5dff07b8a"},
+      {"order": 9, "run_id": "long_distance-s17-baseline_obstructed", "variant": "long_distance", "seed": 17, "baseline_id": "baseline_obstructed", "variant_definition_sha256": "f67b5eb61dbc8192df843c9d42e9e416d7a1fd0b2fbd6b9095660bd5dff07b8a"},
+      {"order": 10, "run_id": "long_distance-s29-baseline_open", "variant": "long_distance", "seed": 29, "baseline_id": "baseline_open", "variant_definition_sha256": "f67b5eb61dbc8192df843c9d42e9e416d7a1fd0b2fbd6b9095660bd5dff07b8a"},
+      {"order": 11, "run_id": "long_distance-s29-baseline_obstructed", "variant": "long_distance", "seed": 29, "baseline_id": "baseline_obstructed", "variant_definition_sha256": "f67b5eb61dbc8192df843c9d42e9e416d7a1fd0b2fbd6b9095660bd5dff07b8a"}
+    ]
+  }
+}
