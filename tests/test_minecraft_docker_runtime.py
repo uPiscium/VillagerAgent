@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from benchmarks.minecraft.docker_diagnostics import DiagnosticCommandResult
 from benchmarks.minecraft.docker_runtime import (
     PINNED_IMAGE,
     PINNED_IMAGE_DIGEST,
@@ -437,6 +438,109 @@ def test_restart_failure_diagnostics_never_mask_original_error(tmp_path):
         for key in ("inspect_state", "logs_tail", "events_window", "ps_exact_name")
     )
     assert "diagnostic runner unavailable" not in json.dumps(evidence)
+
+
+def _restart_failure_server(
+    tmp_path, *, inspect_output=b'{"State": {}}', logs_outcome="ok", events_outcome="ok"
+):
+    restart_calls = []
+    diagnostic_calls = []
+
+    def executor(argv, *, timeout):
+        diagnostic_calls.append(argv)
+        if argv[:2] == ["docker", "restart"]:
+            restart_calls.append(argv)
+            return DiagnosticCommandResult(
+                1, b"", b"restart failed safely\n", 0, 22, False, False, "nonzero_exit"
+            )
+        if argv[:2] == ["docker", "inspect"]:
+            return DiagnosticCommandResult(
+                0, inspect_output, b"", len(inspect_output), 0, False, False, "ok"
+            )
+        outcome = (
+            logs_outcome
+            if argv[:2] == ["docker", "logs"]
+            else events_outcome
+            if argv[:2] == ["docker", "events"]
+            else "ok"
+        )
+        timed_out = outcome == "timeout"
+        return DiagnosticCommandResult(
+            None if timed_out else 0,
+            b"",
+            b"",
+            0,
+            0,
+            timed_out,
+            timed_out,
+            outcome,
+        )
+
+    return DockerServer(tmp_path, diagnostic_executor=executor), restart_calls, diagnostic_calls
+
+
+def test_restart_failure_malformed_inspect_preserves_error_and_continues(tmp_path):
+    server, restart_calls, diagnostic_calls = _restart_failure_server(
+        tmp_path, inspect_output=b"not json"
+    )
+    with pytest.raises(DockerRuntimeError, match="restart failed safely") as captured:
+        server.restart_and_verify_marker("baseline_open")
+    evidence = captured.value.failure_detail["runtime_diagnostics"][
+        "restart_failure_evidence"
+    ]
+    assert evidence["inspect_state"]["outcome"] == "invalid_output"
+    assert evidence["inspect_state"]["state"] is None
+    assert [call[:2] for call in diagnostic_calls] == [
+        ["docker", "restart"],
+        ["docker", "inspect"],
+        ["docker", "logs"],
+        ["docker", "events"],
+        ["docker", "ps"],
+    ]
+    assert len(restart_calls) == 1
+
+
+def test_restart_failure_logs_error_preserves_error_and_continues(tmp_path):
+    server, restart_calls, diagnostic_calls = _restart_failure_server(
+        tmp_path, logs_outcome="runner_error"
+    )
+    with pytest.raises(DockerRuntimeError, match="restart failed safely") as captured:
+        server.restart_and_verify_marker("baseline_open")
+    evidence = captured.value.failure_detail["runtime_diagnostics"][
+        "restart_failure_evidence"
+    ]
+    assert evidence["logs_tail"]["outcome"] == "runner_error"
+    assert all(
+        evidence[key]["outcome"] == "ok"
+        for key in ("inspect_state", "events_window", "ps_exact_name")
+    )
+    assert [call[:2] for call in diagnostic_calls[1:]] == [
+        ["docker", "inspect"],
+        ["docker", "logs"],
+        ["docker", "events"],
+        ["docker", "ps"],
+    ]
+    assert len(restart_calls) == 1
+    assert not any(
+        call[:2] in (["docker", "create"], ["docker", "start"])
+        for call in diagnostic_calls
+    )
+
+
+def test_restart_failure_event_timeout_preserves_restart_error_and_runs_restart_once(
+    tmp_path,
+):
+    server, restart_calls, _diagnostic_calls = _restart_failure_server(
+        tmp_path, events_outcome="timeout"
+    )
+    with pytest.raises(DockerRuntimeError, match="restart failed safely") as captured:
+        server.restart_and_verify_marker("baseline_open")
+
+    evidence = captured.value.failure_detail["runtime_diagnostics"][
+        "restart_failure_evidence"
+    ]
+    assert evidence["events_window"]["outcome"] == "timeout"
+    assert len(restart_calls) == 1
 
 
 def test_restart_failure_skips_collection_for_invalid_container_name(tmp_path):

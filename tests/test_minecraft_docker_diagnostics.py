@@ -85,6 +85,106 @@ def test_strict_sanitizer_partially_redacts_sensitive_assignments():
     ]
 
 
+def test_strict_sanitizer_redacts_spaced_absolute_paths_and_keeps_context():
+    cases = [
+        (
+            "mount failed at /home/alice/My Project World/world",
+            "mount failed at [REDACTED]",
+        ),
+        (
+            'mount failed at "/home/alice/My Project O\'World/world"',
+            'mount failed at "[REDACTED]"',
+        ),
+        (
+            'mount failed at "/home/alice/O"Brien Project/world"',
+            'mount failed at "[REDACTED]"',
+        ),
+        (
+            "mount failed at '/home/alice/My Project O\"World/world'",
+            "mount failed at '[REDACTED]'",
+        ),
+        (
+            r"mount failed at C:\Users\alice\My Project World\world",
+            "mount failed at [REDACTED]",
+        ),
+        (
+            r"mount failed at \\server\share\My Project World\world",
+            "mount failed at [REDACTED]",
+        ),
+        (
+            r"mount failed at \\?\UNC\server\share\My Project World\world",
+            "mount failed at [REDACTED]",
+        ),
+        (
+            r"mount failed at \\?\C:\My Project World\world",
+            "mount failed at [REDACTED]",
+        ),
+        (
+            "mount failed path:/home/alice/My Project World/world",
+            "mount failed path:[REDACTED]",
+        ),
+        (
+            r"mount failed path:C:\My Project World\world",
+            "mount failed path:[REDACTED]",
+        ),
+        (
+            "mount failed //home/alice/My Project/world",
+            "mount failed [REDACTED]",
+        ),
+        (
+            'mount failed "//home/alice/My Project/world"',
+            'mount failed "[REDACTED]"',
+        ),
+    ]
+    for raw, expected in cases:
+        result = sanitize_output((raw + "\n").encode(), b"", strict=True)
+        assert result["stdout"]["safe_output"] == [expected]
+        assert result["stdout"]["redacted_line_count"] == 1
+
+
+def test_strict_sanitizer_structures_urls_and_counts_changed_lines_once():
+    result = sanitize_output(
+        b"request failed while contacting https://alice:password@example.com/private/path?token=query-secret#fragment trailing context\n"
+        b"request failed while contacting https://example.com\\private\\data\n"
+        b"request failed while contacting ftp://alice:password@example.com/private/path?token=query-secret#fragment trailing context\n"
+        b"socket unavailable at unix:///var/run/docker.sock trailing context\n"
+        b"healthy endpoint https://example.com\n",
+        b"",
+        strict=True,
+    )
+    assert result["stdout"]["safe_output"] == [
+        "request failed while contacting https://example.com[REDACTED] trailing context",
+        "request failed while contacting https://example.com[REDACTED]",
+        "request failed while contacting ftp://example.com[REDACTED] trailing context",
+        "socket unavailable at unix://[REDACTED] trailing context",
+        "healthy endpoint https://example.com",
+    ]
+    assert result["stdout"]["redacted_line_count"] == 4
+    serialized = str(result)
+    assert all(secret not in serialized for secret in (
+        "alice", "password", "private", "path", "query-secret", "fragment", "data"
+    ))
+    host_only = sanitize_output(b"healthy endpoint https://example.com\n", b"", strict=True)
+    assert host_only["stdout"]["safe_output"] == ["healthy endpoint https://example.com"]
+    assert host_only["stdout"]["redacted_line_count"] == 0
+    sensitive_host = sanitize_output(
+        b"healthy endpoint https://token.example/private trailing context\n",
+        b"",
+        strict=True,
+    )
+    assert sensitive_host["stdout"]["safe_output"] == [
+        "healthy endpoint https://token.example[REDACTED] trailing context"
+    ]
+
+
+def test_strict_sanitizer_drops_malformed_uri_like_lines():
+    result = sanitize_output(
+        b"diagnostic :// /home/alice/My Project/world\n", b"", strict=True
+    )
+    assert result["stdout"]["safe_output"] == []
+    assert result["stdout"]["redacted_line_count"] == 1
+
+
 def test_restart_evidence_schema_keeps_records_for_invalid_target():
     calls = []
 

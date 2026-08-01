@@ -22,6 +22,30 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+\S+.*$")
 _HIGH_ENTROPY_OUTPUT = re.compile(r"[A-Za-z0-9_-]{32,}")
+_URL = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)(?P<authority>[^\s/?#\\]*)"
+    r"(?P<suffix>(?:[/\\]|[?#])[^\s]*)?",
+    re.IGNORECASE,
+)
+_WINDOWS_ABSOLUTE_PREFIX = (
+    r"(?:[A-Za-z]:[\\/]|\\\\\?\\UNC[\\/]|"
+    r"\\\\\?[\\/][A-Za-z]:[\\/]|\\\\)"
+)
+_POSIX_ABSOLUTE_PREFIX = r"(?:/(?!/)|(?<!:)/{2,})"
+_QUOTED_ABSOLUTE_PATH = re.compile(
+    r"(?P<quote>[\"'])(?P<path>(?:"
+    + _POSIX_ABSOLUTE_PREFIX
+    + r"|"
+    + _WINDOWS_ABSOLUTE_PREFIX
+    + r")[\s\S]*)(?P=quote)"
+)
+_UNQUOTED_ABSOLUTE_PATH = re.compile(
+    r"(?<![\w/])(?:"
+    + _POSIX_ABSOLUTE_PREFIX
+    + r"|"
+    + _WINDOWS_ABSOLUTE_PREFIX
+    + r")[^\r\n]*"
+)
 _MINECRAFT_LOG_PREFIX = re.compile(
     r"^\[[^\]\r\n]{1,40}\]\s+\[[A-Za-z0-9 _.-]{1,40}/(INFO|WARN|ERROR|FATAL)\]:\s*(.*)$"
 )
@@ -95,34 +119,60 @@ def _sanitize_stream(
     redacted = 0
     shortened = False
     for line in lines:
+        line_changed = False
         for value in safe_replacements:
-            line = line.replace(value, "<container>")
+            replaced = line.replace(value, "<container>")
+            line_changed |= replaced != line
+            line = replaced
         if strict:
             minecraft_log = _MINECRAFT_LOG_PREFIX.fullmatch(line)
             if minecraft_log:
                 line = f"minecraft {minecraft_log.group(1)}: {minecraft_log.group(2)}"
+            before_url = line
+            line, url_replacements = _URL.subn(_redact_url, line)
+            line_changed |= line != before_url
             line, sensitive_replacements = _SENSITIVE_ASSIGNMENT.subn(
                 "[REDACTED]", line
             )
             line, bearer_replacements = _BEARER_VALUE.subn("[REDACTED]", line)
             sensitive_replacements += bearer_replacements
-            if sensitive_replacements:
-                redacted += 1
+            line_changed |= bool(sensitive_replacements)
+            line, quoted_path_replacements = _QUOTED_ABSOLUTE_PATH.subn(
+                lambda match: f"{match.group('quote')}[REDACTED]{match.group('quote')}",
+                line,
+            )
+            line_changed |= bool(quoted_path_replacements)
+            line, path_replacements = _UNQUOTED_ABSOLUTE_PATH.subn(
+                "[REDACTED]", line
+            )
+            line_changed |= bool(path_replacements)
         valid = bool(_SAFE_OUTPUT.fullmatch(line))
+        sensitive_scan_line = _URL.sub("[URL]", line)
         if strict and (
-            "://" in line or _SENSITIVE_OUTPUT.search(line) or _HIGH_ENTROPY_OUTPUT.search(line)
+            _SENSITIVE_OUTPUT.search(sensitive_scan_line)
+            or _HIGH_ENTROPY_OUTPUT.search(line)
+            or "://" in sensitive_scan_line
         ):
             valid = False
         if not valid:
             redacted += 1
             continue
-        partially_redacted = re.sub(r"\S*[/\\=]\S*", "[REDACTED]", line)
+        partially_redacted = re.sub(
+            r"\S*[/\\=]\S*",
+            lambda match: (
+                match.group(0)
+                if _URL.fullmatch(match.group(0))
+                else "[REDACTED]"
+            ),
+            line,
+        )
         if partially_redacted != line:
             line = partially_redacted
-            redacted += 1
+            line_changed = True
         if len(line) > _SAFE_LINE_CHARS:
             shortened = True
         safe_lines.append(line[:_SAFE_LINE_CHARS])
+        redacted += int(line_changed)
     retained = safe_lines[-_SAFE_LINE_LIMIT:]
     dropped = len(safe_lines) - len(retained)
     return {
@@ -133,6 +183,14 @@ def _sanitize_stream(
         "dropped_line_count": dropped,
         "truncated": pre_truncated or shortened or dropped > 0,
     }
+
+
+def _redact_url(match: re.Match[str]) -> str:
+    """Keep only a URL's scheme and authority; discard credentials and data."""
+    authority = match.group("authority")
+    host = authority.rsplit("@", 1)[-1]
+    suffix = match.group("suffix")
+    return f"{match.group('scheme')}{host}{'[REDACTED]' if suffix else ''}"
 
 
 def sanitize_output(
