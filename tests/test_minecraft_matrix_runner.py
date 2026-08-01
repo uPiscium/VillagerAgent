@@ -88,8 +88,10 @@ def test_runner_stops_on_first_failure_and_marks_remaining_skipped(tmp_path):
 
 def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
     premanifest = _premanifest(tmp_path)
+    calls = []
 
-    def executor(**_kwargs):
+    def executor(**kwargs):
+        calls.append(kwargs["run"].run_id)
         error = DockerRuntimeError(
             "runtime command failed: failed to start containers",
             diagnostics={
@@ -110,6 +112,7 @@ def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
         premanifest, tmp_path / "matrix", executor=executor, repo_root=tmp_path
     )
 
+    assert len(calls) == 1
     failed = result["runs"][0]
     assert failed["status"] == "attempt_not_started"
     assert failed["attempts"] == 0
@@ -119,7 +122,13 @@ def test_runner_persists_attempt_not_started_diagnostics_and_cleanup(tmp_path):
         "exit_code": 1,
         "safe_output": ["failed to start containers"],
     }
-    assert result["runs"][1]["status"] == "skipped"
+    remaining = result["runs"][1:]
+    assert all(row["status"] == "skipped" for row in remaining)
+    assert all(row["attempts"] == 0 for row in remaining)
+    assert result["started"] == 0
+    assert result["completed"] == 0
+    assert result["failed"] == 1
+    assert result["skipped"] == len(remaining) == 11
 
 
 def test_premanifest_cli_validates_serializes_and_run_fails_closed(tmp_path, capsys):

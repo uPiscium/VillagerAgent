@@ -159,7 +159,7 @@ class DockerServer:
         check: bool = True,
         strict_diagnostics: bool = False,
     ) -> subprocess.CompletedProcess[str]:
-        bounded_counts: tuple[int, int, bool] | None = None
+        bounded_counts: tuple[int, int, bool, bool] | None = None
         try:
             if strict_diagnostics:
                 bounded = self.diagnostic_executor(argv, timeout=timeout)
@@ -168,7 +168,6 @@ class DockerServer:
                 bounded_stderr = bounded.stderr
                 stdout_bytes = bounded.stdout_bytes
                 stderr_bytes = bounded.stderr_bytes
-                bounded_truncated = bounded.truncated
                 outcome = bounded.outcome
                 if outcome == "timeout":
                     error = subprocess.TimeoutExpired(
@@ -180,7 +179,12 @@ class DockerServer:
                     error.raw_stdout_bytes = stdout_bytes
                     error.raw_stderr_bytes = stderr_bytes
                     raise error
-                bounded_counts = (stdout_bytes, stderr_bytes, bounded_truncated)
+                bounded_counts = (
+                    stdout_bytes,
+                    stderr_bytes,
+                    bounded.stdout_truncated,
+                    bounded.stderr_truncated,
+                )
                 result = subprocess.CompletedProcess(
                     argv, returncode, bounded_stdout, bounded_stderr
                 )
@@ -219,10 +223,10 @@ class DockerServer:
             stderr.decode("utf-8", errors="replace"),
         )
         if check and result.returncode != 0:
-            stdout_bytes, stderr_bytes, pre_truncated = (
+            stdout_bytes, stderr_bytes, stdout_truncated, stderr_truncated = (
                 bounded_counts
                 if bounded_counts is not None
-                else (None, None, False)
+                else (None, None, False, False)
             )
             output = _sanitize_output(
                 stdout,
@@ -230,12 +234,16 @@ class DockerServer:
                 strict=strict_diagnostics,
                 stdout_bytes=stdout_bytes,
                 stderr_bytes=stderr_bytes,
-                pre_truncated=pre_truncated,
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=stderr_truncated,
                 safe_replacements=(self.name,) if is_valid_container_name(self.name) else (),
             )
-            safe_output = output["safe_output"]
+            safe_output = (
+                output["stderr"]["safe_output"]
+                or output["stdout"]["safe_output"]
+            )
             candidate = safe_output[-1] if safe_output else ""
-            safe = candidate if _SAFE_OUTPUT.fullmatch(candidate) and not any(marker in candidate for marker in ("/", "\\", "=")) else "command rejected"
+            safe = candidate if _SAFE_OUTPUT.fullmatch(candidate) else "command rejected"
             raise DockerRuntimeError(
                 f"runtime command failed: {safe}",
                 diagnostics={

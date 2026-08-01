@@ -87,9 +87,11 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 
 ## Nested restart failure diagnostics
 
-- `runtime_diagnostics.restart_failure_evidence` has stable `schema_version: 1`.
+- `runtime_diagnostics.restart_failure_evidence` uses `schema_version: 2` for separated streams and structured state.
 - It always contains `inspect_state`, `logs_tail`, `events_window`, and `ps_exact_name` records, plus `collection_complete` and `target_valid`.
-- Each command record contains `outcome`, `exit_code`, `safe_output`, `raw_stdout_bytes`, `raw_stderr_bytes`, `retained_safe_lines`, `redacted_line_count`, `dropped_line_count`, and `truncated`. Outcomes include `ok`, `nonzero_exit`, `timeout`, `runner_error`, `not_attempted`, and `collector_error`.
+- Each command record contains `outcome`, `exit_code`, and separate `stdout` and `stderr` records. Each stream record contains `safe_output`, `raw_bytes`, `retained_safe_lines`, `redacted_line_count`, `dropped_line_count`, and `truncated`. Sensitive tokens inside otherwise useful lines are replaced with `[REDACTED]` instead of discarding the line.
+- `inspect_state.state` is an allowlisted structured projection containing lifecycle flags, exit code, error, `started_at`, `finished_at`, restart count, and bounded health status, failing streak, and health-log records. Outcomes also include `invalid_output` when inspect output cannot be parsed.
+- `diagnostics_implementation_sha256` identifies the diagnostic component in failure artifacts. The approved composite runtime identity also hashes this module, so diagnostic changes require a newly approved premanifest.
 - Invalid targets, exhausted collection budgets, and collector failures retain the record with an explicit non-attempted/error outcome; keys are never omitted. Output is bounded and strictly sanitized before it is placed in the public failure detail.
 
 ## `events.jsonl`

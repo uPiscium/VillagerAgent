@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -13,6 +16,9 @@ _CONTAINER_NAME = re.compile(r"va-mc-[0-9a-f]{32}\Z")
 _SENSITIVE_OUTPUT = re.compile(
     r"(?:authorization|bearer|token|password|passwd|secret|api[ _-]?key|credential|cookie|session)",
     re.IGNORECASE,
+)
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)\b(?:token|password|passwd|secret|api[ _-]?key|credential|cookie|session)\s*[:=].*$"
 )
 _HIGH_ENTROPY_OUTPUT = re.compile(r"[A-Za-z0-9_-]{32,}")
 _MINECRAFT_LOG_PREFIX = re.compile(
@@ -24,6 +30,7 @@ _DIAGNOSTIC_COLLECTION_TIMEOUT_SECONDS = 10.0
 _DIAGNOSTIC_LOG_TAIL = 200
 _SAFE_LINE_LIMIT = 5
 _SAFE_LINE_CHARS = 160
+_HEALTH_LOG_LIMIT = 5
 _RESTART_EVIDENCE_KEYS = (
     "inspect_state",
     "logs_tail",
@@ -39,8 +46,14 @@ class DiagnosticCommandResult:
     stderr: bytes
     stdout_bytes: int
     stderr_bytes: int
-    truncated: bool
+    stdout_truncated: bool
+    stderr_truncated: bool
     outcome: str
+
+    @property
+    def truncated(self) -> bool:
+        return self.stdout_truncated or self.stderr_truncated
+
 
 def output_bytes(value: str | bytes | None) -> bytes:
     if value is None:
@@ -50,23 +63,16 @@ def output_bytes(value: str | bytes | None) -> bytes:
     return value.encode("utf-8", errors="replace")
 
 
-def sanitize_output(
-    stdout: bytes,
-    stderr: bytes,
+def _sanitize_stream(
+    value: bytes,
     *,
     strict: bool,
-    stdout_bytes: int | None = None,
-    stderr_bytes: int | None = None,
+    raw_bytes: int | None = None,
     pre_truncated: bool = False,
     safe_replacements: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    raw_stdout_bytes = len(stdout) if stdout_bytes is None else stdout_bytes
-    raw_stderr_bytes = len(stderr) if stderr_bytes is None else stderr_bytes
-    selected = (
-        b"\n".join(stream.rstrip(b"\r\n") for stream in (stdout, stderr) if stream)
-        if strict else (stderr if stderr else stdout)
-    )
-    lines = selected.decode("utf-8", errors="replace").strip().splitlines()
+    total_bytes = len(value) if raw_bytes is None else raw_bytes
+    lines = value.decode("utf-8", errors="replace").strip().splitlines()
     safe_lines: list[str] = []
     redacted = 0
     shortened = False
@@ -77,9 +83,12 @@ def sanitize_output(
             minecraft_log = _MINECRAFT_LOG_PREFIX.fullmatch(line)
             if minecraft_log:
                 line = f"minecraft {minecraft_log.group(1)}: {minecraft_log.group(2)}"
-        valid = bool(_SAFE_OUTPUT.fullmatch(line)) and not any(
-            marker in line for marker in ("/", "\\", "=")
-        )
+            line, sensitive_replacements = _SENSITIVE_ASSIGNMENT.subn(
+                "[REDACTED]", line
+            )
+            if sensitive_replacements:
+                redacted += 1
+        valid = bool(_SAFE_OUTPUT.fullmatch(line))
         if strict and (
             "://" in line or _SENSITIVE_OUTPUT.search(line) or _HIGH_ENTROPY_OUTPUT.search(line)
         ):
@@ -87,6 +96,10 @@ def sanitize_output(
         if not valid:
             redacted += 1
             continue
+        partially_redacted = re.sub(r"\S*[/\\=]\S*", "[REDACTED]", line)
+        if partially_redacted != line:
+            line = partially_redacted
+            redacted += 1
         if len(line) > _SAFE_LINE_CHARS:
             shortened = True
         safe_lines.append(line[:_SAFE_LINE_CHARS])
@@ -94,13 +107,56 @@ def sanitize_output(
     dropped = len(safe_lines) - len(retained)
     return {
         "safe_output": retained,
-        "raw_stdout_bytes": raw_stdout_bytes,
-        "raw_stderr_bytes": raw_stderr_bytes,
+        "raw_bytes": total_bytes,
         "retained_safe_lines": len(retained),
         "redacted_line_count": redacted,
         "dropped_line_count": dropped,
         "truncated": pre_truncated or shortened or dropped > 0,
     }
+
+
+def sanitize_output(
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    strict: bool,
+    stdout_bytes: int | None = None,
+    stderr_bytes: int | None = None,
+    pre_truncated: bool = False,
+    stdout_truncated: bool | None = None,
+    stderr_truncated: bool | None = None,
+    safe_replacements: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Sanitize command streams independently so their provenance is retained."""
+    return {
+        "stdout": _sanitize_stream(
+            stdout,
+            strict=strict,
+            raw_bytes=stdout_bytes,
+            pre_truncated=(
+                pre_truncated if stdout_truncated is None else stdout_truncated
+            ),
+            safe_replacements=safe_replacements,
+        ),
+        "stderr": _sanitize_stream(
+            stderr,
+            strict=strict,
+            raw_bytes=stderr_bytes,
+            pre_truncated=(
+                pre_truncated if stderr_truncated is None else stderr_truncated
+            ),
+            safe_replacements=safe_replacements,
+        ),
+    }
+
+
+def diagnostics_implementation_sha256() -> str:
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def _sanitized_text(value: Any) -> str:
+    lines = _sanitize_stream(output_bytes(value), strict=True)["safe_output"]
+    return lines[-1] if lines else ""
 
 
 def run_bounded_command(
@@ -152,11 +208,14 @@ def run_bounded_command(
                 buffers[name].clear()
             else:
                 del buffers[name][:newline + 1]
-    truncated = (
-        outcome == "timeout"
-        or any(thread.is_alive() for thread in threads)
-        or any(totals[name] > len(buffers[name]) for name in ("stdout", "stderr"))
-    )
+    stream_truncated = {
+        name: (
+            outcome == "timeout"
+            or threads[index].is_alive()
+            or totals[name] > len(buffers[name])
+        )
+        for index, name in enumerate(("stdout", "stderr"))
+    }
     if outcome == "ok" and returncode != 0:
         outcome = "nonzero_exit"
     return DiagnosticCommandResult(
@@ -165,7 +224,8 @@ def run_bounded_command(
         stderr=bytes(buffers["stderr"]),
         stdout_bytes=totals["stdout"],
         stderr_bytes=totals["stderr"],
-        truncated=truncated,
+        stdout_truncated=stream_truncated["stdout"],
+        stderr_truncated=stream_truncated["stderr"],
         outcome=outcome,
     )
 
@@ -178,7 +238,9 @@ class BoundedDiagnosticExecutor:
 
     def __call__(self, argv: list[str], *, timeout: float) -> DiagnosticCommandResult:
         if timeout <= 0:
-            return DiagnosticCommandResult(None, b"", b"", 0, 0, True, "not_attempted")
+            return DiagnosticCommandResult(
+                None, b"", b"", 0, 0, True, True, "not_attempted"
+            )
         if self.runner is None:
             cleanup_reserve = min(0.5, timeout / 2)
             return run_bounded_command(
@@ -190,9 +252,13 @@ class BoundedDiagnosticExecutor:
             result = self.runner(argv, check=False, capture_output=True, text=False, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             stdout, stderr = output_bytes(exc.stdout), output_bytes(exc.stderr)
-            return DiagnosticCommandResult(None, stdout, stderr, len(stdout), len(stderr), True, "timeout")
+            return DiagnosticCommandResult(
+                None, stdout, stderr, len(stdout), len(stderr), True, True, "timeout"
+            )
         except (OSError, subprocess.SubprocessError):
-            return DiagnosticCommandResult(None, b"", b"", 0, 0, False, "runner_error")
+            return DiagnosticCommandResult(
+                None, b"", b"", 0, 0, False, False, "runner_error"
+            )
         stdout, stderr = output_bytes(result.stdout), output_bytes(result.stderr)
         return DiagnosticCommandResult(
             returncode=result.returncode,
@@ -200,7 +266,8 @@ class BoundedDiagnosticExecutor:
             stderr=stderr,
             stdout_bytes=len(stdout),
             stderr_bytes=len(stderr),
-            truncated=False,
+            stdout_truncated=False,
+            stderr_truncated=False,
             outcome="ok" if result.returncode == 0 else "nonzero_exit",
         )
 
@@ -222,10 +289,87 @@ def diagnostic_record(
             strict=True,
             stdout_bytes=result.stdout_bytes,
             stderr_bytes=result.stderr_bytes,
-            pre_truncated=result.truncated,
+            stdout_truncated=result.stdout_truncated,
+            stderr_truncated=result.stderr_truncated,
             safe_replacements=(container_name,),
         ),
     }
+
+
+def _inspect_state(raw: bytes) -> dict[str, Any]:
+    value = json.loads(raw)
+    if not isinstance(value, dict) or not isinstance(value.get("State"), dict):
+        raise ValueError("Docker inspect state is not an object")
+    state = value["State"]
+    health = state.get("Health")
+    health_record = None
+    if health is not None:
+        if not isinstance(health, dict):
+            raise ValueError("Docker health state is not an object")
+        raw_log = health.get("Log", [])
+        if not isinstance(raw_log, list):
+            raise ValueError("Docker health log is not an array")
+        log = []
+        for item in raw_log[-_HEALTH_LOG_LIMIT:]:
+            if not isinstance(item, dict):
+                raise ValueError("Docker health log entry is not an object")
+            output = output_bytes(item.get("Output"))
+            log.append({
+                "start": str(item.get("Start", "")),
+                "end": str(item.get("End", "")),
+                "exit_code": int(item.get("ExitCode", 0)),
+                "output": _sanitize_stream(output, strict=True),
+            })
+        health_record = {
+            "status": str(health.get("Status", "")),
+            "failing_streak": int(health.get("FailingStreak", 0)),
+            "log": log,
+        }
+    return {
+        "status": str(state.get("Status", "")),
+        "running": bool(state.get("Running", False)),
+        "paused": bool(state.get("Paused", False)),
+        "restarting": bool(state.get("Restarting", False)),
+        "oom_killed": bool(state.get("OOMKilled", False)),
+        "dead": bool(state.get("Dead", False)),
+        "exit_code": int(state.get("ExitCode", 0)),
+        "error": _sanitized_text(state.get("Error", "")),
+        "started_at": str(state.get("StartedAt", "")),
+        "finished_at": str(state.get("FinishedAt", "")),
+        "restart_count": int(value.get("RestartCount", 0)),
+        "health": health_record,
+    }
+
+
+def inspect_state_record(
+    executor: Callable[..., DiagnosticCommandResult],
+    argv: list[str],
+    *,
+    timeout: float,
+    container_name: str,
+) -> dict[str, Any]:
+    result = executor(argv, timeout=timeout)
+    record = {
+        "outcome": result.outcome,
+        "exit_code": result.returncode,
+        **sanitize_output(
+            b"",
+            result.stderr,
+            strict=True,
+            stdout_bytes=result.stdout_bytes,
+            stderr_bytes=result.stderr_bytes,
+            stdout_truncated=result.stdout_truncated,
+            stderr_truncated=result.stderr_truncated,
+            safe_replacements=(container_name,),
+        ),
+        "state": None,
+    }
+    if result.outcome == "ok":
+        try:
+            record["state"] = _inspect_state(result.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            record["outcome"] = "invalid_output"
+    return record
 
 
 def is_valid_container_name(container_name: str) -> bool:
@@ -243,12 +387,15 @@ def empty_diagnostic_record(outcome: str) -> dict[str, Any]:
 def empty_restart_failure_evidence(
     *, target_valid: bool, outcome: str
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
+    evidence = {
+        "schema_version": 2,
+        "diagnostics_implementation_sha256": diagnostics_implementation_sha256(),
         "collection_complete": False,
         "target_valid": target_valid,
         **{key: empty_diagnostic_record(outcome) for key in _RESTART_EVIDENCE_KEYS},
     }
+    evidence["inspect_state"]["state"] = None
+    return evidence
 
 
 def collect_restart_failure_evidence(
@@ -270,7 +417,7 @@ def collect_restart_failure_evidence(
                 "--type",
                 "container",
                 "--format",
-                "status {{.State.Status}} running {{.State.Running}} paused {{.State.Paused}} restarting {{.State.Restarting}} oom_killed {{.State.OOMKilled}} dead {{.State.Dead}} exit_code {{.State.ExitCode}} restart_count {{.RestartCount}} health {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{{println}}state_error {{.State.Error}}",
+                '{"State":{{json .State}},"RestartCount":{{.RestartCount}}}',
                 container_name,
             ],
         ),
@@ -314,9 +461,9 @@ def collect_restart_failure_evidence(
         if not valid or remaining <= 0:
             evidence[key] = empty_diagnostic_record("not_attempted")
         else:
-            evidence[key] = diagnostic_record(
-                executor,
-                argv,
+            record = inspect_state_record if key == "inspect_state" else diagnostic_record
+            evidence[key] = record(
+                executor, argv,
                 timeout=min(_DIAGNOSTIC_COMMAND_TIMEOUT_SECONDS, remaining),
                 container_name=container_name,
             )

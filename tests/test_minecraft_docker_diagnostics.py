@@ -1,9 +1,11 @@
+import json
 import subprocess
 import sys
 
 from benchmarks.minecraft.docker_diagnostics import (
     DIAGNOSTIC_STREAM_BYTES,
     BoundedDiagnosticExecutor,
+    DiagnosticCommandResult,
     collect_restart_failure_evidence,
     run_bounded_command,
     sanitize_output,
@@ -18,6 +20,8 @@ def test_bounded_capture_accounts_for_output_without_retaining_it():
     assert result.stdout == b""
     assert result.stdout_bytes == DIAGNOSTIC_STREAM_BYTES * 2
     assert result.truncated is True
+    assert result.stdout_truncated is True
+    assert result.stderr_truncated is False
 
 
 def test_strict_sanitizer_redacts_secrets_and_paths():
@@ -26,8 +30,12 @@ def test_strict_sanitizer_redacts_secrets_and_paths():
         b"",
         strict=True,
     )
-    assert result["safe_output"] == ["safe diagnostic"]
-    assert result["redacted_line_count"] == 2
+    assert result["stdout"]["safe_output"] == [
+        "safe diagnostic",
+        "internal [REDACTED]",
+    ]
+    assert result["stdout"]["redacted_line_count"] == 2
+    assert result["stderr"]["safe_output"] == []
 
 
 def test_strict_sanitizer_keeps_minecraft_errors_and_drops_high_entropy_values():
@@ -40,9 +48,31 @@ def test_strict_sanitizer_keeps_minecraft_errors_and_drops_high_entropy_values()
         strict=True,
     )
 
-    assert result["safe_output"] == ["minecraft ERROR: failed to restart cleanly"]
-    assert result["retained_safe_lines"] == 1
-    assert result["redacted_line_count"] == 1
+    assert result["stdout"]["safe_output"] == [
+        "minecraft ERROR: failed to restart cleanly"
+    ]
+    assert result["stdout"]["retained_safe_lines"] == 1
+    assert result["stdout"]["redacted_line_count"] == 1
+
+
+def test_strict_sanitizer_partially_redacts_sensitive_assignments():
+    result = sanitize_output(
+        b"request failed while token=hidden was refreshed\n",
+        b"",
+        strict=True,
+    )
+
+    assert result["stdout"]["safe_output"] == [
+        "request failed while [REDACTED]"
+    ]
+    assert result["stdout"]["redacted_line_count"] == 1
+
+    quoted = sanitize_output(
+        b'login failed: password="correct horse battery staple"\n',
+        b"",
+        strict=True,
+    )
+    assert quoted["stdout"]["safe_output"] == ["login failed: [REDACTED]"]
 
 
 def test_restart_evidence_schema_keeps_records_for_invalid_target():
@@ -55,6 +85,7 @@ def test_restart_evidence_schema_keeps_records_for_invalid_target():
     evidence = collect_restart_failure_evidence("unsafe.*", 1, executor)
     assert set(evidence) == {
         "schema_version", "collection_complete", "target_valid",
+        "diagnostics_implementation_sha256",
         "inspect_state", "logs_tail", "events_window", "ps_exact_name",
     }
     assert all(evidence[key]["outcome"] == "not_attempted" for key in (
@@ -68,6 +99,13 @@ def test_custom_diagnostic_executor_is_the_only_runner_used():
 
     def runner(argv, **kwargs):
         calls.append(argv)
+        if argv[:4] == ["docker", "inspect", "--type", "container"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                '{"State":{"Status":"exited"},"RestartCount":0}\n',
+                "",
+            )
         return subprocess.CompletedProcess(argv, 0, "safe\n", "")
 
     evidence = collect_restart_failure_evidence(
@@ -75,3 +113,44 @@ def test_custom_diagnostic_executor_is_the_only_runner_used():
     )
     assert evidence["collection_complete"] is True
     assert len(calls) == 4
+
+
+def test_inspect_state_is_structured_and_health_output_is_partially_redacted():
+    container = "va-mc-" + "a" * 32
+    state = {
+        "State": {
+            "Status": "exited", "Running": False, "Paused": False,
+            "Restarting": False, "OOMKilled": False, "Dead": False,
+            "ExitCode": 1, "Error": "mount failed at /data/world",
+            "StartedAt": "2026-08-01T01:00:00Z",
+            "FinishedAt": "2026-08-01T01:01:00Z",
+            "Health": {
+                "Status": "unhealthy", "FailingStreak": 3,
+                "Log": [{
+                    "Start": "2026-08-01T01:00:30Z",
+                    "End": "2026-08-01T01:00:31Z",
+                    "ExitCode": 1,
+                    "Output": "cannot open /data/server.properties\n",
+                }],
+            },
+        },
+        "RestartCount": 2,
+    }
+
+    def executor(argv, *, timeout):
+        del timeout
+        output = json.dumps(state).encode() if argv[:2] == ["docker", "inspect"] else b""
+        return DiagnosticCommandResult(
+            0, output, b"", len(output), 0, False, False, "ok"
+        )
+
+    evidence = collect_restart_failure_evidence(container, 1, executor)
+    observed = evidence["inspect_state"]["state"]
+    assert observed["started_at"] == "2026-08-01T01:00:00Z"
+    assert observed["finished_at"] == "2026-08-01T01:01:00Z"
+    assert observed["restart_count"] == 2
+    assert observed["error"] == "mount failed at [REDACTED]"
+    assert observed["health"]["failing_streak"] == 3
+    assert observed["health"]["log"][0]["output"]["safe_output"] == [
+        "cannot open [REDACTED]"
+    ]

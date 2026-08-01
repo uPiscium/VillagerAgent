@@ -86,6 +86,9 @@ def test_runtime_digest_is_deterministic_composite():
     assert first != runtime_digest("2" * 64)
     assert len(first) == 64
     int(first, 16)
+    assert runtime_digest(SERVER_JAR_SHA256) != (
+        "63e59662fd8d8b79d99b9910225455af4addfe5e80d5a65023cbaa8ca37c73d0"
+    )
     assert pinned_runtime_identity() == {
         "name": "minecraft-1.19.2-local",
         "image": PINNED_IMAGE,
@@ -200,16 +203,21 @@ def test_runtime_error_retains_sanitized_structured_command_diagnostics(tmp_path
     assert captured.value.failure_detail["runtime_diagnostics"] == {
         "operation": "start",
         "exit_code": 1,
-        "safe_output": [
-            "port allocation failed",
-            "failed to start containers: safe-name",
-        ],
-        "raw_stdout_bytes": 0,
-        "raw_stderr_bytes": len(stderr.encode("utf-8")),
-        "retained_safe_lines": 2,
-        "redacted_line_count": 1,
-        "dropped_line_count": 0,
-        "truncated": False,
+        "stdout": {
+            "safe_output": [], "raw_bytes": 0, "retained_safe_lines": 0,
+            "redacted_line_count": 0, "dropped_line_count": 0,
+            "truncated": False,
+        },
+        "stderr": {
+            "safe_output": [
+                "internal path [REDACTED]",
+                "port allocation failed",
+                "failed to start containers: safe-name",
+            ],
+            "raw_bytes": len(stderr.encode("utf-8")), "retained_safe_lines": 3,
+            "redacted_line_count": 1, "dropped_line_count": 0,
+            "truncated": False,
+        },
     }
 
 
@@ -223,12 +231,12 @@ def test_runtime_error_distinguishes_empty_output_from_fully_redacted_output(tmp
         server._run(["docker", "restart", "safe-name"])
 
     diagnostics = captured.value.failure_detail["runtime_diagnostics"]
-    assert diagnostics["safe_output"] == []
-    assert diagnostics["raw_stderr_bytes"] > 0
-    assert diagnostics["retained_safe_lines"] == 0
-    assert diagnostics["redacted_line_count"] == 1
-    assert diagnostics["dropped_line_count"] == 0
-    assert diagnostics["truncated"] is False
+    assert diagnostics["stderr"]["safe_output"] == ["internal [REDACTED]"]
+    assert diagnostics["stderr"]["raw_bytes"] > 0
+    assert diagnostics["stderr"]["retained_safe_lines"] == 1
+    assert diagnostics["stderr"]["redacted_line_count"] == 1
+    assert diagnostics["stderr"]["dropped_line_count"] == 0
+    assert diagnostics["stderr"]["truncated"] is False
 
 
 def test_strict_timeout_diagnostics_count_and_sanitize_partial_streams(tmp_path):
@@ -248,11 +256,12 @@ def test_strict_timeout_diagnostics_count_and_sanitize_partial_streams(tmp_path)
         )
 
     diagnostics = captured.value.failure_detail["runtime_diagnostics"]
-    assert diagnostics["raw_stdout_bytes"] == len(b"safe stdout evidence\n")
-    assert diagnostics["raw_stderr_bytes"] == len(b"token: hidden\n")
-    assert diagnostics["safe_output"] == ["safe stdout evidence"]
-    assert diagnostics["redacted_line_count"] == 1
-    assert diagnostics["truncated"] is True
+    assert diagnostics["stdout"]["raw_bytes"] == len(b"safe stdout evidence\n")
+    assert diagnostics["stderr"]["raw_bytes"] == len(b"token: hidden\n")
+    assert diagnostics["stdout"]["safe_output"] == ["safe stdout evidence"]
+    assert diagnostics["stderr"]["safe_output"] == ["[REDACTED]"]
+    assert diagnostics["stderr"]["redacted_line_count"] == 1
+    assert diagnostics["stdout"]["truncated"] is True
 
 
 def test_strict_restart_diagnostics_replace_validated_container_identity(tmp_path):
@@ -270,7 +279,9 @@ def test_strict_restart_diagnostics_replace_validated_container_identity(tmp_pat
         )
 
     diagnostics = captured.value.failure_detail["runtime_diagnostics"]
-    assert diagnostics["safe_output"] == ["restart failed for <container>"]
+    assert diagnostics["stderr"]["safe_output"] == [
+        "restart failed for <container>"
+    ]
     assert server.name not in json.dumps(diagnostics)
 
 
@@ -283,11 +294,27 @@ def test_restart_failure_collects_bounded_sanitized_evidence_before_cleanup(tmp_
                     argv, 1, "", "daemon socket /var/run/docker.sock\n"
                 )
             if argv[:4] == ["docker", "inspect", "--type", "container"]:
+                state = {
+                    "State": {
+                        "Status": "exited", "Running": False, "Paused": False,
+                        "Restarting": False, "OOMKilled": False, "Dead": False,
+                        "ExitCode": 1, "Error": "",
+                        "StartedAt": "2026-08-01T01:00:00Z",
+                        "FinishedAt": "2026-08-01T01:01:00Z",
+                        "Health": {
+                            "Status": "unhealthy", "FailingStreak": 4,
+                            "Log": [{
+                                "Start": "2026-08-01T01:00:30Z",
+                                "End": "2026-08-01T01:00:31Z",
+                                "ExitCode": 1,
+                                "Output": "failed mount /data/world\n",
+                            }],
+                        },
+                    },
+                    "RestartCount": 0,
+                }
                 return subprocess.CompletedProcess(
-                    argv,
-                    0,
-                    "status exited running false paused false restarting false oom_killed false dead false exit_code 1 restart_count 0 health none\n",
-                    "",
+                    argv, 0, json.dumps(state), "",
                 )
             if argv[:2] == ["docker", "logs"]:
                 lines = [f"safe diagnostic line {index}" for index in range(7)]
@@ -321,41 +348,45 @@ def test_restart_failure_collects_bounded_sanitized_evidence_before_cleanup(tmp_
 
     diagnostics = captured.value.failure_detail["runtime_diagnostics"]
     assert diagnostics["operation"] == "restart"
-    assert diagnostics["raw_stderr_bytes"] > 0
-    assert diagnostics["redacted_line_count"] == 1
+    assert diagnostics["stderr"]["raw_bytes"] > 0
+    assert diagnostics["stderr"]["safe_output"] == [
+        "daemon socket [REDACTED]"
+    ]
+    assert diagnostics["stderr"]["redacted_line_count"] == 1
     evidence = diagnostics["restart_failure_evidence"]
-    assert evidence["schema_version"] == 1
+    assert evidence["schema_version"] == 2
     assert evidence["collection_complete"] is True
     assert evidence["target_valid"] is True
     assert evidence["logs_tail"] == {
         "outcome": "ok",
         "exit_code": 0,
-        "safe_output": [
-            "safe diagnostic line 2",
-            "safe diagnostic line 3",
-            "safe diagnostic line 4",
-            "safe diagnostic line 5",
-            "safe diagnostic line 6",
-        ],
-        "raw_stdout_bytes": len(
-            (
-                "\n".join(
-                    [f"safe diagnostic line {index}" for index in range(7)]
-                    + [
-                        "Authorization: Bearer hidden",
-                        "internal /private/path",
-                        "0123456789abcdef0123456789abcdef",
-                    ]
-                )
-                + "\n"
-            ).encode("utf-8")
-        ),
-        "raw_stderr_bytes": 0,
-        "retained_safe_lines": 5,
-        "redacted_line_count": 3,
-        "dropped_line_count": 2,
-        "truncated": True,
+        "stdout": {
+            "safe_output": [
+                "safe diagnostic line 3", "safe diagnostic line 4",
+                "safe diagnostic line 5", "safe diagnostic line 6",
+                "internal [REDACTED]",
+            ],
+            "raw_bytes": len(("\n".join(
+                [f"safe diagnostic line {index}" for index in range(7)] + [
+                    "Authorization: Bearer hidden", "internal /private/path",
+                    "0123456789abcdef0123456789abcdef",
+                ]) + "\n").encode("utf-8")),
+            "retained_safe_lines": 5, "redacted_line_count": 3,
+            "dropped_line_count": 3, "truncated": True,
+        },
+        "stderr": {
+            "safe_output": [], "raw_bytes": 0, "retained_safe_lines": 0,
+            "redacted_line_count": 0, "dropped_line_count": 0,
+            "truncated": False,
+        },
     }
+    state = evidence["inspect_state"]["state"]
+    assert state["started_at"] == "2026-08-01T01:00:00Z"
+    assert state["finished_at"] == "2026-08-01T01:01:00Z"
+    assert state["health"]["failing_streak"] == 4
+    assert state["health"]["log"][0]["output"]["safe_output"] == [
+        "failed mount [REDACTED]"
+    ]
     serialized = json.dumps(evidence).lower()
     assert "bearer hidden" not in serialized
     assert "/private/path" not in serialized
@@ -424,11 +455,12 @@ def test_restart_failure_skips_collection_for_invalid_container_name(tmp_path):
     evidence = captured.value.failure_detail["runtime_diagnostics"][
         "restart_failure_evidence"
     ]
-    assert evidence["schema_version"] == 1
+    assert evidence["schema_version"] == 2
     assert evidence["collection_complete"] is False
     assert evidence["target_valid"] is False
     assert set(evidence) == {
         "schema_version", "collection_complete", "target_valid",
+        "diagnostics_implementation_sha256",
         "inspect_state", "logs_tail", "events_window", "ps_exact_name",
     }
     assert all(evidence[key]["outcome"] == "not_attempted" for key in (
