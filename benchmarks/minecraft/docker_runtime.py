@@ -10,7 +10,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -43,6 +42,15 @@ from benchmarks.minecraft.world_snapshot import (
 )
 from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
 from benchmarks.minecraft.position_contract import PositionConvention
+from benchmarks.minecraft.docker_diagnostics import (
+    BoundedDiagnosticExecutor,
+    DiagnosticCommandResult,
+    collect_restart_failure_evidence,
+    empty_restart_failure_evidence,
+    is_valid_container_name,
+    output_bytes as _output_bytes,
+    sanitize_output as _sanitize_output,
+)
 
 
 ADAPTER_ID = "minecraft-1.19.2-local"
@@ -55,6 +63,7 @@ SERVER_JAR_SHA1 = "f69c284232d7c7580bd89a5a4931c3581eae1378"
 SERVER_JAR_SHA256 = "b26727069ef5f61c704add9a378ac90e3d271fd7876c0bd3dcfbe9fd0bec4d96"
 DEFAULT_SOURCE_ARCHIVE = Path("result/minecraft/issue_243_assets/meta-move-world-v1.tar.gz")
 PROBE_PATH = Path(__file__).with_name("docker_probe.js")
+DOCKER_DIAGNOSTICS_PATH = Path(__file__).with_name("docker_diagnostics.py")
 PACKAGE_LOCK_PATH = Path(__file__).resolve().parents[2] / "package-lock.json"
 SERVER_JAR_PATH = Path("minecraft_server.1.19.2.jar")
 _SAFE_OUTPUT = re.compile(r"[\x20-\x7e]{1,300}\Z")
@@ -109,6 +118,7 @@ def _sha(path: Path, algorithm: str = "sha256") -> str:
 def runtime_digest(server_jar_sha256: str) -> str:
     components = {
         "adapter": _sha(Path(__file__)),
+        "diagnostics": _sha(DOCKER_DIAGNOSTICS_PATH),
         "image": PINNED_IMAGE_DIGEST,
         "image_source_revision": IMAGE_SOURCE_REVISION,
         "node_dependencies": _sha(PACKAGE_LOCK_PATH),
@@ -129,9 +139,11 @@ def pinned_runtime_identity() -> dict[str, str]:
 
 
 class DockerServer:
-    def __init__(self, data_root: Path, *, runner: Runner = subprocess.run, memory: str = "2G"):
+    def __init__(self, data_root: Path, *, runner: Runner | None = None, memory: str = "2G", diagnostic_executor: Callable[..., DiagnosticCommandResult] | None = None, diagnostic_collector: Callable[..., dict[str, Any]] | None = None):
         self.data_root = data_root
-        self.runner = runner
+        self.runner = runner or subprocess.run
+        self.diagnostic_executor = diagnostic_executor or BoundedDiagnosticExecutor(runner)
+        self.diagnostic_collector = diagnostic_collector or collect_restart_failure_evidence
         self.memory = memory
         self.name = f"va-mc-{uuid.uuid4().hex}"
         self.image_verified = False
@@ -139,25 +151,89 @@ class DockerServer:
         self.running = False
         self.port: int | None = None
 
-    def _run(self, argv: list[str], *, timeout: float = 30, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        argv: list[str],
+        *,
+        timeout: float = 30,
+        check: bool = True,
+        strict_diagnostics: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        bounded_counts: tuple[int, int, bool] | None = None
         try:
-            result = self.runner(argv, check=False, capture_output=True, text=True, timeout=timeout)
+            if strict_diagnostics:
+                bounded = self.diagnostic_executor(argv, timeout=timeout)
+                returncode = bounded.returncode
+                bounded_stdout = bounded.stdout
+                bounded_stderr = bounded.stderr
+                stdout_bytes = bounded.stdout_bytes
+                stderr_bytes = bounded.stderr_bytes
+                bounded_truncated = bounded.truncated
+                outcome = bounded.outcome
+                if outcome == "timeout":
+                    error = subprocess.TimeoutExpired(
+                        argv,
+                        timeout,
+                        output=bounded_stdout,
+                        stderr=bounded_stderr,
+                    )
+                    error.raw_stdout_bytes = stdout_bytes
+                    error.raw_stderr_bytes = stderr_bytes
+                    raise error
+                bounded_counts = (stdout_bytes, stderr_bytes, bounded_truncated)
+                result = subprocess.CompletedProcess(
+                    argv, returncode, bounded_stdout, bounded_stderr
+                )
+            else:
+                result = self.runner(
+                    argv,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
         except (OSError, subprocess.SubprocessError) as exc:
+            output = _sanitize_output(
+                _output_bytes(getattr(exc, "stdout", None)),
+                _output_bytes(getattr(exc, "stderr", None)),
+                strict=strict_diagnostics,
+                stdout_bytes=getattr(exc, "raw_stdout_bytes", None),
+                stderr_bytes=getattr(exc, "raw_stderr_bytes", None),
+                pre_truncated=isinstance(exc, subprocess.TimeoutExpired),
+                safe_replacements=(self.name,) if is_valid_container_name(self.name) else (),
+            )
             raise DockerRuntimeError(
                 f"runtime command failed: {type(exc).__name__}",
                 diagnostics={
                     "operation": argv[1] if len(argv) > 1 else "unknown",
                     "error_type": type(exc).__name__,
+                    **output,
                 },
             ) from exc
+        stdout = _output_bytes(result.stdout)
+        stderr = _output_bytes(result.stderr)
+        normalized = subprocess.CompletedProcess(
+            argv,
+            result.returncode,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
         if check and result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip().splitlines()
-            safe_output = [
-                line[:160]
-                for line in detail[-5:]
-                if _SAFE_OUTPUT.fullmatch(line)
-                and not any(marker in line for marker in ("/", "\\", "="))
-            ]
+            stdout_bytes, stderr_bytes, pre_truncated = (
+                bounded_counts
+                if bounded_counts is not None
+                else (None, None, False)
+            )
+            output = _sanitize_output(
+                stdout,
+                stderr,
+                strict=strict_diagnostics,
+                stdout_bytes=stdout_bytes,
+                stderr_bytes=stderr_bytes,
+                pre_truncated=pre_truncated,
+                safe_replacements=(self.name,) if is_valid_container_name(self.name) else (),
+            )
+            safe_output = output["safe_output"]
             candidate = safe_output[-1] if safe_output else ""
             safe = candidate if _SAFE_OUTPUT.fullmatch(candidate) and not any(marker in candidate for marker in ("/", "\\", "=")) else "command rejected"
             raise DockerRuntimeError(
@@ -165,10 +241,10 @@ class DockerServer:
                 diagnostics={
                     "operation": argv[1] if len(argv) > 1 else "unknown",
                     "exit_code": result.returncode,
-                    "safe_output": safe_output,
+                    **output,
                 },
             )
-        return result
+        return normalized
 
     def verify_image(self) -> str:
         result = self._run(["docker", "image", "inspect", PINNED_IMAGE, "--format", "{{json .}}"])
@@ -243,7 +319,26 @@ class DockerServer:
             self.running = False
 
     def restart_and_verify_marker(self, baseline_id: str) -> int:
-        self._run(["docker", "restart", "--time", "30", self.name], timeout=60)
+        restart_started = time.time()
+        try:
+            self._run(
+                ["docker", "restart", "--time", "30", self.name],
+                timeout=60,
+                strict_diagnostics=True,
+            )
+        except DockerRuntimeError as exc:
+            try:
+                evidence = self.diagnostic_collector(
+                    self.name, restart_started, self.diagnostic_executor
+                )
+            except Exception:
+                evidence = empty_restart_failure_evidence(
+                    target_valid=is_valid_container_name(self.name),
+                    outcome="collector_error",
+                )
+            diagnostics = exc.failure_detail.setdefault("runtime_diagnostics", {})
+            diagnostics["restart_failure_evidence"] = evidence
+            raise
         self.running = True
         self._wait_healthy()
         port = self._published_port()
@@ -275,9 +370,10 @@ class DockerServer:
 
 
 class DockerAcquisitionRuntime:
-    def __init__(self, *, repo_root: Path | None = None, runner: Runner = subprocess.run):
+    def __init__(self, *, repo_root: Path | None = None, runner: Runner | None = None):
         self.repo_root = repo_root or Path(__file__).resolve().parents[2]
-        self.runner = runner
+        self.runner = runner or subprocess.run
+        self.diagnostic_executor = BoundedDiagnosticExecutor(runner)
 
     def prepare(self, definition: BaselineDefinition) -> PreparedBaseline:
         if BASELINE_DEFINITIONS.get(definition.baseline_id) != definition:
@@ -287,7 +383,9 @@ class DockerAcquisitionRuntime:
             raise DockerRuntimeError("approved source archive is missing or has the wrong identity")
         source_revision = _git_revision(self.repo_root)
         data_root = Path(tempfile.mkdtemp(prefix="va-minecraft-acquire-"))
-        server = DockerServer(data_root, runner=self.runner)
+        server = DockerServer(
+            data_root, runner=self.runner, diagnostic_executor=self.diagnostic_executor
+        )
         success = False
         try:
             restored = restore_world_snapshot(
@@ -524,9 +622,10 @@ class DockerAcquisitionRuntime:
 
 
 class DockerMatrixExecutor:
-    def __init__(self, identity: dict[str, Any], *, runner: Runner = subprocess.run):
+    def __init__(self, identity: dict[str, Any], *, runner: Runner | None = None):
         self.matrix_identity = identity
-        self.runner = runner
+        self.runner = runner or subprocess.run
+        self.diagnostic_executor = BoundedDiagnosticExecutor(runner)
 
     def __call__(self, *, run: MatrixRunSpec, restored_world: RestoredWorld, output_dir: Path) -> Path:
         from benchmarks.minecraft.experiment import run_minecraft_experiment
@@ -536,7 +635,11 @@ class DockerMatrixExecutor:
             raise DockerRuntimeError("matrix baseline identity is not canonical")
         if canonical_world_tree_identity(restored_world.world_directory) != restored_world.tree_identity:
             raise DockerRuntimeError("independently restored world tree changed before startup")
-        server = DockerServer(restored_world.world_directory.parent, runner=self.runner)
+        server = DockerServer(
+            restored_world.world_directory.parent,
+            runner=self.runner,
+            diagnostic_executor=self.diagnostic_executor,
+        )
         attempt_started = False
         try:
             port = server.create_start()
@@ -568,21 +671,37 @@ class DockerMatrixExecutor:
                 raise DockerRuntimeError("judged Minecraft experiment failed")
             result = Path(summary["output_dir"])
         except BaseException as exc:
-            cleanup_ok = server.cleanup()
+            failure_detail = getattr(exc, "failure_detail", None)
+            if not isinstance(failure_detail, dict):
+                failure_detail = {
+                    "reason": "matrix_runtime_error",
+                    "runtime_diagnostics": {"error_type": type(exc).__name__},
+                }
+                setattr(exc, "failure_detail", failure_detail)
+            try:
+                cleanup_ok = server.cleanup()
+            except Exception as cleanup_exc:
+                diagnostics = dict(failure_detail.get("runtime_diagnostics", {}))
+                diagnostics["cleanup_error_type"] = type(cleanup_exc).__name__
+                error = DockerRuntimeError(
+                    "matrix server cleanup could not be verified",
+                    diagnostics=diagnostics,
+                )
+                error.failure_detail.update({
+                    "attempt_started": attempt_started,
+                    "cleanup": {"attempted": True, "passed": False},
+                })
+                raise error from cleanup_exc
             if cleanup_ok:
-                failure_detail = getattr(exc, "failure_detail", None)
-                if not isinstance(failure_detail, dict):
-                    failure_detail = {
-                        "reason": "matrix_runtime_error",
-                        "runtime_diagnostics": {"error_type": type(exc).__name__},
-                    }
-                    setattr(exc, "failure_detail", failure_detail)
                 failure_detail.update({
                     "attempt_started": attempt_started,
                     "cleanup": {"attempted": True, "passed": True},
                 })
                 raise
-            error = DockerRuntimeError("matrix server cleanup could not be verified")
+            error = DockerRuntimeError(
+                "matrix server cleanup could not be verified",
+                diagnostics=dict(failure_detail.get("runtime_diagnostics", {})),
+            )
             error.failure_detail.update({
                 "attempt_started": attempt_started,
                 "cleanup": {"attempted": True, "passed": cleanup_ok},

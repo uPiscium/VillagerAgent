@@ -182,12 +182,14 @@ def test_restart_refreshes_dynamic_host_port_before_runtime_use(tmp_path):
 
 
 def test_runtime_error_retains_sanitized_structured_command_diagnostics(tmp_path):
+    stderr = "internal path /private/data\nport allocation failed\nfailed to start containers: safe-name\n"
+
     def failing(argv, **_kwargs):
         return subprocess.CompletedProcess(
             argv,
             1,
             "",
-            "internal path /private/data\nport allocation failed\nfailed to start containers: safe-name\n",
+            stderr,
         )
 
     server = DockerServer(tmp_path, runner=failing)
@@ -202,7 +204,331 @@ def test_runtime_error_retains_sanitized_structured_command_diagnostics(tmp_path
             "port allocation failed",
             "failed to start containers: safe-name",
         ],
+        "raw_stdout_bytes": 0,
+        "raw_stderr_bytes": len(stderr.encode("utf-8")),
+        "retained_safe_lines": 2,
+        "redacted_line_count": 1,
+        "dropped_line_count": 0,
+        "truncated": False,
     }
+
+
+def test_runtime_error_distinguishes_empty_output_from_fully_redacted_output(tmp_path):
+    def failing(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 1, "", "internal /private/path\n")
+
+    server = DockerServer(tmp_path, runner=failing)
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server._run(["docker", "restart", "safe-name"])
+
+    diagnostics = captured.value.failure_detail["runtime_diagnostics"]
+    assert diagnostics["safe_output"] == []
+    assert diagnostics["raw_stderr_bytes"] > 0
+    assert diagnostics["retained_safe_lines"] == 0
+    assert diagnostics["redacted_line_count"] == 1
+    assert diagnostics["dropped_line_count"] == 0
+    assert diagnostics["truncated"] is False
+
+
+def test_strict_timeout_diagnostics_count_and_sanitize_partial_streams(tmp_path):
+    def timing_out(argv, **_kwargs):
+        raise subprocess.TimeoutExpired(
+            argv,
+            60,
+            output=b"safe stdout evidence\n",
+            stderr=b"token: hidden\n",
+        )
+
+    server = DockerServer(tmp_path, runner=timing_out)
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server._run(
+            ["docker", "restart", "safe-name"], strict_diagnostics=True
+        )
+
+    diagnostics = captured.value.failure_detail["runtime_diagnostics"]
+    assert diagnostics["raw_stdout_bytes"] == len(b"safe stdout evidence\n")
+    assert diagnostics["raw_stderr_bytes"] == len(b"token: hidden\n")
+    assert diagnostics["safe_output"] == ["safe stdout evidence"]
+    assert diagnostics["redacted_line_count"] == 1
+    assert diagnostics["truncated"] is True
+
+
+def test_strict_restart_diagnostics_replace_validated_container_identity(tmp_path):
+    def failing(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv, 1, "", f"restart failed for {argv[-1]}\n"
+        )
+
+    server = DockerServer(tmp_path, runner=failing)
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server._run(
+            ["docker", "restart", "--time", "30", server.name],
+            strict_diagnostics=True,
+        )
+
+    diagnostics = captured.value.failure_detail["runtime_diagnostics"]
+    assert diagnostics["safe_output"] == ["restart failed for <container>"]
+    assert server.name not in json.dumps(diagnostics)
+
+
+def test_restart_failure_collects_bounded_sanitized_evidence_before_cleanup(tmp_path):
+    class RestartFailureFake(CommandFake):
+        def __call__(self, argv, **kwargs):
+            self.calls.append(list(argv))
+            if argv[:2] == ["docker", "restart"]:
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "daemon socket /var/run/docker.sock\n"
+                )
+            if argv[:4] == ["docker", "inspect", "--type", "container"]:
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    "status exited running false paused false restarting false oom_killed false dead false exit_code 1 restart_count 0 health none\n",
+                    "",
+                )
+            if argv[:2] == ["docker", "logs"]:
+                lines = [f"safe diagnostic line {index}" for index in range(7)]
+                lines.extend(
+                    [
+                        "Authorization: Bearer hidden",
+                        "internal /private/path",
+                        "0123456789abcdef0123456789abcdef",
+                    ]
+                )
+                return subprocess.CompletedProcess(argv, 0, "\n".join(lines) + "\n", "")
+            if argv[:2] == ["docker", "events"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, "time 1 type container action die\n", ""
+                )
+            if argv[:3] == ["docker", "ps", "-a"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, "id abc123 name safe state exited status stopped\n", ""
+                )
+            if argv[:2] == ["docker", "inspect"]:
+                return subprocess.CompletedProcess(argv, 1, "", "not found")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+    fake = RestartFailureFake()
+    server = DockerServer(tmp_path, runner=fake)
+    server.created = server.running = True
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server.restart_and_verify_marker("baseline_open")
+    assert server.cleanup() is True
+
+    diagnostics = captured.value.failure_detail["runtime_diagnostics"]
+    assert diagnostics["operation"] == "restart"
+    assert diagnostics["raw_stderr_bytes"] > 0
+    assert diagnostics["redacted_line_count"] == 1
+    evidence = diagnostics["restart_failure_evidence"]
+    assert evidence["schema_version"] == 1
+    assert evidence["collection_complete"] is True
+    assert evidence["target_valid"] is True
+    assert evidence["logs_tail"] == {
+        "outcome": "ok",
+        "exit_code": 0,
+        "safe_output": [
+            "safe diagnostic line 2",
+            "safe diagnostic line 3",
+            "safe diagnostic line 4",
+            "safe diagnostic line 5",
+            "safe diagnostic line 6",
+        ],
+        "raw_stdout_bytes": len(
+            (
+                "\n".join(
+                    [f"safe diagnostic line {index}" for index in range(7)]
+                    + [
+                        "Authorization: Bearer hidden",
+                        "internal /private/path",
+                        "0123456789abcdef0123456789abcdef",
+                    ]
+                )
+                + "\n"
+            ).encode("utf-8")
+        ),
+        "raw_stderr_bytes": 0,
+        "retained_safe_lines": 5,
+        "redacted_line_count": 3,
+        "dropped_line_count": 2,
+        "truncated": True,
+    }
+    serialized = json.dumps(evidence).lower()
+    assert "bearer hidden" not in serialized
+    assert "/private/path" not in serialized
+    assert "0123456789abcdef0123456789abcdef" not in serialized
+
+    events = next(call for call in fake.calls if call[:2] == ["docker", "events"])
+    assert events[events.index("--since") + 1].isdigit()
+    assert events[events.index("--until") + 1].isdigit()
+    assert ["--filter", "type=container"] == events[
+        events.index("--filter"):events.index("--filter") + 2
+    ]
+    assert f"container={server.name}" in events
+    ps = next(call for call in fake.calls if call[:3] == ["docker", "ps", "-a"])
+    assert f"name=^/{server.name}$" in ps
+    restart_index = next(i for i, call in enumerate(fake.calls) if call[:2] == ["docker", "restart"])
+    remove_index = next(i for i, call in enumerate(fake.calls) if call[:3] == ["docker", "rm", "-f"])
+    for operation in ("inspect", "logs", "events", "ps"):
+        diagnostic_index = next(
+            i
+            for i, call in enumerate(fake.calls)
+            if i > restart_index
+            and call[:2] == ["docker", operation]
+            and not (operation == "inspect" and "--type" not in call)
+        )
+        assert diagnostic_index < remove_index
+
+
+def test_restart_failure_diagnostics_never_mask_original_error(tmp_path):
+    calls = []
+
+    def failing(argv, **_kwargs):
+        calls.append(list(argv))
+        if argv[:2] == ["docker", "restart"]:
+            return subprocess.CompletedProcess(argv, 1, "", "restart failed safely\n")
+        raise OSError("diagnostic runner unavailable")
+
+    server = DockerServer(tmp_path, runner=failing)
+
+    with pytest.raises(DockerRuntimeError, match="restart failed safely") as captured:
+        server.restart_and_verify_marker("baseline_open")
+
+    evidence = captured.value.failure_detail["runtime_diagnostics"][
+        "restart_failure_evidence"
+    ]
+    assert evidence["collection_complete"] is False
+    assert all(
+        evidence[key]["outcome"] == "runner_error"
+        for key in ("inspect_state", "logs_tail", "events_window", "ps_exact_name")
+    )
+    assert "diagnostic runner unavailable" not in json.dumps(evidence)
+
+
+def test_restart_failure_skips_collection_for_invalid_container_name(tmp_path):
+    calls = []
+
+    def failing(argv, **_kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 1, "", "restart failed safely\n")
+
+    server = DockerServer(tmp_path, runner=failing)
+    server.name = "unsafe.*"
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server.restart_and_verify_marker("baseline_open")
+
+    evidence = captured.value.failure_detail["runtime_diagnostics"][
+        "restart_failure_evidence"
+    ]
+    assert evidence["schema_version"] == 1
+    assert evidence["collection_complete"] is False
+    assert evidence["target_valid"] is False
+    assert set(evidence) == {
+        "schema_version", "collection_complete", "target_valid",
+        "inspect_state", "logs_tail", "events_window", "ps_exact_name",
+    }
+    assert all(evidence[key]["outcome"] == "not_attempted" for key in (
+        "inspect_state", "logs_tail", "events_window", "ps_exact_name"
+    ))
+    assert calls == [["docker", "restart", "--time", "30", "unsafe.*"]]
+
+
+def test_restart_failure_uses_stable_schema_when_collector_raises(tmp_path):
+    def failing_restart(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 1, "", "restart failed safely\n")
+
+    def failing_collector(*_args):
+        raise RuntimeError("collector failed")
+
+    server = DockerServer(
+        tmp_path,
+        runner=failing_restart,
+        diagnostic_collector=failing_collector,
+    )
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server.restart_and_verify_marker("baseline_open")
+
+    evidence = captured.value.failure_detail["runtime_diagnostics"][
+        "restart_failure_evidence"
+    ]
+    assert evidence["collection_complete"] is False
+    assert evidence["target_valid"] is True
+    assert all(
+        evidence[key]["outcome"] == "collector_error"
+        for key in ("inspect_state", "logs_tail", "events_window", "ps_exact_name")
+    )
+    assert "collector failed" not in json.dumps(evidence)
+
+
+@pytest.mark.parametrize("cleanup_result", [False, OSError("cleanup failed")])
+def test_matrix_cleanup_failure_preserves_restart_evidence(
+    monkeypatch, tmp_path, cleanup_result
+):
+    evidence = {"schema_version": 1, "collection_complete": True}
+
+    class FailingServer:
+        def __init__(self, data_root, **_kwargs):
+            (data_root / "minecraft_server.1.19.2.jar").write_bytes(b"jar")
+
+        def create_start(self):
+            return 25565
+
+        def restart_and_verify_marker(self, _baseline_id):
+            error = DockerRuntimeError(
+                "restart failed",
+                diagnostics={"restart_failure_evidence": evidence},
+            )
+            raise error
+
+        def cleanup(self):
+            if isinstance(cleanup_result, Exception):
+                raise cleanup_result
+            return cleanup_result
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime.DockerServer", FailingServer
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime.canonical_world_tree_identity",
+        lambda _world: "tree",
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.docker_runtime._sha",
+        lambda _path, algorithm="sha256": (
+            "f69c284232d7c7580bd89a5a4931c3581eae1378"
+            if algorithm == "sha1"
+            else SERVER_JAR_SHA256
+        ),
+    )
+    executor = DockerMatrixExecutor({
+        "runtime": {
+            "digest": f"sha256:{runtime_digest(SERVER_JAR_SHA256)}",
+        },
+        "model": {},
+        "generation": {"timeout_seconds": 60},
+    })
+    world = tmp_path / "world"
+    world.mkdir()
+    restored = SimpleNamespace(
+        descriptor=SimpleNamespace(snapshot_id="baseline_open"),
+        world_directory=world,
+        tree_identity="tree",
+    )
+    run = SimpleNamespace(baseline_id="baseline_open")
+
+    with pytest.raises(DockerRuntimeError, match="cleanup could not be verified") as captured:
+        executor(run=run, restored_world=restored, output_dir=tmp_path / "output")
+
+    detail = captured.value.failure_detail
+    assert detail["runtime_diagnostics"]["restart_failure_evidence"] == evidence
+    assert detail["cleanup"] == {"attempted": True, "passed": False}
+    if isinstance(cleanup_result, Exception):
+        assert detail["runtime_diagnostics"]["cleanup_error_type"] == "OSError"
 
 
 def test_cleanup_attempts_stop_remove_and_proves_absence(tmp_path):

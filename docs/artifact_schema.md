@@ -85,6 +85,13 @@ Minecraft benchmark runs write normalized public artifacts under the selected ru
 - Other fields include `run_name`, `mode`, `started_at`, `output_dir`, `task_name`, `task_type`, `task_idx`, `dual_dag_runtime_enabled`, `dual_dag_task_selection_enabled`, `task_selection_policy`, `runtime_task_store`, `source_of_truth`, `execute_real_environment`, `execute_timeout_seconds`, `artifact_summary`, `recommended_task_id`, `recommended_description`, `task_order`, `final_score`, `progress`, `error`, `error_type`, and `timed_out`.
 - Execute process fields are `runtime_process_isolated`, `runtime_process_exit_code`, `runtime_process_terminated`, and `runtime_process_killed`. Timeout summaries are written only after the child is no longer alive.
 
+## Nested restart failure diagnostics
+
+- `runtime_diagnostics.restart_failure_evidence` has stable `schema_version: 1`.
+- It always contains `inspect_state`, `logs_tail`, `events_window`, and `ps_exact_name` records, plus `collection_complete` and `target_valid`.
+- Each command record contains `outcome`, `exit_code`, `safe_output`, `raw_stdout_bytes`, `raw_stderr_bytes`, `retained_safe_lines`, `redacted_line_count`, `dropped_line_count`, and `truncated`. Outcomes include `ok`, `nonzero_exit`, `timeout`, `runner_error`, `not_attempted`, and `collector_error`.
+- Invalid targets, exhausted collection budgets, and collector failures retain the record with an explicit non-attempted/error outcome; keys are never omitted. Output is bounded and strictly sanitized before it is placed in the public failure detail.
+
 ## `events.jsonl`
 
 - Producer: optional Minecraft normalized event producer combining the internal runtime journal, `action_log.json`, and observation/claim entities from `dual_dag_artifact.json`.
