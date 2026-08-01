@@ -200,7 +200,7 @@ class DockerServer:
             output = _sanitize_output(
                 _output_bytes(getattr(exc, "stdout", None)),
                 _output_bytes(getattr(exc, "stderr", None)),
-                strict=strict_diagnostics,
+                strict=True,
                 stdout_bytes=getattr(exc, "raw_stdout_bytes", None),
                 stderr_bytes=getattr(exc, "raw_stderr_bytes", None),
                 pre_truncated=isinstance(exc, subprocess.TimeoutExpired),
@@ -231,7 +231,7 @@ class DockerServer:
             output = _sanitize_output(
                 stdout,
                 stderr,
-                strict=strict_diagnostics,
+                strict=True,
                 stdout_bytes=stdout_bytes,
                 stderr_bytes=stderr_bytes,
                 stdout_truncated=stdout_truncated,

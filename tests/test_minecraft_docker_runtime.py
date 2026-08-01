@@ -240,6 +240,63 @@ def test_runtime_error_distinguishes_empty_output_from_fully_redacted_output(tmp
     assert diagnostics["stderr"]["truncated"] is False
 
 
+def test_ordinary_runtime_failure_sanitizes_all_persisted_secrets(tmp_path):
+    stderr = (
+        "safe context: docker daemon rejected request\n"
+        "endpoint https://user:password@example.test/api?token=query-secret\n"
+        "Authorization: Bearer bearer-secret\n"
+        "password=assignment-secret\n"
+        "failed path /private/credentials/config.json\n"
+    )
+
+    def failing(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 1, "", stderr)
+
+    server = DockerServer(tmp_path, runner=failing)
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server._run(["docker", "start", "safe-name"], strict_diagnostics=False)
+
+    serialized = json.dumps(captured.value.failure_detail)
+    message = str(captured.value)
+    for secret in (
+        "user:password",
+        "query-secret",
+        "bearer-secret",
+        "assignment-secret",
+        "/private/credentials/config.json",
+    ):
+        assert secret not in serialized
+        assert secret not in message
+    assert "safe context: docker daemon rejected request" in serialized
+
+
+def test_ordinary_runner_exception_sanitizes_persisted_output(tmp_path):
+    argv = ["docker", "start", "safe-name"]
+    stdout = "safe exception context\nhttps://user:password@example.test/?token=query-secret\n"
+    stderr = "Authorization: Bearer bearer-secret\npassword=assignment-secret\n/private/credentials/config.json\n"
+
+    def failing(_argv, **_kwargs):
+        raise subprocess.CalledProcessError(1, argv, output=stdout, stderr=stderr)
+
+    server = DockerServer(tmp_path, runner=failing)
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server._run(argv, strict_diagnostics=False)
+
+    diagnostics = captured.value.failure_detail["runtime_diagnostics"]
+    serialized = json.dumps(captured.value.failure_detail)
+    for secret in (
+        "user:password", "query-secret", "bearer-secret",
+        "assignment-secret", "/private/credentials/config.json",
+    ):
+        assert secret not in serialized
+        assert secret not in str(captured.value)
+    assert diagnostics["stdout"]["raw_bytes"] == len(stdout.encode())
+    assert diagnostics["stderr"]["raw_bytes"] == len(stderr.encode())
+    assert "safe exception context" in diagnostics["stdout"]["safe_output"]
+
+
 def test_strict_timeout_diagnostics_count_and_sanitize_partial_streams(tmp_path):
     def timing_out(argv, **_kwargs):
         raise subprocess.TimeoutExpired(
