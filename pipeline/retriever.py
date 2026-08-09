@@ -2,11 +2,9 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 import numpy as np
 import time
 from typing import List, Dict, Tuple, Union
-import sys
 import os
 import json
 
-sys.path.append(os.getcwd())
 import difflib
 from pipeline.utils import document2string
 from concurrent.futures import ThreadPoolExecutor

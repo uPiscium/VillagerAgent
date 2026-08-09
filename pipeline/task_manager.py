@@ -1,6 +1,4 @@
-import sys
 import os
-sys.path.append(os.getcwd())
 from type_define.graph import Graph, GraphState, Task
 from pipeline.dual_dag_task_store import RuntimeTaskDAGStore
 from pipeline.task_prompt import *

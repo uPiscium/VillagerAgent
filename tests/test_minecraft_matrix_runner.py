@@ -210,7 +210,7 @@ def test_runner_propagates_real_restart_evidence_without_judged_attempt(
     )
     monkeypatch.setattr(
         "benchmarks.minecraft.docker_runtime.runtime_digest",
-        lambda _jar: identity["runtime"]["digest"].removeprefix("sha256:"),
+        lambda _jar, *_args, **_kwargs: identity["runtime"]["digest"].removeprefix("sha256:"),
     )
     executor = DockerMatrixExecutor({
         "runtime": identity["runtime"],

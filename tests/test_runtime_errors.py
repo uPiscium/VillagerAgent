@@ -2,6 +2,7 @@ import importlib
 import json
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -236,7 +237,10 @@ def test_meta_reset_bounds_missing_load_status_and_persists_diagnostics(monkeypa
     assert [entry["status"] for entry in diagnostics["load_status_history"]] == ["missing", "missing"]
     runtime_root_index = launched_commands[0].index("--runtime-root") + 1
     assert launched_commands[0][runtime_root_index] == str(tmp_path.resolve())
-    assert diagnostics["command"] == launched_commands[0]
+    assert diagnostics["command"][:2] == ["python", "env/meta_judger.py"]
+    assert diagnostics["command"][2:] == launched_commands[0][2:]
+    assert Path(launched_commands[0][0]).is_absolute()
+    assert Path(launched_commands[0][1]).is_absolute()
     assert (tmp_path / "data" / "meta_judger.stdout.log").exists()
     assert (tmp_path / "data" / "meta_judger.stderr.log").exists()
 

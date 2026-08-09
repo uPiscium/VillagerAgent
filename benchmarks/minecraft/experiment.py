@@ -1,5 +1,6 @@
 import argparse
 from copy import deepcopy
+import importlib
 import json
 import math
 import multiprocessing
@@ -45,6 +46,7 @@ from benchmarks.minecraft.run_lock import (
 from benchmarks.minecraft.seed_contract import SeedContract, SeedScope, resolve_seed_contract
 from benchmarks.minecraft.target_safety import assess_minecraft_target_safety
 from env.runtime_paths import RuntimePaths
+from env.runtime_execution import RuntimeExecution
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
 from env.minecraft_dual_dag import (
     build_minecraft_dual_dag_artifact,
@@ -123,6 +125,7 @@ def run_minecraft_experiment(
     command_text: str | None = None,
     overwrite: bool = False,
     event_sink: RuntimeEventSink | None = None,
+    execution_root: str | Path | None = None,
 ) -> dict:
     if execute:
         execute_timeout_seconds = _require_positive_finite_timeout(
@@ -143,6 +146,7 @@ def run_minecraft_experiment(
             command_text=command_text,
             overwrite=overwrite,
             event_sink=event_sink or NoOpRuntimeEventSink(),
+            execution_root=execution_root,
             attempt_state=attempt_state,
         )
     except BaseException as exc:
@@ -198,6 +202,7 @@ def _run_minecraft_experiment_attempt(
     command_text: str | None,
     overwrite: bool,
     event_sink: RuntimeEventSink,
+    execution_root: str | Path | None,
     attempt_state: dict,
 ) -> dict:
     """Run or dry-run a Minecraft experiment and write normalized artifacts.
@@ -356,6 +361,8 @@ def _run_minecraft_experiment_attempt(
     )
 
     if execute:
+        runtime_execution, runtime_execution_identity = _resolve_runtime_execution(execution_root)
+        attempt_state["runtime_execution_identity"] = runtime_execution_identity
         _remove_runtime_result(runtime_result_path)
         target_lock = MinecraftTargetLock(
             lock_root=lock_root,
@@ -381,6 +388,8 @@ def _run_minecraft_experiment_attempt(
                         runtime_event_path=runtime_event_path,
                         runtime_root=runtime_root,
                         attempt_id=attempt_id,
+                        runtime_execution=runtime_execution,
+                        runtime_execution_identity=runtime_execution_identity,
                     ) or {}
                 except MinecraftExecuteTimeoutError as exc:
                     error = str(exc)
@@ -580,6 +589,7 @@ def _run_minecraft_experiment_attempt(
         "task_name": launch_config.get("task_name", ""),
         "runtime_task_name": runtime_launch_config.get("task_name", ""),
         "world_id": str(launch_config.get("world_id", "")),
+        "execution": runtime_execution_identity if execute else None,
         "runtime_root": f".runtime/attempts/{attempt_id}",
         "runtime_result_path": f".runtime/attempts/{attempt_id}/runtime_result.json",
         "runtime_event_path": f".runtime/attempts/{attempt_id}/runtime_events.jsonl",
@@ -601,6 +611,7 @@ def _run_minecraft_experiment_attempt(
         "snapshot_source": runtime_task_dag_snapshot.get("snapshot_source", "config_fixture"),
         "task_state_source": task_state_source,
         "execute_real_environment": bool(execute),
+        "runtime_execution": runtime_execution_identity if execute else None,
         "execute_timeout_seconds": execute_timeout_seconds,
         "mutates_environment": bool(execute),
         "artifact_generation_mutates_runtime": False,
@@ -1490,6 +1501,34 @@ def _invalid_retained_diagnostics(error_type: str) -> dict:
     }
 
 
+def _runtime_execution_identity(execution: RuntimeExecution) -> dict:
+    category = getattr(execution, "category", None)
+    if not category:
+        module_root = Path(__file__).resolve().parents[2]
+        category = (
+            "module_checkout"
+            if execution.root == module_root
+            else "explicit_root"
+        )
+    return {
+        "category": str(category),
+        "manifest_sha256": str(execution.manifest_sha256),
+    }
+
+
+def _resolve_runtime_execution(root: str | Path | None):
+    try:
+        execution = RuntimeExecution.resolve(root=root)
+        execution.verify()
+        return execution, _runtime_execution_identity(execution)
+    except Exception as exc:
+        # Verification errors must not turn an untrusted checkout path into a
+        # public failure artifact.
+        raise RuntimeError(
+            f"runtime execution verification failed ({exc.__class__.__name__})"
+        ) from None
+
+
 def _execute_real_runtime(
     launch_config: dict,
     *,
@@ -1498,6 +1537,8 @@ def _execute_real_runtime(
     runtime_event_path: Path | None = None,
     runtime_root: Path | None = None,
     attempt_id: str | None = None,
+    runtime_execution: RuntimeExecution | None = None,
+    runtime_execution_identity: dict | None = None,
 ) -> dict:
     from start_with_config import run
     llm_config = _runtime_llm_config(launch_config)
@@ -1532,6 +1573,7 @@ def _execute_real_runtime(
         seed_contract=config.get("seed_contract"),
         world_initialization=config.get("world_initialization"),
         position_convention=config.get("position_convention"),
+        runtime_execution=runtime_execution,
     )
 
 
@@ -1562,6 +1604,8 @@ def _execute_real_runtime_bounded(
     runtime_event_path: Path | None = None,
     runtime_root: Path | None = None,
     attempt_id: str | None = None,
+    runtime_execution: RuntimeExecution | None = None,
+    runtime_execution_identity: dict | None = None,
 ) -> dict:
     timeout_seconds = _require_positive_finite_timeout(timeout_seconds)
     context = multiprocessing.get_context()
@@ -1575,6 +1619,8 @@ def _execute_real_runtime_bounded(
             str(runtime_event_path) if runtime_event_path is not None else None,
             str(runtime_root) if runtime_root is not None else None,
             attempt_id,
+            str(runtime_execution.root) if runtime_execution is not None else None,
+            runtime_execution_identity,
             status_queue,
         ),
     )
@@ -1691,11 +1737,72 @@ def _runtime_process_entry(
     runtime_event_path: str | None,
     runtime_root: str | None,
     attempt_id: str | None,
+    execution_root: str | None,
+    runtime_execution_identity: dict | None,
     status_queue,
 ) -> None:
     try:
         if hasattr(os, "setsid"):
             os.setsid()
+        runtime_execution = None
+        if runtime_execution_identity is not None:
+            runtime_execution, resolved_identity = _resolve_runtime_execution(execution_root)
+            if resolved_identity != runtime_execution_identity:
+                raise RuntimeError("runtime execution manifest identity mismatch")
+            # The forked worker must not inherit module or relative-path lookup
+            # behavior from the caller's artifact directory.
+            os.chdir(runtime_execution.root)
+            os.environ["PYTHONPATH"] = str(runtime_execution.root)
+            root_text = str(runtime_execution.root)
+            trusted_prefixes = tuple(
+                Path(prefix).resolve() for prefix in {sys.prefix, sys.base_prefix}
+            )
+            sys.path[:] = [
+                root_text,
+                *(
+                    entry
+                    for entry in sys.path
+                    if entry
+                    and entry != root_text
+                    and any(
+                        Path(entry).resolve() == prefix
+                        or prefix in Path(entry).resolve().parents
+                        for prefix in trusted_prefixes
+                    )
+                ),
+            ]
+            # Fork inherits caller modules. Drop runtime packages so imports
+            # below resolve from the approved execution root.
+            root_modules = tuple(
+                Path(asset.relative_path).stem
+                for asset in runtime_execution.assets.values()
+                if "/" not in asset.relative_path and asset.relative_path.endswith(".py")
+            )
+            runtime_prefixes = (
+                "start_with_config", "config", "env", "model", "pipeline", "rl_env",
+                "speaking_style", "type_define",
+                *root_modules,
+            )
+            for module_name in tuple(sys.modules):
+                if module_name == __name__:
+                    continue
+                if (
+                    module_name == "benchmarks.common"
+                    or module_name.startswith("benchmarks.common.")
+                    or module_name == "benchmarks.minecraft"
+                    or module_name.startswith("benchmarks.minecraft.")
+                    or any(
+                        module_name == prefix or module_name.startswith(prefix + ".")
+                        for prefix in runtime_prefixes
+                    )
+                ):
+                    sys.modules.pop(module_name, None)
+            for package_name in ("benchmarks",):
+                package = sys.modules.get(package_name)
+                if package is not None and hasattr(package, "__path__"):
+                    relative = Path(*package_name.split("."))
+                    package.__path__[:] = [str(runtime_execution.root / relative)]
+            importlib.invalidate_caches()
         result = _execute_real_runtime(
             launch_config,
             dual_dag_config=dual_dag_config,
@@ -1703,6 +1810,8 @@ def _runtime_process_entry(
             runtime_event_path=Path(runtime_event_path) if runtime_event_path is not None else None,
             runtime_root=Path(runtime_root) if runtime_root is not None else None,
             attempt_id=attempt_id,
+            runtime_execution=runtime_execution,
+            runtime_execution_identity=runtime_execution_identity,
         ) or {}
         if not isinstance(result, dict):
             raise TypeError("Minecraft runtime result must be an object")

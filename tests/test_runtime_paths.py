@@ -59,10 +59,7 @@ def test_runtime_subprocess_environment_supports_direct_bridge_entrypoint(tmp_pa
         base
     )
 
-    assert environment["PYTHONPATH"].split(os.pathsep) == [
-        str(repository_root),
-        "/existing/python/path",
-    ]
+    assert environment["PYTHONPATH"] == str(repository_root)
     completed = subprocess.run(
         [sys.executable, "env/minecraft_server_fast.py", "--help"],
         cwd=repository_root,

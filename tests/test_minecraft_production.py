@@ -48,11 +48,14 @@ def _valid_environment(monkeypatch, resolved):
     monkeypatch.setenv("TEST_OLLAMA_KEY", "test-key")
 
 
+def _execution_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 @pytest.mark.parametrize("failure", ["resolution", "endpoint", "credential", "runtime"])
 def test_failed_admission_starts_zero_judged_attempts(tmp_path, monkeypatch, failure):
     calls = {"executor": 0, "run": 0}
-    execution = tmp_path / "execution"
-    execution.mkdir()
+    execution = _execution_root()
     resolved = _resolved(tmp_path)
     _valid_environment(monkeypatch, resolved)
     monkeypatch.setattr(
@@ -61,7 +64,7 @@ def test_failed_admission_starts_zero_judged_attempts(tmp_path, monkeypatch, fai
     )
     monkeypatch.setattr(
         "benchmarks.minecraft.production.pinned_runtime_identity",
-        lambda: resolved.record.runtime_identity,
+        lambda *_args: resolved.record.runtime_identity,
     )
     if failure == "resolution":
         def resolver(*_args, **_kwargs):
@@ -75,7 +78,7 @@ def test_failed_admission_starts_zero_judged_attempts(tmp_path, monkeypatch, fai
     if failure == "runtime":
         monkeypatch.setattr(
             "benchmarks.minecraft.production.pinned_runtime_identity",
-            lambda: {"name": "drifted"},
+            lambda *_args: {"name": "drifted"},
         )
     monkeypatch.setattr("benchmarks.minecraft.production.resolve_approved_experiment", resolver)
 
@@ -97,7 +100,8 @@ def test_diagnostics_runtime_does_not_reuse_existing_approved_premanifest(
     tmp_path, monkeypatch
 ):
     record = get_approved_experiment("minecraft-judged-production-v1")
-    assert pinned_runtime_identity() != dict(record.runtime_identity)
+    execution = _execution_root()
+    assert pinned_runtime_identity(execution) != dict(record.runtime_identity)
     resolved = SimpleNamespace(record=record)
     _valid_environment(monkeypatch, resolved)
     calls = {"resolve": 0, "executor": 0, "run": 0}
@@ -124,18 +128,64 @@ def test_diagnostics_runtime_does_not_reuse_existing_approved_premanifest(
     ):
         run_approved_production(
             "minecraft-judged-production-v1",
-            tmp_path / "unused-execution-worktree",
+            execution,
             tmp_path / "unused-output",
         )
 
     assert calls == {"resolve": 0, "executor": 0, "run": 0}
 
 
-def test_successful_admission_passes_historical_worktree_to_registration_and_runner(
+def test_symlinked_execution_root_fails_before_resolution_or_attempt(
     tmp_path, monkeypatch
 ):
-    execution = tmp_path / "execution"
-    execution.mkdir()
+    resolved = _resolved(tmp_path)
+    _valid_environment(monkeypatch, resolved)
+    execution_link = tmp_path / "execution-link"
+    execution_link.symlink_to(_execution_root(), target_is_directory=True)
+    calls = {"resolve": 0, "executor": 0, "run": 0}
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.get_approved_experiment",
+        lambda *_args, **_kwargs: resolved.record,
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.pinned_runtime_identity",
+        lambda *_args: resolved.record.runtime_identity,
+    )
+
+    def resolver(*_args, **_kwargs):
+        calls["resolve"] += 1
+
+    def executor(*_args, **_kwargs):
+        calls["executor"] += 1
+
+    def run(*_args, **_kwargs):
+        calls["run"] += 1
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.resolve_approved_experiment", resolver
+    )
+    monkeypatch.setattr("benchmarks.minecraft.production.DockerMatrixExecutor", executor)
+    monkeypatch.setattr("benchmarks.minecraft.production.run_finalized_matrix", run)
+
+    with pytest.raises(
+        ProductionAdmissionError,
+        match="execution worktree runtime validation failed",
+    ):
+        run_approved_production("approved-test", execution_link, tmp_path / "output")
+
+    assert calls == {"resolve": 0, "executor": 0, "run": 0}
+
+
+@pytest.mark.parametrize("relative_argument", [False, True])
+def test_successful_admission_passes_historical_worktree_to_registration_and_runner(
+    tmp_path, monkeypatch, relative_argument
+):
+    execution = _execution_root()
+    if relative_argument:
+        monkeypatch.chdir(execution.parent)
+        execution_argument = Path(execution.name)
+    else:
+        execution_argument = execution
     resolved = _resolved(tmp_path)
     _valid_environment(monkeypatch, resolved)
     monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_BASE", "http://approved.example:11434/v1")
@@ -145,18 +195,23 @@ def test_successful_admission_passes_historical_worktree_to_registration_and_run
     )
     monkeypatch.setattr(
         "benchmarks.minecraft.production.pinned_runtime_identity",
-        lambda: resolved.record.runtime_identity,
-    )
-    monkeypatch.setattr(
-        "benchmarks.minecraft.production.resolve_approved_experiment",
-        lambda *_args, **_kwargs: resolved,
+        lambda *_args: resolved.record.runtime_identity,
     )
     observed = {}
 
+    def resolve(*args, **_kwargs):
+        observed["resolve_root"] = args[2]
+        return resolved
+
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.resolve_approved_experiment", resolve
+    )
+
     executor = object()
 
-    def build_executor(identity):
+    def build_executor(identity, *, execution_root):
         observed["identity"] = identity
+        observed["execution"] = execution_root
         return executor
 
     def run(path, output, *, executor, repo_root):
@@ -166,9 +221,11 @@ def test_successful_admission_passes_historical_worktree_to_registration_and_run
     monkeypatch.setattr("benchmarks.minecraft.production.DockerMatrixExecutor", build_executor)
     monkeypatch.setattr("benchmarks.minecraft.production.run_finalized_matrix", run)
 
-    result = run_approved_production("approved-test", execution, tmp_path / "output")
+    result = run_approved_production("approved-test", execution_argument, tmp_path / "output")
 
     assert result["gate_passed"] is True
     assert observed["identity"]["runtime"] == resolved.record.runtime_identity
+    assert observed["execution"].root == execution
+    assert observed["resolve_root"] == execution
     assert observed["run"][2] is executor
     assert observed["run"][3] == execution.resolve()

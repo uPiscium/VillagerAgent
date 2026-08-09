@@ -3,6 +3,7 @@ import json
 import os
 import shlex
 import signal
+import sys
 import time
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ from pipeline.runtime_events import (
     JsonlRuntimeEventRecorder,
     read_runtime_events,
 )
+from env.runtime_execution import RuntimeAssetSpec, RuntimeExecution
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +73,86 @@ def test_minecraft_config_preserves_explicit_empty_dependencies_as_parallel(depe
     assert all(task._pre_idxs_explicit for task in tasks)
     assert graph.edge == []
     assert store.to_task_graph_projection().edge == []
+
+
+def test_runtime_worker_reimports_modules_from_execution_root(tmp_path, monkeypatch):
+    execution_root = tmp_path / "execution"
+    execution_root.mkdir()
+    (execution_root / "config.py").write_text("VALUE = 'approved'\n", encoding="utf-8")
+    benchmark_package = execution_root / "benchmarks" / "minecraft"
+    benchmark_package.mkdir(parents=True)
+    (execution_root / "benchmarks" / "__init__.py").write_text("", encoding="utf-8")
+    (benchmark_package / "__init__.py").write_text("", encoding="utf-8")
+    (benchmark_package / "runtime_marker_486.py").write_text(
+        "VALUE = 'approved-benchmark'\n", encoding="utf-8"
+    )
+    (execution_root / "start_with_config.py").write_text(
+        "import config\n"
+        "import os\n"
+        "from benchmarks.minecraft import runtime_marker_486\n"
+        "def run(*args, **kwargs):\n"
+        "    return {\n"
+        "        'attempt_id': kwargs['attempt_id'],\n"
+        "        'task_name': args[11],\n"
+        "        'module_value': config.VALUE,\n"
+        "        'benchmark_value': runtime_marker_486.VALUE,\n"
+        "        'cwd': os.getcwd(),\n"
+        "        'pythonpath': os.environ.get('PYTHONPATH'),\n"
+        "    }\n",
+        encoding="utf-8",
+    )
+    execution = RuntimeExecution.resolve(
+        execution_root,
+        [
+            RuntimeAssetSpec("start_with_config", "start_with_config.py"),
+            RuntimeAssetSpec("config", "config.py"),
+            RuntimeAssetSpec("benchmarks", "benchmarks/__init__.py"),
+            RuntimeAssetSpec("minecraft", "benchmarks/minecraft/__init__.py"),
+            RuntimeAssetSpec("benchmark_marker", "benchmarks/minecraft/runtime_marker_486.py"),
+        ],
+    )
+    identity = {
+        "category": "explicit_root",
+        "manifest_sha256": execution.manifest_sha256,
+    }
+    monkeypatch.setitem(sys.modules, "config", SimpleNamespace(VALUE="hostile"))
+    monkeypatch.setitem(
+        sys.modules,
+        "benchmarks.minecraft.runtime_marker_486",
+        SimpleNamespace(VALUE="hostile-benchmark"),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._resolve_runtime_execution",
+        lambda _root: (execution, identity),
+    )
+    monkeypatch.setattr(
+        "benchmarks.minecraft.experiment._runtime_llm_config",
+        lambda _config: {"api_model": "model", "api_base": "http://model"},
+    )
+
+    result = _execute_real_runtime_bounded(
+        {
+            "task_type": "construction",
+            "task_idx": 0,
+            "agent_num": 1,
+            "task_goal": "goal",
+            "host": "127.0.0.1",
+            "port": 25565,
+            "task_name": "runtime-root-test",
+        },
+        dual_dag_config={},
+        timeout_seconds=5,
+        runtime_result_path=tmp_path / "runtime" / "result.json",
+        runtime_root=tmp_path / "runtime",
+        attempt_id="attempt-runtime-root",
+        runtime_execution=execution,
+        runtime_execution_identity=identity,
+    )
+
+    assert result["module_value"] == "approved"
+    assert result["benchmark_value"] == "approved-benchmark"
+    assert result["cwd"] == str(execution_root)
+    assert result["pythonpath"] == str(execution_root)
 
 
 def test_minecraft_experiment_dry_run_writes_expected_artifacts(tmp_path):
@@ -1339,7 +1421,7 @@ def test_minecraft_execute_timeout_preserves_partial_runtime_dag(tmp_path, monke
         output_root=tmp_path / "result",
         run_name="partial_timeout",
         execute=True,
-        execute_timeout_seconds=0.01,
+        execute_timeout_seconds=0.25,
     )
 
     snapshot = json.loads(
@@ -2520,7 +2602,7 @@ def test_minecraft_execute_timeout_uses_partial_runtime_snapshot(tmp_path, monke
         output_root=tmp_path / "result",
         run_name="execute_timeout_partial",
         execute=True,
-        execute_timeout_seconds=0.01,
+        execute_timeout_seconds=0.25,
     )
 
     output_dir = tmp_path / "result" / "execute_timeout_partial"

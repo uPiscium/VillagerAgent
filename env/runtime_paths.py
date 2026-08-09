@@ -146,16 +146,20 @@ class RuntimePaths:
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
-    def subprocess_environment(self, base: dict[str, str] | None = None) -> dict[str, str]:
+    def subprocess_environment(
+        self,
+        base: dict[str, str] | None = None,
+        *,
+        execution_root: str | Path | None = None,
+    ) -> dict[str, str]:
         environment = dict(os.environ if base is None else base)
         environment["VILLAGER_RUNTIME_ROOT"] = str(self.root.resolve())
         environment["VILLAGER_RUNTIME_LAYOUT"] = self.layout
-        repository_root = str(Path(__file__).resolve().parents[1])
-        python_path = environment.get("PYTHONPATH", "")
-        entries = [entry for entry in python_path.split(os.pathsep) if entry]
-        environment["PYTHONPATH"] = os.pathsep.join(
-            [repository_root, *(entry for entry in entries if entry != repository_root)]
-        )
+        python_root = str(Path(execution_root or Path(__file__).resolve().parents[1]).resolve())
+        # Runtime children import only from the approved execution checkout.
+        # Inheriting caller entries would make behavior depend on host state.
+        environment["PYTHONPATH"] = python_root
+        environment.pop("NODE_PATH", None)
         return environment
 
     @contextmanager
