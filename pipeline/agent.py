@@ -1,6 +1,4 @@
-import sys
 import os
-sys.path.append(os.getcwd())
 import time
 import logging
 from env.env import VillagerBench

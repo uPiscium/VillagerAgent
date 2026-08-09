@@ -19,6 +19,7 @@ from benchmarks.minecraft.approved_experiment import (
 from benchmarks.minecraft.docker_runtime import DockerMatrixExecutor, pinned_runtime_identity
 from benchmarks.minecraft.matrix_runner import run_finalized_matrix
 from model.ollama_config import normalize_ollama_api_base
+from env.runtime_execution import RuntimeExecution
 
 
 class ProductionAdmissionError(RuntimeError):
@@ -29,6 +30,7 @@ class ProductionAdmissionError(RuntimeError):
 class ProductionAdmission:
     resolved: ResolvedExperiment
     execution_worktree: Path
+    execution: RuntimeExecution
     output: Path
     endpoint: str
 
@@ -46,7 +48,7 @@ def admit_approved_experiment(
         raise ProductionAdmissionError("production output must be an absolute path")
     if destination.exists() or destination.is_symlink():
         raise ProductionAdmissionError("production output must not already exist")
-    execution = Path(execution_worktree).expanduser()
+    execution = Path(execution_worktree).expanduser().resolve()
     try:
         record = get_approved_experiment(approved_experiment, registry_dir)
     except ApprovedExperimentError as exc:
@@ -77,14 +79,19 @@ def admit_approved_experiment(
         or not os.environ.get(key_environment)
     ):
         raise ProductionAdmissionError("approved model credential environment is unavailable")
-    if pinned_runtime_identity() != dict(record.runtime_identity):
+    try:
+        resolved_execution = RuntimeExecution.resolve(execution)
+        resolved_execution.verify()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ProductionAdmissionError("execution worktree runtime validation failed") from exc
+    if pinned_runtime_identity(resolved_execution) != dict(record.runtime_identity):
         raise ProductionAdmissionError("control-plane runtime implementation does not match the approval")
 
     try:
         resolved = resolve_approved_experiment(
             approved_experiment,
             destination / "admission",
-            execution,
+            execution.resolve(),
             registry_dir=registry_dir,
         )
     except (ApprovedExperimentError, OSError) as exc:
@@ -92,6 +99,7 @@ def admit_approved_experiment(
     return ProductionAdmission(
         resolved=resolved,
         execution_worktree=execution.resolve(),
+        execution=resolved_execution,
         output=destination.resolve(),
         endpoint=approved,
     )
@@ -117,7 +125,8 @@ def run_approved_production(
             "runtime": vars(spec.runtime),
             "model": vars(spec.model),
             "generation": vars(spec.generation),
-        }
+        },
+        execution_root=admission.execution,
     )
     report = run_finalized_matrix(
         admission.resolved.premanifest_path,

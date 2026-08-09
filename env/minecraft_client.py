@@ -24,6 +24,8 @@ import platform
 from model.ollama_config import load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 
+from env.runtime_execution import RuntimeExecution
+
 env = os.environ.copy()
 env["PYTHONIOENCODING"] = "utf-8"
 
@@ -454,7 +456,7 @@ class Agent():
                 agent=player_name,
             ) from exc
 
-    def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model="", runtime_paths: RuntimePaths | None = None):
+    def __init__(self, name, prefix=None, context=None, prompt=None, tools=[], local_port=5000, model="", runtime_paths: RuntimePaths | None = None, runtime_execution=None):
         self.name = name
         self.prefix = prefix
         self.context = context
@@ -462,6 +464,7 @@ class Agent():
         self.local_port = local_port
         self.model = Agent.model if model == "" else model
         self.runtime_paths = runtime_paths or RuntimePaths.legacy()
+        self.runtime_execution = runtime_execution
         self.reflection_output_dir = self.runtime_paths.run_result_dir("test")
         self.action_history = []
         self.basic_tools = [
@@ -546,32 +549,26 @@ class Agent():
             return {'message': 'Exception', 'status': False}
 
     @staticmethod
-    def launch(host="10.21.31.18", port=25565, world="world", verbose=False, ignore_name=[], debug=False, fast=False, runtime_paths: RuntimePaths | None = None):
+    def launch(host="10.21.31.18", port=25565, world="world", verbose=False, ignore_name=[], debug=False, fast=False, runtime_paths: RuntimePaths | None = None, runtime_execution=None):
         Agent.port = port
         Agent.last_bridge_cleanup = None
         runtime_paths = runtime_paths or RuntimePaths.legacy()
-        process_env = runtime_paths.subprocess_environment(env)
+        if runtime_execution is None:
+            runtime_execution = RuntimeExecution.resolve()
+        entrypoint = "bridge_fast" if fast else "bridge_standard"
         if verbose:
             print("launch ...")
         for key, value in Agent.name2port.items():
             if key in ignore_name:
                 continue
-            if fast:
-                try:
-                    Agent.agent_process[key] = subprocess.Popen(
-                        ["python", "env/minecraft_server_fast.py", "-H", host, "-P", str(port), "-LP", str(value), "-U", key, "-W",
-                    world, "-D", str(debug)], shell=False, env=process_env)
-                    print(f"python env/minecraft_server_fast.py -H \"{host}\" -P {port} -LP {value} -U \"{key}\" -W \"{world}\" -D {debug}")
-                except Exception as e:
-                    print(f"An error occurred: {e}")
-                    print(f"python env/minecraft_server_fast.py -H \"{host}\" -P {port} -LP {value} -U \"{key}\" -W \"{world}\" -D {debug}")
-                time.sleep(10)
-            else:
-                Agent.agent_process[key] = subprocess.Popen(
-                    ["python", "env/minecraft_server.py", "-H", host, "-P", str(port), "-LP", str(value), "-U", key, "-W",
-                 world, "-D", str(debug)], shell=False, env=process_env)
-                print(f"python env/minecraft_server.py -H \"{host}\" -P {port} -LP {value} -U \"{key}\" -W \"{world}\" -D {debug}")
-                time.sleep(2)
+            runtime_execution.verify(entrypoint)
+            args = ("-H", host, "-P", str(port), "-LP", str(value), "-U", key,
+                    "-W", world, "-D", str(debug))
+            command = runtime_execution.python_command(entrypoint, *args)
+            child = runtime_execution.child_kwargs(runtime_paths, base=env)
+            Agent.agent_process[key] = subprocess.Popen(command, shell=False, **child)
+            print(runtime_execution.public_command(entrypoint, *args))
+            time.sleep(10 if fast else 2)
         if verbose:
             print("launch done.")
 

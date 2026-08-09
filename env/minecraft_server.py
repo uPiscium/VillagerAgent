@@ -8,6 +8,7 @@ from env_api import *
 from functools import wraps
 import re
 import platform
+from pathlib import Path
 
 try:
     from env.runtime_paths import RuntimePaths, read_json_artifact
@@ -122,7 +123,8 @@ def render_structure():
     id = data.get('id')
     center_pos = data.get('center_pos')
     try:
-        with open("../minecraft/building_blue_print.json", "r", encoding='utf-8') as f:
+        blueprint_path = Path(__file__).resolve().parents[1] / "data" / "building_blue_print.json"
+        with blueprint_path.open("r", encoding="utf-8") as f:
             structure_list = json.load(f)
         structure = structure_list[id]
         for b in structure["blocks"]:

@@ -15,6 +15,7 @@ from env.minecraft_client import MinecraftBridgeCleanupError
 from model.init_model import init_language_model
 from model.ollama_config import make_ollama_llm_config, configure_ollama_agent, load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json
+from env.runtime_execution import RuntimeExecution
 from env.judger_artifacts import ScoreOwnershipError, validate_score_identity
 from env.world_initialization import resolve_world_initialization
 from benchmarks.minecraft.position_contract import (
@@ -315,8 +316,10 @@ def _with_runtime_paths(function):
 
 
 @_with_runtime_paths
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None, position_convention: str | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None, position_convention: str | None = None, runtime_execution=None):
     start_time = time.time()
+    runtime_execution = runtime_execution or RuntimeExecution.resolve()
+    runtime_execution.verify()
 
     if task_type == "meta" and not task_scenario:
         raise ValueError("meta task requires task_scenario")
@@ -394,15 +397,15 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
 
     # 设置env
     if task_type == "construction":
-        env = VillagerBench(env_type=env_type.construction, task_id=task_idx, dig_needed=dig_needed, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
+        env = VillagerBench(env_type=env_type.construction, task_id=task_idx, dig_needed=dig_needed, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     elif task_type == "farming":
-        env = VillagerBench(env_type=env_type.farming, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
+        env = VillagerBench(env_type=env_type.farming, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     elif task_type == "puzzle":
-        env = VillagerBench(env_type=env_type.puzzle, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
+        env = VillagerBench(env_type=env_type.puzzle, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     elif task_type == "meta":
-        env = VillagerBench(env_type=env_type.meta, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
+        env = VillagerBench(env_type=env_type.meta, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     elif task_type == "gen":
-        env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths)
+        env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     else:
         raise NotImplementedError
     env.attempt_id = attempt_id
@@ -548,7 +551,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             # response = ctrl.agent_list[0].llm.few_shot_generate_thoughts(system_prompt="", example_prompt="hi")
             # print(response)
             if task_type == "farming": #补充材料来源prompt
-                with open("data/farm_setting.json", "r") as f:
+                with runtime_execution.asset("farm_setting").path.open("r", encoding="utf-8") as f:
                     task_settings = json.load(f)
                 task_data = task_settings[task_idx]
                 task_goal += f"\nBelow is a detailed list of ingredients and their specific sources. Use this information to plan and coordinate your actions efficiently:\n"

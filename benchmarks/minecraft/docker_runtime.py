@@ -41,6 +41,8 @@ from benchmarks.minecraft.world_snapshot import (
     restore_world_snapshot,
 )
 from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
+from env.runtime_execution import RuntimeExecution
+from env.runtime_paths import RuntimePaths
 from benchmarks.minecraft.position_contract import PositionConvention
 from benchmarks.minecraft.docker_diagnostics import (
     BoundedDiagnosticExecutor,
@@ -62,9 +64,6 @@ SERVER_METADATA_SHA1 = "ed548106acf3ac7e8205a6ee8fd2710facfa164f"
 SERVER_JAR_SHA1 = "f69c284232d7c7580bd89a5a4931c3581eae1378"
 SERVER_JAR_SHA256 = "b26727069ef5f61c704add9a378ac90e3d271fd7876c0bd3dcfbe9fd0bec4d96"
 DEFAULT_SOURCE_ARCHIVE = Path("result/minecraft/issue_243_assets/meta-move-world-v1.tar.gz")
-PROBE_PATH = Path(__file__).with_name("docker_probe.js")
-DOCKER_DIAGNOSTICS_PATH = Path(__file__).with_name("docker_diagnostics.py")
-PACKAGE_LOCK_PATH = Path(__file__).resolve().parents[2] / "package-lock.json"
 SERVER_JAR_PATH = Path("minecraft_server.1.19.2.jar")
 _SAFE_OUTPUT = re.compile(r"[\x20-\x7e]{1,300}\Z")
 
@@ -115,26 +114,42 @@ def _sha(path: Path, algorithm: str = "sha256") -> str:
     return digest.hexdigest()
 
 
-def runtime_digest(server_jar_sha256: str) -> str:
+def _resolve_execution(execution_root: Path | RuntimeExecution | None = None) -> RuntimeExecution:
+    if isinstance(execution_root, RuntimeExecution):
+        execution = execution_root
+        execution.verify()
+        return execution
+    execution = RuntimeExecution.resolve(execution_root)
+    execution.verify()
+    return execution
+
+
+def runtime_digest(
+    server_jar_sha256: str, execution_root: Path | RuntimeExecution | None = None
+) -> str:
+    execution = _resolve_execution(execution_root)
     components = {
         "adapter": _sha(Path(__file__)),
-        "diagnostics": _sha(DOCKER_DIAGNOSTICS_PATH),
+        "diagnostics": _sha(Path(__file__).with_name("docker_diagnostics.py")),
         "image": PINNED_IMAGE_DIGEST,
         "image_source_revision": IMAGE_SOURCE_REVISION,
-        "node_dependencies": _sha(PACKAGE_LOCK_PATH),
-        "probe": _sha(PROBE_PATH),
+        "node_dependencies": execution.asset("package_lock").sha256,
+        "probe": execution.asset("docker_probe").sha256,
         "server_jar": server_jar_sha256,
         "server_metadata_sha1": SERVER_METADATA_SHA1,
+        "execution_manifest": execution.manifest_sha256,
     }
     encoded = json.dumps(components, sort_keys=True, separators=(",", ":")).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()
 
 
-def pinned_runtime_identity() -> dict[str, str]:
+def pinned_runtime_identity(
+    execution_root: Path | RuntimeExecution | None = None,
+) -> dict[str, str]:
     return {
         "name": ADAPTER_ID,
         "image": PINNED_IMAGE,
-        "digest": f"sha256:{runtime_digest(SERVER_JAR_SHA256)}",
+        "digest": f"sha256:{runtime_digest(SERVER_JAR_SHA256, execution_root)}",
     }
 
 
@@ -378,10 +393,17 @@ class DockerServer:
 
 
 class DockerAcquisitionRuntime:
-    def __init__(self, *, repo_root: Path | None = None, runner: Runner | None = None):
+    def __init__(
+        self,
+        *,
+        repo_root: Path | None = None,
+        runner: Runner | None = None,
+        execution_root: Path | RuntimeExecution | None = None,
+    ):
         self.repo_root = repo_root or Path(__file__).resolve().parents[2]
         self.runner = runner or subprocess.run
         self.diagnostic_executor = BoundedDiagnosticExecutor(runner)
+        self.execution = _resolve_execution(execution_root)
 
     def prepare(self, definition: BaselineDefinition) -> PreparedBaseline:
         if BASELINE_DEFINITIONS.get(definition.baseline_id) != definition:
@@ -421,6 +443,7 @@ class DockerAcquisitionRuntime:
                 jar_sha256,
                 tree.manifest_sha256,
                 source_revision,
+                self.execution,
             )
         finally:
             if not success:
@@ -452,13 +475,17 @@ class DockerAcquisitionRuntime:
         encoded = base64.urlsafe_b64encode(
             json.dumps(payload, separators=(",", ":")).encode("ascii")
         ).decode("ascii")
+        execution = self.execution
+        execution.verify()
+        probe = execution.asset("docker_probe")
         try:
             process = subprocess.Popen(
-                ["node", str(PROBE_PATH), "127.0.0.1", str(port), encoded],
+                ["node", str(probe.path), "127.0.0.1", str(port), encoded],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                **execution.child_kwargs(RuntimePaths.legacy(execution.root)),
             )
         except OSError as exc:
             raise DockerRuntimeError(f"Mineflayer probe failed: {type(exc).__name__}") from exc
@@ -591,6 +618,7 @@ class DockerAcquisitionRuntime:
         jar_sha256: str,
         tree_sha256: str,
         source_revision: str,
+        execution: RuntimeExecution,
     ) -> PreparedBaseline:
         state = observed["state"]
         if state.get("hostile_mob_count") != 0:
@@ -613,7 +641,7 @@ class DockerAcquisitionRuntime:
         )
         profile = definition.obstacle_profile
         return PreparedBaseline(
-            runtime=RuntimeIdentity(ADAPTER_ID, "Vanilla 1.19.2 / Java 17", runtime_digest(jar_sha256), MINECRAFT_VERSION),
+            runtime=RuntimeIdentity(ADAPTER_ID, "Vanilla 1.19.2 / Java 17", runtime_digest(jar_sha256, execution), MINECRAFT_VERSION),
             source=SourceIdentity(
                 source_id=f"{definition.baseline_id}-{tree_sha256[:12]}", cloned_world=restored.world_directory,
                 cloned_from=f"approved-source-{SOURCE_ARCHIVE_SHA256[:12]}",
@@ -630,14 +658,22 @@ class DockerAcquisitionRuntime:
 
 
 class DockerMatrixExecutor:
-    def __init__(self, identity: dict[str, Any], *, runner: Runner | None = None):
+    def __init__(
+        self,
+        identity: dict[str, Any],
+        *,
+        runner: Runner | None = None,
+        execution_root: Path | RuntimeExecution | None = None,
+    ):
         self.matrix_identity = identity
         self.runner = runner or subprocess.run
         self.diagnostic_executor = BoundedDiagnosticExecutor(runner)
+        self.execution_root = execution_root
 
     def __call__(self, *, run: MatrixRunSpec, restored_world: RestoredWorld, output_dir: Path) -> Path:
         from benchmarks.minecraft.experiment import run_minecraft_experiment
 
+        execution = _resolve_execution(self.execution_root)
         definition = BASELINE_DEFINITIONS.get(run.baseline_id)
         if definition is None or restored_world.descriptor.snapshot_id != run.baseline_id:
             raise DockerRuntimeError("matrix baseline identity is not canonical")
@@ -650,12 +686,14 @@ class DockerMatrixExecutor:
         )
         attempt_started = False
         try:
+            # Verify the complete child runtime before Docker can create anything.
+            execution.verify()
             port = server.create_start()
             jar = restored_world.world_directory.parent / SERVER_JAR_PATH
             if not jar.is_file() or _sha(jar, "sha1") != SERVER_JAR_SHA1:
                 raise DockerRuntimeError("matrix server JAR failed official identity verification")
             expected_digest = self.matrix_identity["runtime"]["digest"].removeprefix("sha256:")
-            if runtime_digest(_sha(jar)) != expected_digest:
+            if runtime_digest(_sha(jar), execution) != expected_digest:
                 raise DockerRuntimeError("matrix runtime composite digest does not match the premanifest")
             port = server.restart_and_verify_marker(run.baseline_id)
             config = self._config(run, port, restored_world)
@@ -673,6 +711,7 @@ class DockerMatrixExecutor:
                     execute_timeout_seconds=self.matrix_identity["generation"]["timeout_seconds"],
                     task_selection_policy="dual-dag",
                     command_text="minecraft finalized matrix executor",
+                    execution_root=execution.root,
                 ),
             )
             if summary.get("error") is not None:

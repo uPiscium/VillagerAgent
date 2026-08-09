@@ -1,5 +1,3 @@
-import sys
-import os
 import threading
 import time
 import traceback
@@ -8,7 +6,6 @@ from dataclasses import dataclass, field
 
 from model.init_model import init_language_model
 
-sys.path.append(os.getcwd())
 from type_define.graph import Task
 from pipeline.task_manager import TaskManager
 from pipeline.data_manager import DataManager

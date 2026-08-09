@@ -12,7 +12,6 @@ import logging
 import colorlog
 
 from FlagEmbedding import LLMEmbedder
-sys.path.append(os.getcwd())
 from model import openai_models
 
 
