@@ -48,7 +48,8 @@ def admit_approved_experiment(
         raise ProductionAdmissionError("production output must be an absolute path")
     if destination.exists() or destination.is_symlink():
         raise ProductionAdmissionError("production output must not already exist")
-    execution = Path(execution_worktree).expanduser().resolve()
+    supplied_execution = Path(execution_worktree).expanduser()
+    execution = Path(os.path.abspath(supplied_execution))
     try:
         record = get_approved_experiment(approved_experiment, registry_dir)
     except ApprovedExperimentError as exc:
@@ -86,19 +87,20 @@ def admit_approved_experiment(
         raise ProductionAdmissionError("execution worktree runtime validation failed") from exc
     if pinned_runtime_identity(resolved_execution) != dict(record.runtime_identity):
         raise ProductionAdmissionError("control-plane runtime implementation does not match the approval")
+    verified_root = resolved_execution.root
 
     try:
         resolved = resolve_approved_experiment(
             approved_experiment,
             destination / "admission",
-            execution.resolve(),
+            verified_root,
             registry_dir=registry_dir,
         )
     except (ApprovedExperimentError, OSError) as exc:
         raise ProductionAdmissionError("approved experiment resolution failed") from exc
     return ProductionAdmission(
         resolved=resolved,
-        execution_worktree=execution.resolve(),
+        execution_worktree=verified_root,
         execution=resolved_execution,
         output=destination.resolve(),
         endpoint=approved,

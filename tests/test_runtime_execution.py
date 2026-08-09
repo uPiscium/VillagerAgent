@@ -148,9 +148,9 @@ def test_default_manifest_covers_runtime_import_closure():
         "type_define/graph.py",
         "env/minecraft_dual_dag.py",
         "rl_env/minecraft_rl_env.py",
-        "speaking_style.py",
     ):
         assert f"source:{relative_path}" in execution.assets
+    assert execution.asset("speaking_style").relative_path == "speaking_style.py"
 
 
 def test_default_closure_rejects_new_root_packages(tmp_path):
@@ -161,6 +161,36 @@ def test_default_closure_rejects_new_root_packages(tmp_path):
 
     with pytest.raises(RuntimeAssetError, match="unexpected_root_entry"):
         RuntimeExecution.resolve(tmp_path)
+
+
+@pytest.mark.parametrize("module_name", ["json.py", "requests.py"])
+def test_default_closure_rejects_unexpected_root_modules(tmp_path, module_name):
+    _minimal_default_root(tmp_path)
+    (tmp_path / module_name).write_text("raise RuntimeError('hostile')\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeAssetError, match="unexpected_root_entry"):
+        RuntimeExecution.resolve(tmp_path)
+
+
+def test_allowlisted_root_runtime_module_resolves(tmp_path):
+    _minimal_default_root(tmp_path)
+
+    execution = RuntimeExecution.resolve(tmp_path)
+
+    assert execution.asset("start_with_config").relative_path == "start_with_config.py"
+    assert execution.asset("config").relative_path == "config.py"
+    assert execution.asset("speaking_style").relative_path == "speaking_style.py"
+
+
+def test_allowlisted_non_runtime_root_file_does_not_change_identity(tmp_path):
+    _minimal_default_root(tmp_path)
+    first = RuntimeExecution.resolve(tmp_path)
+    (tmp_path / "proposal.md").write_text("local notes\n", encoding="utf-8")
+
+    second = RuntimeExecution.resolve(tmp_path)
+
+    assert second.manifest_sha256 == first.manifest_sha256
+    first.verify()
 
 
 def test_default_closure_identities_installed_node_dependencies(tmp_path):

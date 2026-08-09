@@ -78,6 +78,8 @@ _DEFAULT = [
     ("meta_judger", "env/meta_judger.py"),
     ("llm_gen_judger", "env/llm_gen_judger.py"),
     ("start_with_config", "start_with_config.py"),
+    ("config", "config.py"),
+    ("speaking_style", "speaking_style.py"),
     ("controller", "pipeline/controller_tiny.py"),
     ("task_manager", "pipeline/task_manager.py"),
     ("data_manager", "pipeline/data_manager.py"),
@@ -123,17 +125,52 @@ _ALLOWED_ROOT_DIRECTORIES = {
     "env", "external", "fix-plans", "img", "impl-plans", "logs", "model", "node_modules", "pipeline",
     "result", "rl_env", "tests", "type_define", "visualizer",
 }
+# These repository/control files are explicitly tolerated at the root but are
+# not executable runtime inputs and therefore never enter the runtime digest.
+_ALLOWED_NON_RUNTIME_ROOT_FILES = {
+    ".envrc",
+    ".gitignore",
+    ".gitmodules",
+    ".python-version",
+    "Dockerfile",
+    "README.ja.md",
+    "README.md",
+    "__init__ .py",
+    "agent_demo.py",
+    "auto_gen_gpt_task.py",
+    "auto_monitor.py",
+    "example.py",
+    "filter_data.py",
+    "flake.lock",
+    "flake.nix",
+    "js_setup.py",
+    "justfile",
+    "llm_gen_prompt.py",
+    "llm_gen_task.py",
+    "proposal.md",
+    "pyproject.toml",
+    "requirements.txt",
+    "task_filter.py",
+    "tiny_start.py",
+    "villagertuning.sh",
+}
 
 
 def _default_runtime_assets(root: Path) -> tuple[RuntimeAssetSpec, ...]:
     """Conservatively identity the importable child-runtime source closure."""
     specs = list(DEFAULT_RUNTIME_ASSETS)
     included = {Path(spec.relative_path).as_posix() for spec in specs}
-    candidates = [path for path in root.iterdir() if path.name != ".git" and not path.is_dir()]
+    candidates: list[Path] = []
+    allowed_runtime_root_files = {
+        relative for relative in included if "/" not in relative
+    }
+    allowed_root_files = allowed_runtime_root_files | _ALLOWED_NON_RUNTIME_ROOT_FILES | {".git"}
     for path in root.iterdir():
         if path.name != ".git" and path.is_symlink():
             raise RuntimeAssetError("symlink", "source_closure")
         if path.is_dir() and path.name not in _ALLOWED_ROOT_DIRECTORIES:
+            raise RuntimeAssetError("unexpected_root_entry", "source_closure")
+        if not path.is_dir() and path.name not in allowed_root_files:
             raise RuntimeAssetError("unexpected_root_entry", "source_closure")
     node_modules = root / "node_modules"
     if node_modules.is_symlink():
