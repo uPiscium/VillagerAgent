@@ -22,6 +22,7 @@ from benchmarks.minecraft.experiment import (
     _execute_real_runtime,
     _execute_real_runtime_bounded,
     _read_completed_runtime_result,
+    _runtime_llm_config,
     _sanitize_retained_meta_judger_diagnostics,
     _public_bridge_cleanup,
     _public_runtime_process,
@@ -51,6 +52,23 @@ from pipeline.runtime_events import (
     read_runtime_events,
 )
 from env.runtime_execution import RuntimeAssetSpec, RuntimeExecution
+
+
+def test_runtime_llm_config_preserves_fixed_model_and_endpoint_without_credential_env(monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "ambient-secret-must-not-be-used")
+    config = _runtime_llm_config({
+        "api_model": "gemma4:12b", "api_base": "http://10.255.255.5:11434",
+        "api_key_env": None,
+    })
+
+    assert config["api_model"] == "gemma4:12b"
+    assert config["api_base"] == "http://10.255.255.5:11434/v1"
+    assert config["api_key"] == "ollama"
+
+
+def test_runtime_llm_config_rejects_partial_fixed_model_fields_without_key_env():
+    with pytest.raises(RuntimeError, match="requires api_model and api_base"):
+        _runtime_llm_config({"api_key_env": None, "api_model": "gemma4:12b"})
 
 
 @pytest.fixture(autouse=True)

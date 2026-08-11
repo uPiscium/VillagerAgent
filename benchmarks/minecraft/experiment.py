@@ -1581,17 +1581,21 @@ def _runtime_llm_config(launch_config: dict) -> dict:
     from model.ollama_config import make_ollama_llm_config
 
     key_env = launch_config.get("api_key_env")
+    api_model = launch_config.get("api_model")
+    api_base = launch_config.get("api_base")
     if key_env is None:
-        return make_ollama_llm_config()
+        if api_model is None and api_base is None:
+            return make_ollama_llm_config()
+        if not all(isinstance(value, str) and value.strip() for value in (api_model, api_base)):
+            raise RuntimeError("real Minecraft execution requires api_model and api_base")
+        return make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key="ollama")
     if not isinstance(key_env, str) or not key_env.strip():
         raise RuntimeError("api_key_env must be a non-empty environment variable name")
+    if not all(isinstance(value, str) and value.strip() for value in (api_model, api_base)):
+        raise RuntimeError("real Minecraft execution requires api_model and api_base")
     api_key = os.environ.get(key_env)
     if not api_key:
         raise RuntimeError(f"required model credential environment variable is not set: {key_env}")
-    api_model = launch_config.get("api_model")
-    api_base = launch_config.get("api_base")
-    if not all(isinstance(value, str) and value.strip() for value in (api_model, api_base)):
-        raise RuntimeError("real Minecraft execution requires api_model and api_base")
     return make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=api_key)
 
 
