@@ -66,6 +66,8 @@ def admit_approved_experiment(
     if configured != approved:
         raise ProductionAdmissionError("configured model endpoint does not match the approval")
     expected_model = record.expected["model"]
+    if expected_model.get("provider") != "ollama":
+        raise ProductionAdmissionError("approved model provider is not supported")
     for field, environment_name in (
         ("provider", "VILLAGER_MINECRAFT_MODEL_PROVIDER"),
         ("name", "VILLAGER_MINECRAFT_MODEL_NAME"),
@@ -74,9 +76,8 @@ def admit_approved_experiment(
         if os.environ.get(environment_name) != expected_model[field]:
             raise ProductionAdmissionError("configured model identity does not match the approval")
     key_environment = os.environ.get("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV")
-    if (
-        not key_environment
-        or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_environment) is None
+    if key_environment and (
+        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_environment) is None
         or not os.environ.get(key_environment)
     ):
         raise ProductionAdmissionError("approved model credential environment is unavailable")

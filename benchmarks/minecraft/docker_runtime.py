@@ -44,6 +44,11 @@ from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
 from env.runtime_execution import RuntimeExecution
 from env.runtime_paths import RuntimePaths
 from benchmarks.minecraft.position_contract import PositionConvention
+from benchmarks.minecraft.restart_marker_verification import (
+    MarkerVerificationError,
+    RconBoundaryError,
+    verify_restart_markers,
+)
 from benchmarks.minecraft.docker_diagnostics import (
     BoundedDiagnosticExecutor,
     DiagnosticCommandResult,
@@ -131,6 +136,7 @@ def runtime_digest(
     components = {
         "adapter": _sha(Path(__file__)),
         "diagnostics": _sha(Path(__file__).with_name("docker_diagnostics.py")),
+        "marker_verification": _sha(Path(__file__).with_name("restart_marker_verification.py")),
         "image": PINNED_IMAGE_DIGEST,
         "image_source_revision": IMAGE_SOURCE_REVISION,
         "node_dependencies": execution.asset("package_lock").sha256,
@@ -165,6 +171,7 @@ class DockerServer:
         self.created = False
         self.running = False
         self.port: int | None = None
+        self.marker_verification_evidence: dict[str, Any] | None = None
 
     def _run(
         self,
@@ -363,12 +370,38 @@ class DockerServer:
             diagnostics["restart_failure_evidence"] = evidence
             raise
         self.running = True
-        self._wait_healthy()
-        port = self._published_port()
-        for marker in (baseline_id, SOURCE_MARKER):
-            response = self.rcon(f"scoreboard players get {marker} va_baseline")
-            if not response.endswith("has 1 [va_baseline]"):
-                raise DockerRuntimeError("restored world scoreboard marker verification failed")
+        try:
+            self._wait_healthy()
+            port = self._published_port()
+        except DockerRuntimeError as exc:
+            exc.failure_detail["reason"] = "restart_not_ready"
+            raise
+
+        def marker_rcon(command):
+            try:
+                return self.rcon(command)
+            except DockerRuntimeError as exc:
+                diagnostics = exc.failure_detail.get("runtime_diagnostics", {})
+                category = (
+                    "rcon_connect_failed"
+                    if diagnostics.get("error_type") in {"TimeoutExpired", "FileNotFoundError"}
+                    else "rcon_command_failed"
+                )
+                raise RconBoundaryError(category) from None
+
+        try:
+            evidence = verify_restart_markers(
+                marker_rcon, baseline_id, SOURCE_MARKER, max_ready_attempts=1,
+            )
+        except MarkerVerificationError as exc:
+            self.marker_verification_evidence = exc.evidence
+            error = DockerRuntimeError(
+                "restored world scoreboard marker verification failed",
+                diagnostics={"marker_verification": exc.evidence},
+            )
+            error.failure_detail["reason"] = exc.reason
+            raise error from None
+        self.marker_verification_evidence = evidence
         return port
 
     def cleanup(self) -> bool:
@@ -725,6 +758,11 @@ class DockerMatrixExecutor:
                     "runtime_diagnostics": {"error_type": type(exc).__name__},
                 }
                 setattr(exc, "failure_detail", failure_detail)
+            marker_evidence = getattr(server, "marker_verification_evidence", None)
+            if marker_evidence is not None:
+                diagnostics = dict(failure_detail.get("runtime_diagnostics", {}))
+                diagnostics["marker_verification"] = marker_evidence
+                failure_detail["runtime_diagnostics"] = diagnostics
             try:
                 cleanup_ok = server.cleanup()
             except Exception as cleanup_exc:
@@ -764,9 +802,15 @@ class DockerMatrixExecutor:
         model = self.matrix_identity["model"]
         generation = self.matrix_identity["generation"]
         api_base = os.environ.get("VILLAGER_MINECRAFT_MODEL_API_BASE")
-        key_env = os.environ.get("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV")
-        if not api_base or not key_env or not os.environ.get(key_env):
-            raise DockerRuntimeError("matrix model endpoint or credential environment is unavailable")
+        key_env = os.environ.get("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV") or None
+        if not api_base:
+            error = DockerRuntimeError("matrix model endpoint environment is unavailable")
+            error.failure_detail["reason"] = "model_execution_environment_missing"
+            raise error
+        if key_env and not os.environ.get(key_env):
+            error = DockerRuntimeError("matrix model credential environment is unavailable")
+            error.failure_detail["reason"] = "model_execution_environment_missing"
+            raise error
         if run.position_convention != PositionConvention.ENTITY_FEET.value:
             raise DockerRuntimeError("matrix run position convention must be entity_feet")
         return {

@@ -55,7 +55,8 @@ class CommandFake:
                 argv, 0, f"127.0.0.1:{next(self.ports)}\n", ""
             )
         if argv[:2] == ["docker", "exec"] and "scoreboard players get" in argv[-1]:
-            return subprocess.CompletedProcess(argv, 0, "marker has 1 [va_baseline]\n", "")
+            marker = argv[-1].split()[3]
+            return subprocess.CompletedProcess(argv, 0, f"{marker} has 1 [va_baseline]\n", "")
         if argv[:2] == ["docker", "inspect"]:
             return subprocess.CompletedProcess(argv, 1, "", "not found")
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -183,6 +184,58 @@ def test_restart_refreshes_dynamic_host_port_before_runtime_use(tmp_path):
     assert server.port == 49153
     assert ["docker", "restart", "--time", "30", server.name] in fake.calls
     assert not any(call[:2] == ["docker", "stop"] for call in fake.calls)
+
+
+def test_restart_reports_source_marker_mismatch_without_raw_response(tmp_path):
+    class SourceMismatchFake(CommandFake):
+        def __call__(self, argv, **kwargs):
+            if argv[:2] == ["docker", "exec"] and SOURCE_MARKER in argv[-1]:
+                self.calls.append(list(argv))
+                return subprocess.CompletedProcess(
+                    argv, 0, f"{SOURCE_MARKER} has 2 [va_baseline]\n", "",
+                )
+            return super().__call__(argv, **kwargs)
+
+    fake = SourceMismatchFake(ports=(49152, 49153))
+    server = DockerServer(tmp_path, runner=fake)
+    server.create_start()
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server.restart_and_verify_marker("baseline_open")
+
+    assert captured.value.failure_detail["reason"] == "source_marker_mismatch"
+    evidence = captured.value.failure_detail["runtime_diagnostics"]["marker_verification"]
+    assert evidence["baseline_marker"]["compare"] == "match"
+    assert evidence["source_marker"]["compare"] == "mismatch"
+    assert SOURCE_MARKER not in json.dumps(evidence)
+
+
+def test_restart_classifies_nonzero_rcon_cli_as_command_failure(tmp_path):
+    class RconFailureFake(CommandFake):
+        def __call__(self, argv, **kwargs):
+            if argv[:2] == ["docker", "exec"]:
+                self.calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 1, "", "connection failed")
+            return super().__call__(argv, **kwargs)
+
+    fake = RconFailureFake(ports=(49152, 49153))
+    server = DockerServer(tmp_path, runner=fake)
+    server.create_start()
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        server.restart_and_verify_marker("baseline_open")
+
+    assert captured.value.failure_detail["reason"] == "rcon_command_failed"
+    assert captured.value.failure_detail["runtime_diagnostics"]["marker_verification"]["rcon"] == "command_failed"
+
+
+def test_general_rcon_preserves_docker_runtime_error_contract(tmp_path):
+    server = DockerServer(
+        tmp_path,
+        runner=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "failed"),
+    )
+    with pytest.raises(DockerRuntimeError):
+        server.rcon("list")
 
 
 def test_runtime_error_retains_sanitized_structured_command_diagnostics(tmp_path):
@@ -917,6 +970,81 @@ def test_matrix_executor_preserves_the_restored_snapshot(monkeypatch):
     run.position_convention = "support_block"
     with pytest.raises(DockerRuntimeError, match="entity_feet"):
         executor._config(run, 25565, None)
+
+
+def test_matrix_executor_reports_missing_explicit_model_endpoint(monkeypatch):
+    monkeypatch.delenv("VILLAGER_MINECRAFT_MODEL_API_BASE", raising=False)
+    monkeypatch.delenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV", raising=False)
+    executor = DockerMatrixExecutor({
+        "model": {"name": "gemma4:12b", "digest": "a" * 64},
+        "generation": {"timeout_seconds": 600},
+    })
+    run = SimpleNamespace(
+        prompt="fixed", evaluation_target=SimpleNamespace(as_dict=lambda: {"x": 1, "y": 2, "z": 3}),
+        initial_state=SimpleNamespace(as_dict=lambda: {"x": 0, "y": 2, "z": 0}),
+        run_id="diagonal-s17-baseline_open", baseline_id="baseline_open",
+        snapshot_path="fixed.tar.gz", snapshot_sha256="b" * 64, seed=17,
+        seed_scopes=SimpleNamespace(requested=("meta_judger",)), position_convention="entity_feet",
+    )
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        executor._config(run, 25565, None)
+
+    assert captured.value.failure_detail["reason"] == "model_execution_environment_missing"
+
+
+def test_matrix_executor_allows_explicit_ollama_endpoint_without_credential_env(monkeypatch):
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_BASE", "http://10.255.255.5:11434")
+    monkeypatch.delenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV", raising=False)
+    executor = DockerMatrixExecutor({
+        "model": {"name": "gemma4:12b", "digest": "a" * 64},
+        "generation": {"timeout_seconds": 600},
+    })
+    run = SimpleNamespace(
+        prompt="fixed", evaluation_target=SimpleNamespace(as_dict=lambda: {"x": 1, "y": 2, "z": 3}),
+        initial_state=SimpleNamespace(as_dict=lambda: {"x": 0, "y": 2, "z": 0}),
+        run_id="diagonal-s17-baseline_open", baseline_id="baseline_open",
+        snapshot_path="fixed.tar.gz", snapshot_sha256="b" * 64, seed=17,
+        seed_scopes=SimpleNamespace(requested=("meta_judger",)), position_convention="entity_feet",
+    )
+
+    config = executor._config(run, 25565, None)
+
+    assert config["api_base"] == "http://10.255.255.5:11434"
+    assert config["api_key_env"] is None
+
+
+def test_matrix_executor_normalizes_empty_optional_credential_binding(monkeypatch):
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_BASE", "http://10.255.255.5:11434")
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV", "")
+    executor = DockerMatrixExecutor({
+        "model": {"name": "gemma4:12b", "digest": "a" * 64},
+        "generation": {"timeout_seconds": 600},
+    })
+    run = SimpleNamespace(
+        prompt="fixed", evaluation_target=SimpleNamespace(as_dict=lambda: {"x": 1, "y": 2, "z": 3}),
+        initial_state=SimpleNamespace(as_dict=lambda: {"x": 0, "y": 2, "z": 0}),
+        run_id="diagonal-s17-baseline_open", baseline_id="baseline_open",
+        snapshot_path="fixed.tar.gz", snapshot_sha256="b" * 64, seed=17,
+        seed_scopes=SimpleNamespace(requested=("meta_judger",)), position_convention="entity_feet",
+    )
+    assert executor._config(run, 25565, None)["api_key_env"] is None
+
+
+def test_matrix_executor_rejects_named_but_missing_model_credential(monkeypatch):
+    monkeypatch.delenv("VILLAGER_MINECRAFT_MODEL_API_BASE", raising=False)
+    monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV", "MISSING_FIXED_KEY")
+    monkeypatch.delenv("MISSING_FIXED_KEY", raising=False)
+    executor = DockerMatrixExecutor({
+        "model": {"name": "gemma4:12b", "digest": "a" * 64},
+        "generation": {"timeout_seconds": 600},
+    })
+    run = SimpleNamespace(position_convention="entity_feet")
+
+    with pytest.raises(DockerRuntimeError) as captured:
+        executor._config(run, 25565, None)
+
+    assert captured.value.failure_detail["reason"] == "model_execution_environment_missing"
 
 
 @pytest.mark.skipif(os.environ.get("VILLAGER_RUN_DOCKER_INTEGRATION") != "1", reason="opt-in Docker integration")

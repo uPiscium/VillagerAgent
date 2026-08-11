@@ -135,6 +135,27 @@ def test_diagnostics_runtime_does_not_reuse_existing_approved_premanifest(
     assert calls == {"resolve": 0, "executor": 0, "run": 0}
 
 
+def test_credentialless_non_ollama_approval_is_rejected_before_resolution(tmp_path, monkeypatch):
+    resolved = _resolved(tmp_path)
+    resolved.record.expected["model"]["provider"] = "other"
+    _valid_environment(monkeypatch, resolved)
+    monkeypatch.delenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV")
+    monkeypatch.delenv("TEST_OLLAMA_KEY")
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.get_approved_experiment",
+        lambda *_args, **_kwargs: resolved.record,
+    )
+    calls = []
+    monkeypatch.setattr(
+        "benchmarks.minecraft.production.resolve_approved_experiment",
+        lambda *_args, **_kwargs: calls.append("resolve"),
+    )
+
+    with pytest.raises(ProductionAdmissionError, match="provider is not supported"):
+        run_approved_production("approved-test", _execution_root(), tmp_path / "output")
+    assert calls == []
+
+
 def test_symlinked_execution_root_fails_before_resolution_or_attempt(
     tmp_path, monkeypatch
 ):
@@ -177,8 +198,9 @@ def test_symlinked_execution_root_fails_before_resolution_or_attempt(
 
 
 @pytest.mark.parametrize("relative_argument", [False, True])
+@pytest.mark.parametrize("credentialless", [False, True])
 def test_successful_admission_passes_historical_worktree_to_registration_and_runner(
-    tmp_path, monkeypatch, relative_argument
+    tmp_path, monkeypatch, relative_argument, credentialless
 ):
     execution = _execution_root()
     if relative_argument:
@@ -188,6 +210,9 @@ def test_successful_admission_passes_historical_worktree_to_registration_and_run
         execution_argument = execution
     resolved = _resolved(tmp_path)
     _valid_environment(monkeypatch, resolved)
+    if credentialless:
+        monkeypatch.delenv("VILLAGER_MINECRAFT_MODEL_API_KEY_ENV")
+        monkeypatch.delenv("TEST_OLLAMA_KEY")
     monkeypatch.setenv("VILLAGER_MINECRAFT_MODEL_API_BASE", "http://approved.example:11434/v1")
     monkeypatch.setattr(
         "benchmarks.minecraft.production.get_approved_experiment",
