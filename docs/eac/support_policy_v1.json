@@ -1,0 +1,93 @@
+{
+  "policy_id": "eac-primary-support",
+  "policy_version": 1,
+  "purpose": "Frozen primary semantics for runtime-admissible support of declared epistemic preconditions.",
+  "canonicalization_profile": {
+    "standard": "RFC8785-JCS",
+    "encoding": "UTF-8",
+    "duplicate_object_keys": "forbidden",
+    "hash_algorithm": "SHA-256",
+    "canonical_form_scope": "the complete parsed JSON value of this artifact"
+  },
+  "proposition_identity": {
+    "required_fields": ["namespace", "predicate", "arguments", "temporal_scope", "polarity"],
+    "arguments_rule": "Typed canonical values in action-definition order; no fuzzy or natural-language matching.",
+    "same_tracked_proposition": "All required fields except polarity are exactly equal.",
+    "contradiction": "The same tracked proposition with opposite boolean polarity.",
+    "scope_overlap": "Exact temporal_scope equality in primary v1."
+  },
+  "source_profile_contract": {
+    "required": true,
+    "identity_fields": ["profile_id", "profile_version", "detached_profile_sha256"],
+    "frozen_before_confirmatory_use": true,
+    "same_in_advisory_and_authority": true,
+    "rules": [
+      "Every raw environment record maps to at most one evidence root type by a prospective versioned rule.",
+      "Tool trust, actor visibility, provenance lineage, supersession streams, and adapter aging rules are declared in the profile.",
+      "The profile identity and detached canonical content digest are witness and permit dependencies.",
+      "Scenario identifiers, candidate outcomes, benchmark scores, and Advisory or Authority mode cannot select mapping rules."
+    ]
+  },
+  "support_semantics": {
+    "sufficient_roots": {
+      "direct_observation": "Current non-defeated evidence directly observed by the actor in the authoritative actor-visible scope.",
+      "trusted_tool_result": "A current non-defeated actor-visible result from a tool declared trusted by the frozen source profile for this proposition scope.",
+      "visible_action_outcome": "A current non-defeated outcome exposed to the actor by authoritative runtime state and mapped by the frozen source profile."
+    },
+    "unverified_peer_report": {
+      "sufficient_alone_for_world_state_epre": false,
+      "allowed_uses": ["claim_generation", "evidence_gathering_trigger", "clarification_trigger", "corroboration_subject"],
+      "multiple_report_promotion": "forbidden"
+    },
+    "corroboration": {
+      "rule": "A peer report may appear in a witness only when a sufficient root independently supports the exact same proposition identity and polarity.",
+      "source_identity": "source_lineage_id from the frozen source profile",
+      "independence": "The corroborating root has a different source_lineage_id from the report and shares no upstream_origin_id with it.",
+      "same_source_repetition": "never_independent",
+      "semantic_effect": "The sufficient root provides sufficiency; the report adds provenance context but no additional support weight."
+    },
+    "derived_claims": {
+      "allowed": true,
+      "rule": "Every premise has a valid finite path to a sufficient root and every step identifies a derivation rule allowed by the frozen source profile or versioned action definition.",
+      "self_support": "forbidden",
+      "unsupported_cycle": "forbidden",
+      "implicit_derivation": "forbidden"
+    },
+    "same_action_legality_probe": "A native legality or capability probe performed for the action being permitted cannot support that action's EPre. An independently declared evidence-gathering action may later produce a trusted actor-visible result."
+  },
+  "conflict_and_defeat": {
+    "conflict_eligibility": "Opposite-polarity evidence is blocking only if it independently forms a prima-facie witness satisfying Scoped, Grounded, Fresh, and Supports, evaluated without NonDefeated, for the contradictory proposition under this same policy.",
+    "symmetry": "Eligible contradictory witnesses block both polarities; root type creates no precedence.",
+    "peer_report_rule": "An unverified peer report that is insufficient for support is also insufficient to create a blocking defeat by itself.",
+    "derived_claim_rule": "A contradictory derived claim is eligible only when all of its premises and derivation are valid under this policy.",
+    "resolution": "Two opposite eligible prima-facie witnesses make NonDefeated false for both polarities until one loses prima-facie eligibility through explicit invalidation, explicit supersession, visibility loss, evidence revision, or a frozen source-profile aging rule. Selection based on confidence or desired action is forbidden."
+  },
+  "supersession": {
+    "explicit_only": true,
+    "authorized_rule": "A newer item may supersede an older item only when both share exact tracked proposition identity and a source_stream_id whose ordering and authorized issuer are declared by the frozen source profile.",
+    "ordering": "Monotonic source_stream_revision; wall-clock timestamps alone do not establish newer.",
+    "effect": "The older item is excluded from every new or revalidated witness.",
+    "implicit_supersession": "forbidden"
+  },
+  "freshness": {
+    "wall_clock_ttl": "none",
+    "implicit_expiration": "forbidden",
+    "support_lost_only_on": [
+      "explicit_invalidation",
+      "explicit_supersession",
+      "relevant_scope_change",
+      "support_policy_change",
+      "source_profile_change",
+      "evidence_revision",
+      "predeclared_adapter_aging_event"
+    ],
+    "adapter_aging_rule": "An aging predicate, authorized issuer, affected scope, and rule identity/version/content digest must be frozen in the source profile before the run. Scenario IDs, outcomes, scores, and elapsed wall time alone are forbidden inputs."
+  },
+  "confirmatory_use_constraints": {
+    "immutable": true,
+    "policy_change_requires_new_version": true,
+    "scenario_specific_change": "forbidden",
+    "post_outcome_tuning": "forbidden",
+    "advisory_authority_policy_difference": "forbidden"
+  }
+}
