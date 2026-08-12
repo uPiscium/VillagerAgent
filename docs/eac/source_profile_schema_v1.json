@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/upiscium/VillagerAgent/blob/main/docs/eac/source_profile_schema_v1.json",
+  "title": "EAC SourceProfile contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile_id", "profile_version", "detached_profile_sha256", "mapping_rules", "trusted_tools", "supersession_streams", "derivation_rules", "aging_rules", "integrity_contract", "fail_closed"],
+  "properties": {
+    "profile_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$"},
+    "profile_version": {"type": "integer", "minimum": 1},
+    "detached_profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mapping_rules": {"type": "array", "items": {"$ref": "#/$defs/mapping"}},
+    "trusted_tools": {"type": "array", "items": {"$ref": "#/$defs/trustedTool"}},
+    "supersession_streams": {"type": "array", "items": {"$ref": "#/$defs/stream"}},
+    "derivation_rules": {"type": "array", "items": {"$ref": "#/$defs/versionedRule"}},
+    "aging_rules": {"type": "array", "items": {"$ref": "#/$defs/aging"}},
+    "integrity_contract": {"type": "object", "additionalProperties": false, "required": ["contract_id", "contract_version", "canonical_content_sha256", "issuer_authentication_rule_id", "rule_evaluation_contract_sha256"], "properties": {"contract_id": {"$ref": "#/$defs/identity"}, "contract_version": {"type": "integer", "minimum": 1}, "canonical_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "issuer_authentication_rule_id": {"$ref": "#/$defs/identity"}, "rule_evaluation_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "fail_closed": {"const": true}
+  },
+  "$defs": {
+    "identity": {"type": "string", "minLength": 1, "maxLength": 256},
+    "versionedRule": {"type": "object", "additionalProperties": false, "required": ["rule_id", "rule_version", "canonical_content_sha256"], "properties": {"rule_id": {"$ref": "#/$defs/identity"}, "rule_version": {"type": "integer", "minimum": 1}, "canonical_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "mapping": {"type": "object", "additionalProperties": false, "required": ["rule_id", "priority", "record_namespace", "record_type", "root_type", "visibility_field", "source_lineage_field", "upstream_origin_field", "trusted_tool_identity", "trusted_tool_version"], "properties": {"rule_id": {"$ref": "#/$defs/identity"}, "priority": {"type": "integer", "minimum": 0}, "record_namespace": {"$ref": "#/$defs/identity"}, "record_type": {"$ref": "#/$defs/identity"}, "root_type": {"enum": ["direct_observation", "trusted_tool_result", "visible_action_outcome", "unverified_peer_report"]}, "visibility_field": {"$ref": "#/$defs/identity"}, "source_lineage_field": {"$ref": "#/$defs/identity"}, "upstream_origin_field": {"$ref": "#/$defs/identity"}, "trusted_tool_identity": {"type": ["string", "null"]}, "trusted_tool_version": {"type": ["string", "null"]}}},
+    "trustedTool": {"type": "object", "additionalProperties": false, "required": ["tool_identity", "tool_version", "allowed_proposition_namespaces", "integrity_contract_sha256"], "properties": {"tool_identity": {"$ref": "#/$defs/identity"}, "tool_version": {"$ref": "#/$defs/identity"}, "allowed_proposition_namespaces": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identity"}}, "integrity_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "stream": {"type": "object", "additionalProperties": false, "required": ["source_stream_id", "authorized_issuer", "revision_field", "tracked_proposition_rule_id"], "properties": {"source_stream_id": {"$ref": "#/$defs/identity"}, "authorized_issuer": {"$ref": "#/$defs/identity"}, "revision_field": {"$ref": "#/$defs/identity"}, "tracked_proposition_rule_id": {"$ref": "#/$defs/identity"}}},
+    "aging": {"type": "object", "additionalProperties": false, "required": ["rule_id", "rule_version", "canonical_content_sha256", "authorized_issuer", "event_type", "affected_scope_rule_id"], "properties": {"rule_id": {"$ref": "#/$defs/identity"}, "rule_version": {"type": "integer", "minimum": 1}, "canonical_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "authorized_issuer": {"$ref": "#/$defs/identity"}, "event_type": {"$ref": "#/$defs/identity"}, "affected_scope_rule_id": {"$ref": "#/$defs/identity"}}}
+  }
+}

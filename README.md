@@ -41,6 +41,7 @@ The legacy OpenAI/Gemini/Zhipu style API-key paths still exist, but the current 
 - [Architecture diagrams](docs/architecture.md): current runtime task DAG source-of-truth architecture, Dual-DAG boundary, paper figure layout, and before/after diagrams.
 - [Task graph structure](docs/graph_structure.md): `Task`, `Graph`, statuses, dependencies, and artifacts.
 - [Dual-DAG runtime boundary](docs/dual_dag_runtime.md): Task Graph, Epistemic DAG, Action Candidate DAG, and artifact responsibilities.
+- [EAC semantic contract v1](docs/eac/eac_semantics_v1.md): declared epistemic preconditions, justification witnesses, frozen support policy, execution permits, and direct test oracles.
 - [Configuration](docs/configuration.md): Minecraft JSON fields, LLM defaults, API key fallback, and benchmark CLI options.
 - [Execution flow](docs/execution_flow.md): end-to-end runtime flow from config load to artifacts.
 - [Artifact schema](docs/artifact_schema.md): Minecraft benchmark artifact producers, fields, and public/private boundary.
