@@ -99,6 +99,36 @@ invalidation events, action definitions, `EPre` definitions, and policies.
 Terms such as `reported`, `supported`, `contested`, `defeated`, `superseded`, and
 `invalidated` do not imply objective truth.
 
+### 3.1 Stable fluent identity and evidence revision
+
+A tracked proposition separates its stable semantic identity from evidence
+version metadata. The stable identity is `(namespace, predicate, canonical
+arguments, semantic temporal_scope)`, with polarity used to represent support or
+contradiction. `temporal_scope` describes semantic applicability, not when an
+observation happened. Observation/event timestamps, `source_stream_revision`,
+and `evidence_revision` belong to evidence metadata and never enter the tracked
+proposition key.
+
+For example, successive observations with revisions 17 and 18 can both concern:
+
+```text
+minecraft:block_replaceable(target=X, temporal_scope=current)
+```
+
+They therefore update the same dynamic fluent. If revision 18 is an authorized
+newer actor-visible item in the same declared source stream, it may explicitly
+supersede revision 17; the old witness becomes invalid and its dependent permit
+becomes stale/revoked. Changing only the observation timestamp or revision must
+not manufacture a new proposition identity.
+
+By contrast, `inventory_at(task_phase=A)` and
+`inventory_at(task_phase=B)` have genuinely different semantic temporal scopes.
+Evidence for phase B does not supersede phase A and cannot invalidate a permit
+whose dependency set is unrelated to phase B. Encoding an observation timestamp,
+event timestamp, stream revision, or evidence revision directly in
+`temporal_scope` is non-conforming because it would prevent dynamic-fluent
+supersession.
+
 A witness is a finite, auditable subgraph containing the claimed proposition,
 evidence roots, derivation rules/edges, provenance, visibility, support
 dependencies, conflict/defeat absence dependencies, and relevant versions.
@@ -164,7 +194,7 @@ Scheme (JCS) [3], rejecting duplicate object keys before canonicalization, and
 SHA-256. Whitespace in the checked-in presentation is not semantic. The
 canonical policy digest is pinned by repository static validation.
 For the checked-in v1 value it is
-`sha256:685b9e70976ea832f8e7d47d244d8cca4d510ef08b3d04c7c2557d56587e8ca6`.
+`sha256:ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51`.
 
 Environment mapping is a separate frozen `SourceProfile` semantic dependency
 conforming to [`source_profile_schema_v1.json`](source_profile_schema_v1.json),
@@ -386,6 +416,9 @@ controlled difference.
 | Exact-request substitution | permit rejected before effect |
 | Valid actor-visible witness for objectively false `phi` | epistemically admissible; truth/`EnvPre` remains separate |
 | Root-reaching path with missing provenance | invalid witness |
+| Newer actor-visible observation of the same dynamic fluent | old evidence superseded; old witness invalid; dependent permit stale/revoked |
+| Newer evidence for a genuinely different temporal proposition | old proposition not superseded; unrelated permit remains valid |
+| Observation timestamp/revision changes while fluent semantics remain equal | stable tracked proposition identity is unchanged |
 
 ## 11. Existing repository correspondence
 
@@ -450,21 +483,20 @@ knowledge is outside version 1.
 ## 13. Boundary with #507
 
 ```text
-EAC Runtime Authority
-    |
-    | fresh execution permit
-    v
-Minecraft/native executor
-    |
-    v
-#507 execution isolation / reproducibility layer
+#507 owned run envelope / supervision
+    -> supervised Minecraft runtime
+        -> EAC execution-permit gate
+        -> EnvPre / SecPre checks
+        -> native effect
 ```
 
-#507 owns namespace and managed-Docker ownership, child supervision, one-shot
-lifecycle, cleanup, and reproducibility. It does not evaluate `EPre`, validate
-witnesses, decide `EAdm`, or issue execution permits. The operational ordering
-is run ownership/supervision, then per-action EAC gate, then independent native
-legality/security checks and effect. A frozen runtime supervised by #507 does
+#507 is the outer owned run envelope. It owns run ownership and lifecycle,
+namespace and managed-Docker ownership, child supervision, cleanup, and
+reproducibility. EAC owns per-action epistemic admissibility and permit
+freshness. #507 does not evaluate `EPre`, validate witnesses, decide `EAdm`, or
+issue execution permits. The EAC gate exists inside the effect path of the
+runtime supervised by #507, before independent `EnvPre`/`SecPre` checks and the
+native effect. A frozen runtime supervised by #507 does
 not become EAC Authority unless every supported effect path is separately
 mediated by #509/#510. #510 therefore requires a new authenticated execution
 identity and premanifest; the frozen #507 v4 identity cannot gain EAC mediation

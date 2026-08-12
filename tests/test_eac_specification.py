@@ -28,7 +28,7 @@ def _canonical_subset(value):
 def test_frozen_support_policy_identity_and_digest():
     policy = _load_no_duplicates(POLICY)
     assert (policy["policy_id"], policy["policy_version"]) == ("eac-primary-support", 1)
-    assert hashlib.sha256(_canonical_subset(policy)).hexdigest() == "685b9e70976ea832f8e7d47d244d8cca4d510ef08b3d04c7c2557d56587e8ca6"
+    assert hashlib.sha256(_canonical_subset(policy)).hexdigest() == "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51"
 
 
 def test_support_policy_has_exact_primary_roots_and_mode_constraints():
@@ -41,6 +41,28 @@ def test_support_policy_has_exact_primary_roots_and_mode_constraints():
     assert constraints["scenario_specific_change"] == "forbidden"
     assert constraints["post_outcome_tuning"] == "forbidden"
     assert constraints["advisory_authority_policy_difference"] == "forbidden"
+
+
+def test_dynamic_fluent_identity_excludes_evidence_time_and_revision():
+    identity = _load_no_duplicates(POLICY)["proposition_identity"]
+    assert identity["required_fields"] == [
+        "namespace", "predicate", "arguments", "temporal_scope", "polarity",
+    ]
+    stable_rule = identity["stable_tracked_proposition"]
+    assert "observation time" in stable_rule
+    assert "source_stream_revision" in stable_rule
+    assert "evidence_revision" in stable_rule
+    assert "never part of this key" in stable_rule
+    assert "never observation time" in identity["temporal_scope_rule"]
+
+
+def test_dynamic_fluent_supersession_oracles_are_frozen_in_spec():
+    specification = (ROOT / "docs/eac/eac_semantics_v1.md").read_text(encoding="utf-8")
+    assert "old evidence superseded; old witness invalid; dependent permit stale/revoked" in specification
+    assert "old proposition not superseded; unrelated permit remains valid" in specification
+    assert "stable tracked proposition identity is unchanged" in specification
+    assert "#507 owned run envelope / supervision" in specification
+    assert "-> EAC execution-permit gate" in specification
 
 
 def test_support_policy_schema_is_strict_and_matches_identity():

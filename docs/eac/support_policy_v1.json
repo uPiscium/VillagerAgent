@@ -12,7 +12,11 @@
   "proposition_identity": {
     "required_fields": ["namespace", "predicate", "arguments", "temporal_scope", "polarity"],
     "arguments_rule": "Typed canonical values in action-definition order; no fuzzy or natural-language matching.",
-    "same_tracked_proposition": "All required fields except polarity are exactly equal.",
+    "stable_tracked_proposition": "The stable fluent key is namespace, predicate, canonical arguments, and semantic temporal_scope. Evidence observation time, source_stream_revision, and evidence_revision are evidence metadata and are never part of this key.",
+    "same_tracked_proposition": "Two records track the same proposition exactly when namespace, predicate, canonical arguments, and semantic temporal_scope are equal; polarity may differ for contradiction. Observation timestamps and evidence or source-stream revisions do not affect identity.",
+    "temporal_scope_rule": "temporal_scope expresses semantic applicability such as current or task_phase=A, never observation time, event time, source stream revision, or evidence revision.",
+    "dynamic_fluent_rule": "Successive observations of a dynamic fluent use one stable temporal_scope such as current, so a newer authorized source-stream revision can supersede older evidence for that fluent.",
+    "different_temporal_proposition_rule": "Semantically distinct scopes such as task_phase=A and task_phase=B are different tracked propositions and never supersede one another.",
     "contradiction": "The same tracked proposition with opposite boolean polarity.",
     "scope_overlap": "Exact temporal_scope equality in primary v1."
   },
@@ -64,7 +68,7 @@
   },
   "supersession": {
     "explicit_only": true,
-    "authorized_rule": "A newer item may supersede an older item only when both share exact tracked proposition identity and a source_stream_id whose ordering and authorized issuer are declared by the frozen source profile.",
+    "authorized_rule": "A newer item may supersede an older item only when both share stable tracked proposition identity and a source_stream_id whose ordering and authorized issuer are declared by the frozen source profile. Observation time, source_stream_revision, and evidence_revision remain evidence metadata and do not create a new tracked proposition.",
     "ordering": "Monotonic source_stream_revision; wall-clock timestamps alone do not establish newer.",
     "effect": "The older item is excluded from every new or revalidated witness.",
     "implicit_supersession": "forbidden"
