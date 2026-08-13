@@ -3,58 +3,47 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import subprocess
 from pathlib import Path
 
 from benchmarks.common.eac import load_support_policy
 from benchmarks.common.eac.canonical import canonical_bytes
 from benchmarks.common.eac.policy import bind_source_profile
+from env.runtime_execution import RuntimeExecution
 
-ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_ID = "minecraft-eac-runtime-v1"
-FROZEN_REVISION = "issue-510-minecraft-eac-v1"
-FROZEN_PREMANIFEST = ROOT / "docs/eac/minecraft_eac_premanifest_v1.json"
-IDENTITY_ASSETS = (
-    "benchmarks/common/eac/authority.py",
-    "benchmarks/common/eac/__init__.py",
-    "benchmarks/common/eac/canonical.py",
-    "benchmarks/common/eac/gateway.py",
-    "benchmarks/common/eac/model.py",
-    "benchmarks/common/eac/policy.py",
-    "benchmarks/common/eac/witness.py",
-    "benchmarks/minecraft/experiment.py",
-    "benchmarks/minecraft/eac_runtime.py",
-    "env/env.py",
-    "env/env_api.py",
-    "env/minecraft_client.py",
-    "env/minecraft_server_fast.py",
-    "env/runtime_paths.py",
-    "pipeline/controller_tiny.py",
-    "start_with_config.py",
-    "docs/eac/minecraft_preconditions_v1.json",
-    "docs/eac/minecraft_source_profile_v1.json",
-)
+_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def resolve_git_revision(root: Path) -> str:
+    """Return the immutable commit checked out at an exact runtime root."""
+    root = root.resolve(strict=True)
+    environment = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
+        text=True, timeout=10, check=False, env=environment,
+    )
+    revision = result.stdout.strip()
+    if result.returncode != 0 or _COMMIT.fullmatch(revision) is None:
+        raise ValueError("Minecraft EAC execution root has no immutable Git revision")
+    return revision
 
 
-def child_manifest(root: Path = ROOT) -> dict:
-    assets = [{"path": item, "sha256": _sha(root / item)} for item in IDENTITY_ASSETS]
-    payload = {"identity": EXECUTION_ID, "child_count": len(assets), "children": assets}
-    return {**payload, "child_manifest_sha256": hashlib.sha256(canonical_bytes(payload)).hexdigest()}
-
-
-def runtime_identity(root: Path = ROOT, *, execution_revision: str) -> dict:
-    manifest = child_manifest(root)
+def runtime_identity(execution: RuntimeExecution, *, execution_revision: str) -> dict:
+    execution.verify()
+    if _COMMIT.fullmatch(execution_revision) is None:
+        raise ValueError("Minecraft EAC execution revision must be a full Git commit")
+    root = execution.root
     classification = json.loads((root / "docs/eac/minecraft_preconditions_v1.json").read_text())
     profile = bind_source_profile(json.loads((root / "docs/eac/minecraft_source_profile_v1.json").read_text()))
     policy = load_support_policy(root / "docs/eac/support_policy_v1.json")
     payload = {
         "execution_identity": EXECUTION_ID,
         "execution_revision": execution_revision,
-        "child_manifest_sha256": manifest["child_manifest_sha256"],
-        "child_count": manifest["child_count"],
+        "child_manifest_sha256": execution.manifest_sha256,
+        "child_count": execution.asset_count,
         "eac_source_profile": {"identity": profile.profile_id, "version": profile.profile_version,
                                "digest": profile.digest_sha256},
         "epre_classification": {"identity": classification["artifact_id"],
@@ -71,9 +60,12 @@ def runtime_identity(root: Path = ROOT, *, execution_revision: str) -> dict:
             "premanifest_identity": hashlib.sha256(canonical_bytes(premanifest)).hexdigest()}
 
 
-def verify_eac_premanifest(path: Path, *, execution_revision: str, root: Path = ROOT) -> dict:
+def verify_eac_premanifest(path: Path, *, execution: RuntimeExecution,
+                           execution_revision: str) -> dict:
+    if resolve_git_revision(execution.root) != execution_revision:
+        raise ValueError("Minecraft EAC execution revision mismatch")
     value = json.loads(path.read_text(encoding="utf-8"))
-    expected = runtime_identity(root, execution_revision=execution_revision)
+    expected = runtime_identity(execution, execution_revision=execution_revision)
     if value != expected:
         raise ValueError("Minecraft EAC premanifest identity mismatch")
     return value

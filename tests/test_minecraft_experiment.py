@@ -537,7 +537,7 @@ def test_eac_nonjudged_fixture_wires_premanifest_and_revision_without_execution(
 
     eac = captured["minecraft_dual_dag_config"]
     assert eac["eac_premanifest"] == "docs/eac/minecraft_eac_premanifest_v1.json"
-    assert eac["eac_execution_revision"] == "issue-510-minecraft-eac-v1"
+    assert len(eac["eac_execution_revision"]) == 40
     assert eac["judged_execution"] is False and eac["production"] is False
 
 
@@ -546,7 +546,7 @@ def test_eac_execute_rejects_judged_or_production_launch(field, tmp_path):
     config = _minecraft_config("eac_rejected")
     config.update({
         "eac_premanifest": "docs/eac/minecraft_eac_premanifest_v1.json",
-        "eac_execution_revision": "issue-510-minecraft-eac-v1",
+        "eac_execution_revision": "0" * 40,
         "judged_execution": False,
         "production": False,
     })

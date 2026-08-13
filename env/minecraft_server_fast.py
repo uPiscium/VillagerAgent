@@ -657,51 +657,9 @@ async def eac_preflight(request: Request):
     """Read-only native legality preflight for the classified EAC subset."""
     data = await request.json()
     action_name, arguments = data.get('action'), data.get('arguments', {})
-    if not isinstance(arguments, dict):
-        return JSONResponse({'status': False, 'reason': 'invalid_arguments'})
-    try:
-        normalize = lambda value: value.lower().replace(' ', '_') if isinstance(value, str) else value
-        if action_name in {'MineBlock', 'placeBlock', 'navigateTo'}:
-            coordinates = tuple(arguments.get(key) for key in ('x', 'y', 'z'))
-            if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in coordinates):
-                return JSONResponse({'status': False, 'reason': 'invalid_target'})
-            target = Vec3(*coordinates)
-            if action_name == 'MineBlock':
-                block = bot.blockAt(target)
-                legal = block is not None and block.name != 'air'
-            elif action_name == 'placeBlock':
-                item_name = normalize(arguments.get('item_name'))
-                facing = arguments.get('facing')
-                facing_aliases = {'default': 'A', 'up': 'y', 'down': 'y',
-                                  'north': 'z', 'south': 'z', 'west': 'x', 'east': 'x'}
-                if isinstance(facing, str):
-                    facing = facing_aliases.get(facing.lower(), facing)
-                block = bot.blockAt(target)
-                legal = (facing in {'W', 'E', 'S', 'N', 'x', 'y', 'z', 'A', None}
-                         and block is not None and block.name in {'air', 'water', 'dirt'}
-                         and any(item.name == item_name and item.count > 0 for item in bot.inventory.items()))
-            else:
-                legal = bot.blockAt(target) is not None
-        elif action_name == 'attackTarget':
-            target_name = normalize(arguments.get('target_name'))
-            legal = any(normalize(getattr(entity, 'name', None)) == target_name
-                        or normalize(getattr(entity, 'username', None)) == target_name
-                        for entity in bot.entities.values())
-        elif action_name == 'handoverBlock':
-            item_name, count = normalize(arguments.get('item_name')), arguments.get('item_count')
-            target_name = normalize(arguments.get('target_player_name'))
-            target_exists = any(normalize(getattr(entity, 'username', None)) == target_name
-                                for entity in bot.entities.values())
-            legal = (isinstance(count, int) and not isinstance(count, bool) and count > 0
-                     and target_exists
-                     and sum(item.count for item in bot.inventory.items() if item.name == item_name) >= count)
-        elif action_name in {'scanNearbyEntities', 'talkTo', 'waitForFeedback'}:
-            legal = True
-        else:
-            legal = False
-        return JSONResponse({'status': legal, 'action': action_name})
-    except Exception:
-        return JSONResponse({'status': False, 'reason': 'preflight_error'})
+    from eac_preflight import evaluate_eac_preflight
+    return JSONResponse({'status': evaluate_eac_preflight(action_name, arguments, bot, Vec3),
+                         'action': action_name})
 
 
 @app.post('/post_wait_for_feedback')

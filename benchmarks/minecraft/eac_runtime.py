@@ -10,8 +10,7 @@ import hashlib
 import inspect
 import json
 from collections import deque
-from dataclasses import fields, is_dataclass
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Mapping
@@ -29,6 +28,7 @@ from env.runtime_paths import atomic_write_json
 ROOT = Path(__file__).resolve().parents[2]
 CLASSIFICATION_PATH = ROOT / "docs/eac/minecraft_preconditions_v1.json"
 SOURCE_PROFILE_PATH = ROOT / "docs/eac/minecraft_source_profile_v1.json"
+INGESTION_CONTRACT_PATH = ROOT / "docs/eac/minecraft_ingestion_contract_v1.json"
 RUNTIME_ID = "minecraft-eac-runtime-v1"
 SUPPORTED_MODES = frozenset(("dual_dag_advisory", "dual_dag_authority"))
 FORBIDDEN_EVIDENCE_ORIGINS = frozenset((
@@ -87,6 +87,17 @@ def _authenticate_classification(value: Mapping[str, Any]) -> str:
     return observed
 
 
+def _authenticate_ingestion_contract(value: Mapping[str, Any]) -> tuple[str, str]:
+    detached = dict(value)
+    declared = detached.pop("detached_artifact_sha256", None)
+    observed = _digest(detached)
+    if declared != observed:
+        raise MinecraftEACError("Minecraft ingestion contract digest mismatch")
+    tool_digest = _digest(value["trusted_observation_adapter"])
+    rule_digest = _digest(value["rule_evaluation"])
+    return tool_digest, rule_digest
+
+
 class MinecraftEACRuntime:
     """One immutable Minecraft Advisory or Authority runtime.
 
@@ -109,6 +120,14 @@ class MinecraftEACRuntime:
         self.classification = _load_json(CLASSIFICATION_PATH)
         self._classification_digest = _authenticate_classification(self.classification)
         self.profile_document = _load_json(SOURCE_PROFILE_PATH)
+        self.ingestion_contract = _load_json(INGESTION_CONTRACT_PATH)
+        tool_digest, rule_digest = _authenticate_ingestion_contract(self.ingestion_contract)
+        trusted_tool = self.profile_document["trusted_tools"][0]
+        integrity = self.profile_document["integrity_contract"]
+        if (trusted_tool["integrity_contract_sha256"] != tool_digest
+                or integrity["canonical_content_sha256"] != self.ingestion_contract["detached_artifact_sha256"]
+                or integrity["rule_evaluation_contract_sha256"] != rule_digest):
+            raise MinecraftEACError("Minecraft SourceProfile integrity contract mismatch")
         self.policy_binding = load_support_policy()
         self.profile_binding = bind_source_profile(self.profile_document)
         authority_mode = "authority" if mode == "dual_dag_authority" else "advisory"
@@ -129,6 +148,7 @@ class MinecraftEACRuntime:
         self._lock = RLock()
         self._records = deque(maxlen=256)
         self._evidence_total = 0
+        self._current_roots: dict[tuple[str, PropositionKey, bool], str] = {}
         self._last_permit: dict[str, Any] = {}
         self._audit_path = Path(audit_path) if audit_path is not None else None
         self._persist_audit()
@@ -316,14 +336,16 @@ class MinecraftEACRuntime:
         if record_type == "trusted_tool_result":
             record.update({
                 "tool_identity": "minecraft-observation-adapter", "tool_version": "1",
-                "integrity_contract_sha256": "1" * 64,
+                "integrity_contract_sha256": self.profile_document["trusted_tools"][0]["integrity_contract_sha256"],
             })
         if payload:
             record["sanitized_payload"] = _plain(dict(payload))
-        if record_type == "direct_observation":
+        if record_type in {"direct_observation", "visible_action_outcome"}:
             if not isinstance(revision, int):
                 raise MinecraftEACError("supersession requires a monotonic direct-observation revision")
-            record.update({"source_stream_id": "minecraft-visible-state",
+            stream = ("minecraft-visible-state" if record_type == "direct_observation"
+                      else "minecraft-visible-action-state")
+            record.update({"source_stream_id": stream,
                            "source_stream_revision": revision})
         elif supersedes:
             raise MinecraftEACError("supersession requires a monotonic direct-observation revision")
@@ -332,6 +354,7 @@ class MinecraftEACRuntime:
             provenance_id=provenance_id, supersedes=supersedes)
         self._records.append({"root_id": rid, "record_type": record_type,
                               "actor_id": actor_id, "source": source})
+        self._current_roots[(actor_id, proposition.key, proposition.polarity)] = rid
         self._evidence_total += 1
         self._persist_audit()
         return root
@@ -350,10 +373,13 @@ class MinecraftEACRuntime:
             source="minecraft-peer:" + sender)
 
     def _ingest_visible_outcome(self, actor_id, tool_name, proposition, result) -> None:
+        if tool_name != "MineBlock":
+            return
         self.ingest_actor_record(
-            actor_id=actor_id, proposition=proposition, record_type="visible_action_outcome",
-            source="minecraft-action:" + tool_name,
-            payload={"status": result.get("status") if isinstance(result, Mapping) else None})
+            actor_id=actor_id, proposition=replace(proposition, polarity=False),
+            record_type="visible_action_outcome", source="minecraft-action:MineBlock",
+            payload={"status": result.get("status") if isinstance(result, Mapping) else None},
+            revision=self._sequence + 1)
 
     def _ingest_result_evidence(self, actor_id: str, tool_name: str, result: Any,
                                 request_arguments: Mapping[str, Any] | None = None) -> None:

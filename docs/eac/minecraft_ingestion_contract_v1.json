@@ -1,0 +1,25 @@
+{
+  "artifact_id": "minecraft-eac-ingestion-contract",
+  "artifact_version": 1,
+  "detached_artifact_sha256": "bde81b511d2637408374f5ad397492f6c00c75ad81db8822e9bda179fb7c97ea",
+  "issuer_authentication": {
+    "rule_id": "minecraft-runtime-event-authentication",
+    "issuer": "minecraft-eac-adapter",
+    "profile_id": "minecraft-eac-primary",
+    "record_namespace": "minecraft",
+    "required_binding": "record issuer, bound SourceProfile, and mapped proposition namespace must match"
+  },
+  "trusted_observation_adapter": {
+    "tool_identity": "minecraft-observation-adapter",
+    "tool_version": "1",
+    "accepted_native_source": "successful scanNearbyEntities bridge response",
+    "sanitization": "at most 128 mapping rows; names normalized; positions copied from visible response",
+    "forbidden_origins": ["evaluator", "oracle", "meta_judger", "score", "simulator_truth"]
+  },
+  "rule_evaluation": {
+    "contract_id": "minecraft-source-rule-evaluation",
+    "fail_closed": true,
+    "mapping_authority": "benchmarks.common.eac.policy.match_mapping",
+    "source_authenticator": "MinecraftEACRuntime._authenticate_record"
+  }
+}

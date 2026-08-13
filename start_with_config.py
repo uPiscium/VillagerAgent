@@ -429,14 +429,14 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         if ((minecraft_dual_dag_config or {}).get("judged_execution") is not False
                 or (minecraft_dual_dag_config or {}).get("production") is not False):
             raise ValueError("Minecraft EAC runtime requires explicit non-judged, non-production admission")
-        if eac_mode != "dual_dag_authority":
-            raise ValueError("Frozen Minecraft EAC execution requires dual_dag_authority")
-        from benchmarks.minecraft.eac_identity import FROZEN_PREMANIFEST, FROZEN_REVISION
-        if Path(premanifest_path).resolve() != FROZEN_PREMANIFEST.resolve() or execution_revision != FROZEN_REVISION:
-            raise ValueError("Minecraft EAC runtime requires the frozen non-judged identity")
+        if eac_mode not in {"dual_dag_advisory", "dual_dag_authority"}:
+            raise ValueError("Minecraft EAC execution requires an admitted EAC mode")
         if task_type != "none":
             raise ValueError("Minecraft EAC non-judged identity requires task_type=none")
-        identity = verify_eac_premanifest(Path(premanifest_path), execution_revision=execution_revision)
+        identity = verify_eac_premanifest(
+            Path(premanifest_path), execution=runtime_execution,
+            execution_revision=execution_revision,
+        )
         install_minecraft_eac(env, mode=eac_mode, run_id=attempt_id, identity_binding=identity)
     if task_type == "meta" and runtime_result_path:
         env.meta_diagnostics_dir = os.path.dirname(runtime_result_path) or "."

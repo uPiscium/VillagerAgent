@@ -1,7 +1,7 @@
 {
   "artifact_id": "minecraft-preconditions",
   "artifact_version": 1,
-  "detached_artifact_sha256": "34f887d45280fe1e0cd61c7799d81ed208badf2b255d287dcb0777d2924b911a",
+  "detached_artifact_sha256": "559cf7d3c56899a89be77cef573954379646e2366822677222a2e9e7b67800cf",
   "actions": [
     {
       "action_identity": "MineBlock",
@@ -53,9 +53,9 @@
       "temporal_scope": "current",
       "epre": true,
       "env_pre": true,
-      "env_preconditions": [{"condition_id": "destination_reachable", "namespace": "minecraft", "predicate": "destination_reachable", "argument_fields": ["x", "y", "z"], "temporal_scope": "effect-time"}],
+      "env_preconditions": [{"condition_id": "destination_resolvable", "namespace": "minecraft", "predicate": "destination_resolvable", "argument_fields": ["x", "y", "z"], "temporal_scope": "effect-time"}],
       "sec_pre": false,
-      "classification_rationale": "The chosen destination requires actor-visible grounding and the bridge independently checks path feasibility.",
+      "classification_rationale": "The chosen destination requires actor-visible grounding and the bridge independently checks that the coordinate resolves in the loaded world; path completion remains an execution outcome rather than a preflight claim.",
       "specification_source": "env.minecraft_client.Agent.navigateTo/v1",
       "actor_scope_rule": "acting-player-visible",
       "capability_dependency": "minecraft:post_move_to_pos",
@@ -110,9 +110,9 @@
       "temporal_scope": "current",
       "epre": false,
       "env_pre": true,
-      "env_preconditions": [{"condition_id": "communication_target_available", "namespace": "minecraft", "predicate": "communication_target_available", "argument_fields": ["entity_name"], "temporal_scope": "effect-time"}],
+      "env_preconditions": [{"condition_id": "communication_request_valid", "namespace": "minecraft", "predicate": "communication_request_valid", "argument_fields": ["entity_name", "message"], "temporal_scope": "effect-time"}],
       "sec_pre": false,
-      "classification_rationale": "Communication is evidence-producing; receipt is a peer report and does not establish world-state truth.",
+      "classification_rationale": "Communication is evidence-producing; native legality requires a non-empty target and message, while receipt is a peer report and does not establish world-state truth.",
       "specification_source": "env.minecraft_client.Agent.talkTo/v1",
       "actor_scope_rule": "sender-and-recipient-visible",
       "capability_dependency": "minecraft:post_talk_to",

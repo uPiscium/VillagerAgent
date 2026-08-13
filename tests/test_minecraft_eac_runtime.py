@@ -48,8 +48,8 @@ def test_frozen_minecraft_artifacts_authenticate_and_include_dual_class_fixture(
     source_profile = json.loads(SOURCE_PROFILE_PATH.read_text())
     mine_class = next(item for item in classification["actions"] if item["action_identity"] == "MineBlock")
     assert mine_class["epre"] is True and mine_class["env_pre"] is True
-    assert classification["detached_artifact_sha256"] == "34f887d45280fe1e0cd61c7799d81ed208badf2b255d287dcb0777d2924b911a"
-    assert source_profile["detached_profile_sha256"] == "0bdfd40f6cf7a0d2575498e00cf18020edf7bf9a1246217a5acbff6b948bdb01"
+    assert classification["detached_artifact_sha256"] == "559cf7d3c56899a89be77cef573954379646e2366822677222a2e9e7b67800cf"
+    assert source_profile["detached_profile_sha256"] == "b341a9128c331718a80d2d3b8853551f03139f8e432968fa62cb9e65d7491d52"
 
 
 def test_direct_observation_allows_authority_effect_and_visible_outcome_is_ingested():
@@ -64,6 +64,10 @@ def test_direct_observation_allows_authority_effect_and_visible_outcome_is_inges
     assert audit["runtime_identity"] == RUNTIME_ID
     assert audit["oracle_state_included"] is False
     assert any(item["record_type"] == "visible_action_outcome" for item in audit["evidence_index"])
+    with pytest.raises(MinecraftEACError, match="not_admissible"):
+        subject.prepare_tool("MineBlock", mine, (), {
+            "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+        })
 
 
 def test_missing_epre_witness_rejects_even_when_envpre_is_true_with_zero_effect():
