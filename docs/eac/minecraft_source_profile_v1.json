@@ -1,7 +1,7 @@
 {
   "profile_id": "minecraft-eac-primary",
   "profile_version": 1,
-  "detached_profile_sha256": "b341a9128c331718a80d2d3b8853551f03139f8e432968fa62cb9e65d7491d52",
+  "detached_profile_sha256": "2bd2269879b76b0f8540779db26715d738b627eb058f4004dbd44fd5b224a988",
   "mapping_rules": [
     {"rule_id":"minecraft-direct-observation","priority":0,"record_namespace":"minecraft","record_type":"direct_observation","root_type":"direct_observation","visibility_field":"visible_to","source_lineage_field":"source_lineage_id","upstream_origin_field":"upstream_origin_id","trusted_tool_identity":null,"trusted_tool_version":null},
     {"rule_id":"minecraft-trusted-tool-result","priority":0,"record_namespace":"minecraft","record_type":"trusted_tool_result","root_type":"trusted_tool_result","visibility_field":"visible_to","source_lineage_field":"source_lineage_id","upstream_origin_field":"upstream_origin_id","trusted_tool_identity":"minecraft-observation-adapter","trusted_tool_version":"1"},
@@ -9,7 +9,7 @@
     {"rule_id":"minecraft-peer-report","priority":0,"record_namespace":"minecraft","record_type":"peer_report","root_type":"unverified_peer_report","visibility_field":"visible_to","source_lineage_field":"source_lineage_id","upstream_origin_field":"upstream_origin_id","trusted_tool_identity":null,"trusted_tool_version":null}
   ],
   "trusted_tools": [
-    {"tool_identity":"minecraft-observation-adapter","tool_version":"1","allowed_proposition_namespaces":["minecraft"],"integrity_contract_sha256":"ccc3caebb9b81cb478d3683906a3ffb0567b6523899e449a520a5d69a4146715"}
+    {"tool_identity":"minecraft-observation-adapter","tool_version":"1","allowed_proposition_namespaces":["minecraft"],"integrity_contract_sha256":"3544ecd4e4326171ae2929a2c525be63eb9f423c560e063b37964b250078688f"}
   ],
   "supersession_streams": [
     {"source_stream_id":"minecraft-visible-state","authorized_issuer":"minecraft-eac-adapter","revision_field":"source_stream_revision","tracked_proposition_rule_id":"minecraft-direct-observation"},
@@ -17,6 +17,6 @@
   ],
   "derivation_rules": [],
   "aging_rules": [],
-  "integrity_contract": {"contract_id":"minecraft-eac-ingestion","contract_version":1,"canonical_content_sha256":"bde81b511d2637408374f5ad397492f6c00c75ad81db8822e9bda179fb7c97ea","issuer_authentication_rule_id":"minecraft-runtime-event-authentication","rule_evaluation_contract_sha256":"cf7942f52f3d8926687d406cf3ebc99a9e8a85e94ea7e75fecf50d44a61fd6a1"},
+  "integrity_contract": {"contract_id":"minecraft-eac-ingestion","contract_version":1,"canonical_content_sha256":"49ddd5ad00bb66869504fcd9107dce47395a0332d47be917c298e966a9bd9b5a","issuer_authentication_rule_id":"minecraft-runtime-event-authentication","rule_evaluation_contract_sha256":"cf7942f52f3d8926687d406cf3ebc99a9e8a85e94ea7e75fecf50d44a61fd6a1"},
   "fail_closed": true
 }

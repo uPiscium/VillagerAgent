@@ -93,5 +93,12 @@ def _placement_reference(bot, target, facing, Vec3):
     required = offsets.get(facing)
     if required is not None:
         return bot.blockAt(Vec3(coordinates[0] + required[0], coordinates[1] + required[1], coordinates[2] + required[2])).name != 'air'
+    axes = {
+        'x': ((-1, 0, 0), (1, 0, 0)),
+        'y': ((0, -1, 0), (0, 1, 0)),
+        'z': ((0, 0, -1), (0, 0, 1)),
+    }
+    candidates = axes.get(facing, ((0, -1, 0), (0, 1, 0), (-1, 0, 0),
+                                   (1, 0, 0), (0, 0, -1), (0, 0, 1)))
     return any(bot.blockAt(Vec3(coordinates[0] + dx, coordinates[1] + dy, coordinates[2] + dz)).name != 'air'
-               for dx, dy, dz in ((0, -1, 0), (0, 1, 0), (-1, 0, 0), (1, 0, 0), (0, 0, -1), (0, 0, 1)))
+               for dx, dy, dz in candidates)

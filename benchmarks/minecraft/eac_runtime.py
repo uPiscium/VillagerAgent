@@ -22,6 +22,7 @@ from benchmarks.common.eac import (
 )
 from benchmarks.common.eac.model import NativeEffectResult
 from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
+from env.eac_observation_adapter import sanitized_scan_rows
 from benchmarks.common.eac.authority import _plain as _authority_plain
 from env.runtime_paths import atomic_write_json
 
@@ -93,6 +94,10 @@ def _authenticate_ingestion_contract(value: Mapping[str, Any]) -> tuple[str, str
     observed = _digest(detached)
     if declared != observed:
         raise MinecraftEACError("Minecraft ingestion contract digest mismatch")
+    adapter = value["trusted_observation_adapter"]
+    implementation = ROOT / adapter["implementation_path"]
+    if hashlib.sha256(implementation.read_bytes()).hexdigest() != adapter["implementation_sha256"]:
+        raise MinecraftEACError("Minecraft observation adapter implementation digest mismatch")
     tool_digest = _digest(value["trusted_observation_adapter"])
     rule_digest = _digest(value["rule_evaluation"])
     return tool_digest, rule_digest
@@ -387,17 +392,8 @@ class MinecraftEACRuntime:
         if not isinstance(result, Mapping) or result.get("status") is not True:
             return
         if tool_name == "scanNearbyEntities":
-            rows = result.get("data")
-            if not isinstance(rows, list):
-                return
-            for index, row in enumerate(rows[:128]):
-                if not isinstance(row, Mapping):
-                    continue
-                name = (row.get("name") or row.get("item_name") or row.get("type")
-                        or result.get("observed_name") or (request_arguments or {}).get("item_name"))
-                position = row.get("position")
-                if position is None and all(key in row for key in ("x", "y", "z")):
-                    position = [row["x"], row["y"], row["z"]]
+            rows = sanitized_scan_rows(result, request_arguments)
+            for index, (name, position) in enumerate(rows):
                 proposition = Proposition(PropositionKey(
                     "minecraft", "entity_observed", (_minecraft_identifier(name), position), "current"))
                 self.ingest_actor_record(
@@ -412,20 +408,13 @@ class MinecraftEACRuntime:
                 proposition = Proposition(PropositionKey(
                     "minecraft", "peer_message_received", (_plain(event),), "current"))
                 self.ingest_peer_report(actor_id, proposition, "peer")
-        if tool_name == "scanNearbyEntities" and isinstance(result.get("data"), list):
-            for index, row in enumerate(result["data"][:128]):
-                if not isinstance(row, Mapping):
-                    continue
-                position = row.get("position")
-                if position is None and all(key in row for key in ("x", "y", "z")):
-                    position = [row["x"], row["y"], row["z"]]
+        if tool_name == "scanNearbyEntities":
+            for index, (name, position) in enumerate(sanitized_scan_rows(result, request_arguments)):
                 observed_values = []
                 if isinstance(position, (list, tuple)) and len(position) == 3:
                     coordinates = tuple(position)
                     observed_values.extend((("placement_target_observed", coordinates),
                                             ("destination_observed", coordinates)))
-                name = (row.get("name") or row.get("item_name") or row.get("type")
-                        or result.get("observed_name") or (request_arguments or {}).get("item_name"))
                 if name:
                     normalized = (_minecraft_identifier(name),)
                     observed_values.extend((("entity_target_observed", normalized),

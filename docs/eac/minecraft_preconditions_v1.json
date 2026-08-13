@@ -1,7 +1,7 @@
 {
   "artifact_id": "minecraft-preconditions",
   "artifact_version": 1,
-  "detached_artifact_sha256": "559cf7d3c56899a89be77cef573954379646e2366822677222a2e9e7b67800cf",
+  "detached_artifact_sha256": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
   "actions": [
     {
       "action_identity": "MineBlock",
@@ -13,9 +13,12 @@
       "temporal_scope": "current",
       "epre": true,
       "env_pre": true,
-      "env_preconditions": [{"condition_id": "target_block_present", "namespace": "minecraft", "predicate": "target_block_present", "argument_fields": ["x", "y", "z"], "temporal_scope": "current"}],
+      "env_preconditions": [
+        {"condition_id": "target_block_present", "namespace": "minecraft", "predicate": "target_block_present", "argument_fields": ["x", "y", "z"], "temporal_scope": "current"},
+        {"condition_id": "target_block_diggable_with_held_tool", "namespace": "minecraft", "predicate": "target_block_diggable_with_held_tool", "argument_fields": ["x", "y", "z"], "temporal_scope": "effect-time"}
+      ],
       "sec_pre": false,
-      "classification_rationale": "The actor must have visible justification for the intended target and the native bridge must independently confirm effect-time legality.",
+      "classification_rationale": "The actor must have visible justification that the target block is present; the native bridge independently confirms presence and diggability with the held tool. Path completion is an execution outcome, not a preflight reachability claim.",
       "specification_source": "env.minecraft_client.Agent.MineBlock/v1",
       "actor_scope_rule": "acting-player-visible",
       "capability_dependency": "minecraft:post_dig",

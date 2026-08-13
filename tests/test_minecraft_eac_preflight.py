@@ -40,3 +40,15 @@ def test_classified_native_preflight_accepts_matching_legal_request(action, argu
 ])
 def test_evidence_action_preflight_rejects_invalid_declared_envpre(action, arguments):
     assert evaluate_eac_preflight(action, arguments, Bot(), lambda *values: values) is False
+
+
+@pytest.mark.parametrize("facing", ["x", "y", "z"])
+def test_place_preflight_rejects_support_on_wrong_axis(facing):
+    bot = Bot()
+    allowed = {"x": (0, 1, 0), "y": (1, 0, 0), "z": (1, 0, 0)}[facing]
+    bot.blockAt = lambda pos: SimpleNamespace(
+        name="air" if tuple(pos) != (1 + allowed[0], 2 + allowed[1], 3 + allowed[2]) else "stone")
+    assert evaluate_eac_preflight(
+        "placeBlock", {"item_name": "stone", "x": 1, "y": 2, "z": 3, "facing": facing},
+        bot, lambda *values: values,
+    ) is False

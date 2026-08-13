@@ -11,8 +11,9 @@ dual-classified:
 
 - **EPre:** an actor lacking an admissible visible observation of the target
   must not rely on the target being the intended block;
-- **EnvPre:** the target must still be legal/reachable/mineable at native effect
-  time.
+- **EnvPre:** the target must still be present and diggable with the held tool at
+  native effect time. Path completion remains an execution outcome and is not
+  mislabeled as a side-effect-free reachability precondition.
 
 For other families the artifact records distinct stable `env_preconditions`
 condition identities (for example target replaceability, item availability,

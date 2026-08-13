@@ -48,8 +48,8 @@ def test_frozen_minecraft_artifacts_authenticate_and_include_dual_class_fixture(
     source_profile = json.loads(SOURCE_PROFILE_PATH.read_text())
     mine_class = next(item for item in classification["actions"] if item["action_identity"] == "MineBlock")
     assert mine_class["epre"] is True and mine_class["env_pre"] is True
-    assert classification["detached_artifact_sha256"] == "559cf7d3c56899a89be77cef573954379646e2366822677222a2e9e7b67800cf"
-    assert source_profile["detached_profile_sha256"] == "b341a9128c331718a80d2d3b8853551f03139f8e432968fa62cb9e65d7491d52"
+    assert classification["detached_artifact_sha256"] == "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001"
+    assert source_profile["detached_profile_sha256"] == "2bd2269879b76b0f8540779db26715d738b627eb058f4004dbd44fd5b224a988"
 
 
 def test_direct_observation_allows_authority_effect_and_visible_outcome_is_ingested():
@@ -245,6 +245,12 @@ def test_classification_digest_mismatch_fails_closed(monkeypatch):
         **original(path), "detached_artifact_sha256": "0" * 64,
     } if path == module.CLASSIFICATION_PATH else original(path))
     with pytest.raises(MinecraftEACError, match="digest mismatch"):
+        MinecraftEACRuntime(mode="dual_dag_authority", run_id="bad")
+
+
+def test_observation_adapter_implementation_drift_fails_closed(monkeypatch):
+    monkeypatch.setattr("benchmarks.minecraft.eac_runtime.Path.read_bytes", lambda unused: b"drift")
+    with pytest.raises(MinecraftEACError, match="implementation digest mismatch"):
         MinecraftEACRuntime(mode="dual_dag_authority", run_id="bad")
 
 
