@@ -250,6 +250,9 @@ def _run_minecraft_experiment_attempt(
     })
     runtime_launch_config = dict(launch_config)
     if execute:
+        premanifest = runtime_launch_config.get("eac_premanifest")
+        if isinstance(premanifest, str) and premanifest:
+            runtime_launch_config["eac_premanifest"] = str(Path(premanifest).resolve(strict=True))
         runtime_launch_config["task_name"] = f"{launch_config['task_name']}_{attempt_id[:12]}"
         runtime_launch_config["attempt_id"] = attempt_id
     safe_emit_runtime_event(event_sink, "run_started", source="benchmarks.minecraft.experiment", payload={"mode": "execute" if execute else "dry_run"})
@@ -1281,6 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     parser.add_argument("--retain-runtime-result", action="store_true", help="Keep the per-run internal runtime result after normalized artifacts are written")
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing non-empty run directory")
+    parser.add_argument("--execution-root", help="Immutable runtime execution checkout")
     args = parser.parse_args(argv)
 
     summary = run_minecraft_experiment(
@@ -1295,6 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
         retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
         overwrite=args.overwrite,
+        execution_root=args.execution_root,
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary.get("error") is None else 1

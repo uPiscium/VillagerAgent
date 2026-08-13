@@ -8,6 +8,7 @@ from env.eac_preflight import evaluate_eac_preflight
 class Bot:
     def __init__(self):
         self.inventory = SimpleNamespace(items=lambda: [SimpleNamespace(name="stone", count=3)])
+        self.heldItem = SimpleNamespace(name="iron_pickaxe")
         self.entities = {1: SimpleNamespace(name="cow", username=None),
                          2: SimpleNamespace(name="player", username="Bob")}
 
@@ -28,7 +29,7 @@ class Bot:
 def test_classified_native_preflight_accepts_matching_legal_request(action, arguments):
     bot = Bot()
     if action == "placeBlock":
-        bot.blockAt = lambda unused: SimpleNamespace(name="air")
+        bot.blockAt = lambda pos: SimpleNamespace(name="air" if tuple(pos) == (1, 2, 3) else "stone")
     assert evaluate_eac_preflight(action, arguments, bot, lambda *values: values) is True
 
 
