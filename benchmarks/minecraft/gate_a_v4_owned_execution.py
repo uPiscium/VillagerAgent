@@ -237,7 +237,7 @@ def _execute_once_core(bindings: ExecutionBindings):
 
 def simulate_fake_execution(outcome=SimulationOutcome.SUCCESS):
     if not isinstance(outcome, SimulationOutcome): raise ValueError("unknown simulation outcome")
-    c=_counters(); c.update(admission=1,ownership_acquire=1,restore=1,executor=1,validation=1,cleanup=1,ownership_release=1)
+    c=_counters(); c.update(admission=1,ownership_acquire=1,restore=1,executor=1,validation=1,ownership_release=1)
     if outcome is SimulationOutcome.CLEANUP_FAILURE: c["ownership_release"] = 0; return _result("blocked_cleanup","cleanup","cleanup_failed",c,{"managed_containers":0,"run_owned_children":0,"lease_state":"blocked","runtime_result_reusable":False})
     if outcome is SimulationOutcome.SUCCESS: return _result("fake_success","completed","none",c,{"managed_containers":0,"run_owned_children":0,"lease_state":"released","runtime_result_reusable":False})
     phase = "restore" if outcome is SimulationOutcome.RESTORE_FAILURE else ("executor" if outcome is SimulationOutcome.EXECUTION_FAILURE else "validation")

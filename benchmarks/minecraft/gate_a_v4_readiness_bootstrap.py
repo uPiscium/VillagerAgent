@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Filled after the launcher is finalized.  The bootstrap authenticates bytes,
 # then executes precisely those bytes; it accepts no path or command arguments.
-READINESS_LAUNCHER_SHA256 = "e9d2cef3f357a86edeb0a9b3bb2c60882717f0347afbfdc5e3aa2516777b3bf7"
+READINESS_LAUNCHER_SHA256 = "82a4ae2ec9ab3b039cf0ef8d874e8be8527b5ca7c351a656b79b188afb96ba32"
 
 
 def main() -> int:

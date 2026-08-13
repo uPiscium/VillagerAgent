@@ -200,7 +200,11 @@ def test_fake_wiring_second_invocation_is_rejected_without_reuse_or_release():
 def test_fake_success_is_exact_and_effect_free():
     result = execution.simulate_fake_execution()
     assert result["status"] == "fake_success"
-    assert result["counters"]["ownership_release"] == 1
+    assert result["counters"] == {
+        "admission": 1, "ownership_acquire": 1, "restore": 1,
+        "executor": 1, "validation": 1, "ownership_release": 1,
+        "retry": 0, "replacement": 0, "resume": 0, "second_run": 0,
+    }
     assert result["judged_attempts"] == 0
 
 
