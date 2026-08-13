@@ -10,7 +10,7 @@
   "api_base": "http://127.0.0.1:11434",
   "task_selection_policy": "dual_dag_advisory",
   "eac_premanifest": "docs/eac/minecraft_eac_premanifest_v1.json",
-  "eac_execution_revision": "2a3c06946258cb929463ffde43b7e70438f039ad",
+  "eac_execution_revision": "530bd53fe48085b65cdc211f8b354b8fbb57943e",
   "judged_execution": false,
   "production": false
 }
