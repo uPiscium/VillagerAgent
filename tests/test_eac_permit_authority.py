@@ -29,6 +29,7 @@ from benchmarks.common.eac import (
     bind_source_profile,
     load_support_policy,
 )
+from benchmarks.common.eac.canonical import FrozenJSONArray, FrozenJSONObject
 
 
 def _profile():
@@ -111,8 +112,7 @@ def test_manifest_binds_all_authority_dependencies_and_conflict_watch():
 
 
 @pytest.mark.parametrize("dependency", [
-    "policy:eac-primary-support", "profile:test-profile", "action:build",
-    "epre:ready", "scope:actor", "capability:build",
+    "scope:actor", "capability:build",
 ])
 def test_bound_dependency_mutation_stales_permit(dependency):
     authority, _, _, permit = _permit()
@@ -181,7 +181,7 @@ def test_disappearing_external_dependency_stales_consumed_permit():
             from benchmarks.common.eac.witness import EvidenceSnapshot
             from benchmarks.common.eac.authority import _proposition_slot
             versions = self.versions or (("evidence:external-root", 1), ("provenance:prov", 1),
-                                         (_proposition_slot(proposition), 1))
+                                         (_proposition_slot(proposition), 1), ("scope:actor", 1))
             return EvidenceSnapshot(
                 (EvidenceRoot("external-root", "direct_observation", proposition, "sensor", 1,
                               ("actor",), "prov", mapping_rule_id="direct"),), (),
@@ -210,7 +210,7 @@ def test_external_conflict_watch_rejects_new_defeater():
                               ("actor",), "prov", mapping_rule_id="direct"),), (),
                 (ProvenanceRecord("prov", "observation"),),
                 (("evidence:external-root", 1), ("provenance:prov", 1),
-                 (_proposition_slot(proposition), self.watch_revision)),
+                 (_proposition_slot(proposition), self.watch_revision), ("scope:actor", 1)),
                 _profile().digest_sha256, True)
 
     reader = Reader()
@@ -257,7 +257,133 @@ def test_nested_request_values_are_deeply_immutable():
     target = [1, {"x": [2]}]
     request = ExactRequest("c", "a", ActionRef("act", 1, "a" * 64), target=target)
     target[1]["x"].append(3)
-    assert request.target == (1, (("x", (2,)),))
+    assert request.target == FrozenJSONArray((1, FrozenJSONObject((("x", FrozenJSONArray((2,))),))))
+
+
+@pytest.mark.parametrize("original,replacement", [(True, 1), (False, 0)])
+def test_typed_scalar_request_substitution_is_rejected(original, replacement):
+    authority, request, _, permit = _permit()
+    typed = replace(request, target=original)
+    authority = _setup()[0]
+    # Register a fresh candidate whose permit is bound to the typed target.
+    candidate = authority._candidates[request.candidate_id]
+    del authority._candidates[request.candidate_id]
+    typed = replace(candidate.request, target=original)
+    authority._reserved_attempt_ids.remove(typed.attempt_id)
+    authority.register_candidate(typed, actor=candidate.actor, epre_ref=candidate.epre_ref,
+                                 epre=candidate.epre, capability_dependencies=candidate.capability_dependencies)
+    permit = authority.issue_permit(typed.candidate_id)
+    with pytest.raises(AuthorityError, match="mismatch"):
+        authority.validate_and_consume(replace(typed, target=replacement), permit)
+
+
+def test_object_and_array_requests_remain_distinct_but_object_order_is_canonical():
+    action = ActionRef("act", 1, "a" * 64)
+    object_request = ExactRequest("c", "a", action, target={"x": 1, "y": 2})
+    reordered = ExactRequest("c", "a", action, target={"y": 2, "x": 1})
+    array_request = ExactRequest("c", "a", action, target=[["x", 1], ["y", 2]])
+    assert object_request == reordered
+    assert object_request != array_request
+    assert object_request.identity_bytes() != array_request.identity_bytes()
+
+
+def test_direct_frozen_wrappers_deep_copy_and_reject_duplicate_object_keys():
+    nested = [1]
+    request = ExactRequest("c", "a", ActionRef("act", 1, "a" * 64),
+                           target=FrozenJSONArray((nested,)))
+    nested.append(2)
+    assert request.target == FrozenJSONArray((FrozenJSONArray((1,)),))
+    with pytest.raises(TypeError, match="unique"):
+        FrozenJSONObject((("x", 1), ("x", 2)))
+
+
+def test_binding_slots_do_not_collide_on_delimiter_like_identity_versions():
+    from benchmarks.common.eac.authority import _binding_slot
+    digest = "a" * 64
+    assert _binding_slot("action", ActionRef("a:b", "c", digest)) != _binding_slot(
+        "action", ActionRef("a", "b:c", digest))
+
+
+def test_parallel_definition_version_does_not_stale_but_retirement_obsoletes_candidate():
+    authority, request, proposition, permit = _permit()
+    v2_definition = {"identity": "build", "semantics": "v2"}
+    v2 = ActionRef("build", 2, RuntimeAuthority._definition_digest(v2_definition))
+    authority.register_action_definition(v2, v2_definition)
+    assert authority.permit(permit.permit_id).lifecycle.value == "issued"
+    authority.retire_definition("action", request.action)
+    assert authority.permit(permit.permit_id).lifecycle.value == "stale"
+    with pytest.raises(AuthorityError, match="semantic_binding_retired"):
+        authority.issue_permit(request.candidate_id)
+
+
+def test_retiring_authority_policy_profile_obsoletes_old_candidate():
+    authority, request, _, permit = _permit()
+    authority.retire_authority_semantics()
+    assert authority.permit(permit.permit_id).lifecycle.value == "stale"
+    with pytest.raises(AuthorityError, match="semantic_binding_retired"):
+        authority.issue_permit(request.candidate_id)
+
+
+def test_external_manifest_excludes_unrelated_snapshot_dependencies():
+    proposition = Proposition(PropositionKey("test", "ready", ("village",), "run"))
+    unrelated = Proposition(PropositionKey("test", "other", ("village",), "run"))
+    from benchmarks.common.eac.authority import _proposition_slot
+
+    class Reader:
+        unrelated_revision = 1
+
+        def evidence_snapshot(self, unused_actor):
+            from benchmarks.common.eac.witness import EvidenceSnapshot
+            roots = (
+                EvidenceRoot("wanted", "direct_observation", proposition, "sensor", 1,
+                             ("actor",), "prov-wanted", mapping_rule_id="direct"),
+                EvidenceRoot("unrelated", "direct_observation", unrelated, "sensor", 1,
+                             ("actor",), "prov-unrelated", mapping_rule_id="direct"),
+            )
+            return EvidenceSnapshot(
+                roots, (), (ProvenanceRecord("prov-wanted", "sensor"),
+                            ProvenanceRecord("prov-unrelated", "sensor")),
+                (("evidence:wanted", 1), ("provenance:prov-wanted", 1),
+                 (_proposition_slot(proposition), 1),
+                 ("scope:actor", 1),
+                 ("evidence:unrelated", self.unrelated_revision),
+                 ("provenance:prov-unrelated", self.unrelated_revision),
+                 (_proposition_slot(unrelated), self.unrelated_revision)),
+                _profile().digest_sha256, True)
+
+    reader = Reader()
+    authority, request, _ = _setup(reader=reader)
+    permit = authority.issue_permit(request.candidate_id)
+    dependencies = {item.dependency_id for item in permit.manifest.expectations}
+    assert "evidence:wanted" in dependencies and "evidence:unrelated" not in dependencies
+    reader.unrelated_revision = 2
+    token = authority.validate_and_consume(request, permit)
+    authority.reject_pre_effect(token, "env_pre")
+
+
+def test_external_scope_revision_stales_permit():
+    proposition = Proposition(PropositionKey("test", "ready", ("village",), "run"))
+    from benchmarks.common.eac.authority import _proposition_slot
+
+    class Reader:
+        scope_revision = 1
+
+        def evidence_snapshot(self, unused_actor):
+            from benchmarks.common.eac.witness import EvidenceSnapshot
+            return EvidenceSnapshot(
+                (EvidenceRoot("root", "direct_observation", proposition, "sensor", 1,
+                              ("actor",), "prov", mapping_rule_id="direct"),), (),
+                (ProvenanceRecord("prov", "sensor"),),
+                (("evidence:root", 1), ("provenance:prov", 1),
+                 (_proposition_slot(proposition), 1), ("scope:actor", self.scope_revision)),
+                _profile().digest_sha256, True)
+
+    reader = Reader()
+    authority, request, _ = _setup(reader=reader)
+    permit = authority.issue_permit(request.candidate_id)
+    reader.scope_revision = 2
+    with pytest.raises(AuthorityError, match="stale"):
+        authority.validate_and_consume(request, permit)
 
 
 def test_record_ingestion_requires_profile_bound_source_authentication():
@@ -334,11 +460,22 @@ def test_ingestion_uses_profile_declared_supersession_revision_field():
 
 def test_gateway_requires_permit_and_env_sec_prechecks_consume_independently():
     authority, request, _, permit = _permit()
-    gateway = EffectGateway(authority, lambda _: "ok", env_pre=lambda _: False)
+    calls = []
+    gateway = EffectGateway(authority, lambda _: "ok", env_pre=lambda _: False,
+                            sec_pre=lambda _: calls.append("sec") or False)
     with pytest.raises(EffectRejected, match="missing_permit"):
         gateway.execute(request)
     with pytest.raises(EffectRejected, match="precheck_rejected"):
         gateway.execute(request, permit)
+    assert calls == ["sec"]
+    attempt = authority.attempt_snapshot()[0]
+    assert (attempt.env_pre_result, attempt.sec_pre_result) == ("failed", "failed")
+
+
+@pytest.mark.parametrize("identity,version", [(True, 1), ("act", {}), ("", 1), ("act", True)])
+def test_versioned_refs_reject_malformed_typed_identity(identity, version):
+    with pytest.raises(ValueError):
+        ActionRef(identity, version, "a" * 64)
 
 
 def test_precheck_exception_terminates_consumed_attempt():

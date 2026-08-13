@@ -33,21 +33,23 @@ class EffectGateway:
             raise EffectRejected(RejectionReason.MISSING_PERMIT.value)
         try:
             token = self.__authority.validate_and_consume(request, permit)
+            first_error = None
             try:
-                env_result = self.__env_pre(request)
-            except BaseException:
-                self.__authority.reject_pre_effect(token, "env_pre")
-                raise
-            if env_result is not True:
-                self.__authority.reject_pre_effect(token, "env_pre")
-                raise EffectRejected(RejectionReason.PRECHECK_REJECTED.value)
+                env_result = "passed" if self.__env_pre(request) is True else "failed"
+            except BaseException as exc:
+                env_result, first_error = "failed", exc
             try:
-                sec_result = self.__sec_pre(request)
-            except BaseException:
-                self.__authority.reject_pre_effect(token, "sec_pre")
-                raise
-            if sec_result is not True:
-                self.__authority.reject_pre_effect(token, "sec_pre")
+                sec_result = "passed" if self.__sec_pre(request) is True else "failed"
+            except BaseException as exc:
+                sec_result = "failed"
+                if first_error is None:
+                    first_error = exc
+            if env_result != "passed" or sec_result != "passed":
+                reason = "env_pre" if env_result != "passed" else "sec_pre"
+                self.__authority.reject_pre_effect(
+                    token, reason, env_pre_result=env_result, sec_pre_result=sec_result)
+                if first_error is not None:
+                    raise first_error
                 raise EffectRejected(RejectionReason.PRECHECK_REJECTED.value)
             return self.__authority.execute_fenced(token, request, self.__native)
         except AuthorityError as exc:

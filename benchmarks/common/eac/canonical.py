@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -19,6 +20,55 @@ MAX_DEPTH = 32
 MAX_ITEMS = 4096
 MAX_BYTES = 1_048_576
 SAFE_INTEGER = 2**53 - 1
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class FrozenJSONArray:
+    items: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", tuple(canonical_argument(item) for item in self.items))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FrozenJSONArray) and canonical_bytes(self) == canonical_bytes(other)
+
+    def __hash__(self) -> int:
+        return hash(canonical_bytes(self))
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class FrozenJSONObject:
+    items: tuple[tuple[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        pairs = tuple(self.items)
+        if any(not isinstance(pair, tuple) or len(pair) != 2 for pair in pairs):
+            raise CanonicalTypeError("frozen object items must be key/value pairs")
+        keys = tuple(pair[0] for pair in pairs)
+        if (len(keys) != len(set(keys))
+                or any(not isinstance(key, str) or not key or not key.isascii() for key in keys)):
+            raise CanonicalTypeError("frozen object keys must be unique non-empty ASCII strings")
+        object.__setattr__(self, "items", tuple(sorted(
+            ((key, canonical_argument(value)) for key, value in pairs), key=lambda item: item[0])))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FrozenJSONObject) and canonical_bytes(self) == canonical_bytes(other)
+
+    def __hash__(self) -> int:
+        return hash(canonical_bytes(self))
+
+
+def thaw_json(value: Any) -> Any:
+    """Return ordinary JSON containers without losing frozen container types."""
+    if isinstance(value, FrozenJSONArray):
+        return [thaw_json(item) for item in value.items]
+    if isinstance(value, FrozenJSONObject):
+        return {key: thaw_json(item) for key, item in value.items}
+    if isinstance(value, list):
+        return [thaw_json(item) for item in value]
+    if isinstance(value, dict):
+        return {key: thaw_json(item) for key, item in value.items()}
+    return value
 
 
 def _check(value: Any, depth: int, state: list[int]) -> None:
@@ -56,6 +106,7 @@ def _check(value: Any, depth: int, state: list[int]) -> None:
 
 def canonical_bytes(value: Any) -> bytes:
     """Return JCS bytes for dict/list/string/bool/null and safe integers."""
+    value = thaw_json(value)
     _check(value, 0, [0])
     try:
         result = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True,
@@ -73,15 +124,18 @@ def canonical_sha256(value: Any) -> str:
 
 def canonical_argument(value: Any) -> Any:
     """Validate an effect argument and return its deterministic typed form."""
+    if isinstance(value, (FrozenJSONArray, FrozenJSONObject)):
+        canonical_bytes(value)
+        return value
     if value is None or isinstance(value, (bool, str, int)):
         canonical_bytes(value)
         return value
     if isinstance(value, list):
-        return tuple(canonical_argument(item) for item in value)
+        return FrozenJSONArray(tuple(canonical_argument(item) for item in value))
     if isinstance(value, dict):
         if any(not isinstance(key, str) or not key.isascii() for key in value):
             raise CanonicalTypeError("argument object keys must be ASCII strings")
-        return tuple((key, canonical_argument(value[key])) for key in sorted(value))
+        return FrozenJSONObject(tuple((key, canonical_argument(value[key])) for key in sorted(value)))
     raise CanonicalTypeError(f"unsupported argument type: {type(value).__name__}")
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from hashlib import sha256
 from secrets import token_hex
@@ -11,7 +11,7 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Protocol
 
-from .canonical import canonical_argument, canonical_bytes
+from .canonical import FrozenJSONArray, FrozenJSONObject, canonical_argument, canonical_bytes, thaw_json
 from .model import (
     ActionRef, ActorScope, AttemptRecord, AuditRecord, CandidateLifecycle, DependencyExpectation,
     DependencyManifest, EPreRef, EpistemicAdmissibility, EvidenceRoot, ExactRequest,
@@ -73,8 +73,10 @@ class _TokenState:
 
 
 def _plain(value: Any) -> Any:
+    if isinstance(value, (FrozenJSONArray, FrozenJSONObject)):
+        return thaw_json(value)
     if is_dataclass(value):
-        return {field: _plain(item) for field, item in asdict(value).items()}
+        return {field.name: _plain(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Mapping):
@@ -101,6 +103,11 @@ def _proposition_slot(proposition: Proposition, polarity: bool | None = None) ->
     key = proposition.key
     payload = [key.namespace, key.predicate, list(key.arguments), key.temporal_scope]
     return "conflict:" + _digest(payload)
+
+
+def _binding_slot(kind: str, reference) -> str:
+    payload = [kind, reference.identity, reference.version, reference.digest]
+    return f"{kind}-binding:" + sha256(canonical_bytes(payload)).hexdigest()
 
 
 class RuntimeAuthority:
@@ -148,6 +155,7 @@ class RuntimeAuthority:
         self._callback_active = 0
         self._action_definitions: dict[tuple[str, int | str, str], Any] = {}
         self._epre_definitions: dict[tuple[str, int | str, str], tuple[Proposition, ...]] = {}
+        self._retired_bindings: set[str] = set()
 
     @property
     def epoch(self) -> int:
@@ -183,8 +191,13 @@ class RuntimeAuthority:
             raise ValueError("action definition digest mismatch")
         with self._lock:
             self._ensure_mutable()
-            self._action_definitions[(action.identity, action.version, action.digest)] = definition
-            self._bump(("action:" + action.identity,))
+            key = (action.identity, action.version, action.digest)
+            version_key = (action.identity, action.version)
+            if any(existing[:2] == version_key and existing != key for existing in self._action_definitions):
+                raise ValueError("action identity/version already binds another digest")
+            if key in self._action_definitions:
+                return
+            self._action_definitions[key] = canonical_argument(_plain(definition))
 
     def register_epre_definition(self, epre: EPreRef, propositions: Iterable[Proposition]) -> None:
         declared = tuple(propositions)
@@ -194,8 +207,48 @@ class RuntimeAuthority:
             raise ValueError("EPre definition digest mismatch")
         with self._lock:
             self._ensure_mutable()
-            self._epre_definitions[(epre.identity, epre.version, epre.digest)] = declared
-            self._bump(("epre:" + epre.identity,))
+            key = (epre.identity, epre.version, epre.digest)
+            version_key = (epre.identity, epre.version)
+            if any(existing[:2] == version_key and existing != key for existing in self._epre_definitions):
+                raise ValueError("EPre identity/version already binds another digest")
+            if key in self._epre_definitions:
+                return
+            self._epre_definitions[key] = declared
+
+    def retire_definition(self, kind: str, reference: ActionRef | EPreRef) -> None:
+        if kind not in {"action", "epre"}:
+            raise ValueError("definition kind must be action or epre")
+        with self._lock:
+            self._ensure_mutable()
+            slot = _binding_slot(kind, reference)
+            registry = self._action_definitions if kind == "action" else self._epre_definitions
+            if (reference.identity, reference.version, reference.digest) not in registry:
+                raise ValueError("unknown semantic binding")
+            if slot in self._retired_bindings:
+                return
+            self._retired_bindings.add(slot)
+            self._bump((slot,))
+
+    def retire_authority_semantics(self) -> None:
+        """Permanently obsolete this authority's immutable policy/profile bindings."""
+        with self._lock:
+            self._ensure_mutable()
+            slots = {_binding_slot("policy", self.policy), _binding_slot("profile", self.profile)}
+            new_slots = slots - self._retired_bindings
+            if not new_slots:
+                return
+            self._retired_bindings.update(new_slots)
+            self._bump(new_slots)
+
+    def _candidate_bindings_current(self, candidate: _Candidate) -> bool:
+        return (_binding_slot("action", candidate.request.action) not in self._retired_bindings
+                and _binding_slot("epre", candidate.epre_ref) not in self._retired_bindings
+                and _binding_slot("policy", self.policy) not in self._retired_bindings
+                and _binding_slot("profile", self.profile) not in self._retired_bindings
+                and self.policy == PolicyRef(self.policy_binding.policy_id, self.policy_binding.policy_version,
+                                             self.policy_binding.digest_sha256)
+                and self.profile == ProfileRef(self.profile_binding.profile_id, self.profile_binding.profile_version,
+                                               self.profile_binding.digest_sha256))
 
     def _bump(self, dependency_ids: Iterable[str]) -> set[str]:
         self._ensure_mutable()
@@ -406,28 +459,32 @@ class RuntimeAuthority:
     def _manifest(self, candidate: _Candidate, decision: EpistemicAdmissibility,
                   snapshot: EvidenceSnapshot) -> DependencyManifest:
         dependency_ids = {
-            "action:" + candidate.request.action.identity,
-            "epre:" + candidate.epre_ref.identity,
+            _binding_slot("action", candidate.request.action),
+            _binding_slot("epre", candidate.epre_ref),
             "scope:" + candidate.actor.actor_id,
-            "policy:" + self.policy.identity,
-            "profile:" + self.profile.identity,
+            _binding_slot("policy", self.policy),
+            _binding_slot("profile", self.profile),
             *("capability:" + item for item in candidate.capability_dependencies),
             *("sec_pre:" + item for item in candidate.sec_pre),
         }
         for proposition in candidate.epre:
             dependency_ids.add(_proposition_slot(proposition))
         for witness in decision.witnesses:
-            for dependency in witness.dependencies:
-                prefix = "derivation:" if dependency in self._derivations else "evidence:"
-                dependency_ids.add(prefix + dependency)
+            dependency_ids.update("evidence:" + root.root_id for root in witness.roots)
+            dependency_ids.update("derivation:" + item.derivation_id for item in witness.derivations)
             for provenance in witness.provenance:
                 dependency_ids.add("provenance:" + provenance.provenance_id)
-        external_ids = set()
-        for dependency_id, revision in snapshot.dependency_versions:
+        snapshot_versions = dict(snapshot.dependency_versions)
+        external_ids = set(dependency_ids).intersection(snapshot_versions)
+        for dependency_id in external_ids:
+            revision = snapshot_versions[dependency_id]
             self._dependency_versions[dependency_id] = revision
-            dependency_ids.add(dependency_id)
-            external_ids.add(dependency_id)
         if self._reader is not None:
+            scope_watch = "scope:" + candidate.actor.actor_id
+            if scope_watch not in snapshot_versions:
+                raise ValueError("external snapshot omits actor scope watch")
+            dependency_ids.add(scope_watch)
+            external_ids.add(scope_watch)
             for proposition in candidate.epre:
                 watch = _proposition_slot(proposition)
                 if watch not in external_ids:
@@ -447,6 +504,9 @@ class RuntimeAuthority:
         with self._lock:
             self._ensure_mutable()
             candidate = self._candidates[candidate_id]
+            if not self._candidate_bindings_current(candidate):
+                candidate.lifecycle = CandidateLifecycle.BLOCKED_PRECONDITION
+                raise AuthorityError("semantic_binding_retired")
             snapshot = self._snapshot(candidate.actor)
             with self._callback_boundary():
                 decision = evaluate_epistemic_admissibility(
@@ -455,12 +515,9 @@ class RuntimeAuthority:
                     rule_evaluators=self._rule_evaluators,
                     forbidden_support_action=candidate.request.action.identity,
                 )
-            # Explicitly declared empty EPre is vacuously admissible.
-            if not candidate.epre and decision.reasons == ():
-                decision = replace(decision, admissible=True)
             candidate.evaluation = decision
             candidate.lifecycle = (CandidateLifecycle.EPISTEMICALLY_ADMISSIBLE if decision.admissible
-                                   else CandidateLifecycle.BLOCKED_CONFLICT if any(reason.startswith("conflict:") for reason in decision.reasons)
+                                   else CandidateLifecycle.BLOCKED_CONFLICT if "non_defeated.conflict" in decision.reasons
                                    else CandidateLifecycle.WAITING_FOR_EVIDENCE)
             previous_fingerprint = candidate.manifest.fingerprint if candidate.manifest else None
             candidate.manifest = self._manifest(candidate, decision, snapshot)
@@ -471,7 +528,12 @@ class RuntimeAuthority:
                 self._permits[candidate.permit_id].lifecycle = PermitLifecycle.STALE
                 self._record("permit_stale", candidate, reason="reevaluation")
             self._record("epre_evaluated", candidate, admissible=decision.admissible,
-                         validity=[w.validity for w in decision.witnesses], reasons=decision.reasons,
+                         validity=[assessment.validity for assessment in decision.assessments],
+                         assessments=tuple((assessment.proposition, assessment.admissible,
+                                            assessment.validity, assessment.reasons,
+                                            assessment.dependencies, assessment.recoveries)
+                                           for assessment in decision.assessments),
+                         reasons=decision.reasons, recoveries=decision.recoveries,
                          fingerprint=candidate.manifest.fingerprint,
                          witnesses=tuple((w.witness_id, tuple(r.root_id for r in w.roots),
                                           tuple(d.derivation_id for d in w.derivations))
@@ -520,7 +582,8 @@ class RuntimeAuthority:
                           record.manifest.fingerprint or "", self.mode, record.manifest)
 
     def _expectations_fresh(self, expectations: Iterable[DependencyExpectation]) -> bool:
-        return all(self._version(item.dependency_id) == item.revision for item in expectations)
+        return all(item.dependency_id not in self._retired_bindings
+                   and self._version(item.dependency_id) == item.revision for item in expectations)
 
     def _external_expectations_fresh(self, candidate: _Candidate,
                                      expectations: Iterable[DependencyExpectation]) -> bool:
@@ -588,15 +651,17 @@ class RuntimeAuthority:
             self._record("permit_consumed", candidate, fence=self._fence)
             return token
 
-    def reject_pre_effect(self, token: FencingToken, reason: str) -> None:
+    def reject_pre_effect(self, token: FencingToken, reason: str, *,
+                          env_pre_result: str | None = None,
+                          sec_pre_result: str | None = None) -> None:
         with self._lock:
             state, candidate = self._token_candidate(token)
             del self._tokens[token._bytes()]
             self._attempts[candidate.request.attempt_id] = replace(
                 self._attempts[candidate.request.attempt_id], state="completed",
                 outcome="pre_effect_rejected",
-                env_pre_result="failed" if reason == "env_pre" else "passed",
-                sec_pre_result="failed" if reason == "sec_pre" else "not_checked",
+                env_pre_result=env_pre_result or ("failed" if reason == "env_pre" else "passed"),
+                sec_pre_result=sec_pre_result or ("failed" if reason == "sec_pre" else "not_checked"),
             )
             self._record("pre_effect_rejected", candidate, reason=reason, fence=state.fence)
 

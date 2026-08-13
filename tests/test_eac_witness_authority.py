@@ -4,11 +4,13 @@ import pytest
 
 from benchmarks.common.eac import (
     ActorScope,
+    EPreRef,
     EvidenceRoot,
     Proposition,
     PropositionKey,
     ProvenanceRecord,
     SupportDerivation,
+    WitnessValidity,
     bind_source_profile,
     load_support_policy,
     match_mapping,
@@ -84,6 +86,25 @@ def test_stable_proposition_key_excludes_observation_revisions():
     )
 
 
+def test_structured_proposition_arguments_preserve_json_types_and_remain_witnessable(deps):
+    policy, profile = deps
+    object_prop = Proposition(PropositionKey("world", "lit", ({"x": [1, True]},), "current"))
+    array_prop = Proposition(PropositionKey("world", "lit", ([["x", [1, True]]],), "current"))
+    reordered = Proposition(PropositionKey("world", "lit", ({"x": [1, True]},), "current"))
+    assert object_prop == reordered and object_prop != array_prop
+    result = evaluate_epistemic_admissibility(
+        ActorScope("agent", 1), (object_prop,), _state(object_prop), policy, profile)
+    assert result.admissible
+
+
+def test_explicit_empty_epre_is_vacuously_admissible(deps):
+    policy, profile = deps
+    result = evaluate_epistemic_admissibility(
+        ActorScope("agent", 1), (), EvidenceSnapshot(), policy, profile,
+        epre=EPreRef("empty", 1, "a" * 64))
+    assert result.admissible and result.assessments == () and result.reasons == ()
+
+
 @pytest.mark.parametrize("value", [1.5, float("nan"), {"é": 1}, "\ud800", 2**53])
 def test_constrained_jcs_rejects_unsupported_values(value):
     with pytest.raises(ValueError):
@@ -132,6 +153,47 @@ def test_missing_or_unjustified_epre_and_invisible_root_are_rejected(deps):
     empty = evaluate_epistemic_admissibility(actor, (prop,), EvidenceSnapshot(), policy, profile)
     invisible = evaluate_epistemic_admissibility(actor, (prop,), _state(prop, visible=("other",)), policy, profile)
     assert not empty.admissible and not invisible.admissible
+    assert empty.assessments[0].reasons == ("supports.no_allowed_path",)
+    assert invisible.assessments[0].reasons[0] == "scoped.invisible"
+
+
+def test_failed_witness_dimensions_and_recoveries_are_distinct_and_bounded(deps):
+    policy, profile = deps
+    prop = _prop()
+    actor = ActorScope("agent", 1)
+    stale = _state(prop, current=False)
+    stale_result = evaluate_epistemic_admissibility(actor, (prop,), stale, policy, profile)
+    assert "fresh.stale_or_superseded" in stale_result.assessments[0].reasons
+    cycle = EvidenceSnapshot((), (SupportDerivation("d", "and", ("d",), prop),), ())
+    cycle_result = evaluate_epistemic_admissibility(actor, (prop,), cycle, policy, profile)
+    assert "grounded.no_finite_path" in cycle_result.assessments[0].reasons
+    positive = _state(prop, root_id="yes")
+    negative = _state(_prop(False), root_id="no")
+    conflict = evaluate_epistemic_admissibility(
+        actor, (prop,), EvidenceSnapshot(positive.roots + negative.roots, (), positive.provenance),
+        policy, profile)
+    assert conflict.assessments[0].reasons == ("non_defeated.conflict",)
+    assert conflict.recoveries == ("request_clarification",)
+    assert all(len(item.dependencies) <= 128 for item in (stale_result.assessments[0],
+                                                          cycle_result.assessments[0],
+                                                          conflict.assessments[0]))
+
+
+def test_mixed_invisible_fresh_and_visible_stale_paths_remain_diagnostic(deps):
+    policy, profile = deps
+    prop = _prop()
+    visible_stale = _state(prop, root_id="stale", current=False)
+    invisible_fresh = _state(prop, root_id="hidden", visible=("other",))
+    result = evaluate_epistemic_admissibility(
+        ActorScope("agent", 1), (prop,),
+        EvidenceSnapshot(visible_stale.roots + invisible_fresh.roots, (), visible_stale.provenance),
+        policy, profile)
+    assessment = result.assessments[0]
+    assert not result.admissible
+    assert assessment.reasons == ("supports.no_allowed_path",)
+    assert all(dict(assessment.validity)[dimension] for dimension in (
+        WitnessValidity.SCOPED, WitnessValidity.GROUNDED, WitnessValidity.FRESH))
+    assert assessment.recoveries
 
 
 def test_evaluator_only_root_is_not_actor_visible_support(deps):

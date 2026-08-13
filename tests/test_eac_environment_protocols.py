@@ -110,7 +110,8 @@ def test_authority_consumes_external_evidence_snapshot_reader_protocol():
                             mapping_rule_id="direct"),),
         provenance=(ProvenanceRecord("prov", "external"),),
         dependency_versions=(("evidence:root", 1), ("provenance:prov", 1),
-                             ("conflict:sha256:9ace44b2adc715ea288bf46f946cb3309239c7ddf90c23aaa6fa9506430c9ca3", 1)),
+                             ("conflict:sha256:9ace44b2adc715ea288bf46f946cb3309239c7ddf90c23aaa6fa9506430c9ca3", 1),
+                             ("scope:agent-1", 1)),
         authenticated_profile_digest=_profile().digest_sha256,
         revision_complete=True,
     )

@@ -18,7 +18,7 @@ class _Text(str):
         return str.__new__(cls, value)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class PropositionKey:
     namespace: str
     predicate: str
@@ -31,11 +31,25 @@ class PropositionKey:
         from .canonical import canonical_argument
         object.__setattr__(self, "arguments", tuple(canonical_argument(value) for value in self.arguments))
 
+    def _identity_bytes(self) -> bytes:
+        from .canonical import canonical_bytes
+        return canonical_bytes([self.namespace, self.predicate, list(self.arguments), self.temporal_scope])
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, PropositionKey) and self._identity_bytes() == other._identity_bytes()
+
+    def __hash__(self) -> int:
+        return hash(self._identity_bytes())
+
 
 @dataclass(frozen=True, slots=True)
 class Proposition:
     key: PropositionKey
     polarity: bool = True
+
+    def __post_init__(self) -> None:
+        if type(self.polarity) is not bool:
+            raise ValueError("proposition polarity must be boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +59,11 @@ class VersionedRef:
     digest: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.identity or self.version is None:
+        if (not isinstance(self.identity, str) or not self.identity
+                or any("\ud800" <= char <= "\udfff" for char in self.identity)
+                or not isinstance(self.version, (int, str)) or isinstance(self.version, bool)
+                or (isinstance(self.version, str) and (not self.version or any(
+                    "\ud800" <= char <= "\udfff" for char in self.version)))):
             raise ValueError("versioned reference requires identity and version")
         if self.digest is not None and (not self.digest or any(char not in "0123456789abcdef" for char in self.digest.removeprefix("sha256:"))
                                         or len(self.digest.removeprefix("sha256:")) != 64):
@@ -142,6 +160,21 @@ class JustificationWitness:
 
 
 @dataclass(frozen=True, slots=True)
+class EPreAssessment:
+    proposition: Proposition
+    admissible: bool
+    validity: tuple[tuple[WitnessValidity, bool], ...]
+    witness_id: str | None = None
+    dependencies: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    recoveries: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.dependencies) > 128 or len(self.reasons) > 16 or len(self.recoveries) > 8:
+            raise ValueError("EPre assessment diagnostics exceed bounds")
+
+
+@dataclass(frozen=True, slots=True)
 class EpistemicAdmissibility:
     admissible: bool
     witnesses: tuple[JustificationWitness, ...] = ()
@@ -149,9 +182,10 @@ class EpistemicAdmissibility:
     recoveries: tuple[str, ...] = ()
     policy: PolicyRef | None = None
     profile: ProfileRef | None = None
+    assessments: tuple[EPreAssessment, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class ExactRequest:
     candidate_id: str
     attempt_id: str
@@ -166,8 +200,26 @@ class ExactRequest:
         names = tuple(name for name, unused in self.arguments)
         if len(names) != len(set(names)) or any(not isinstance(name, str) or not name.isascii() or not name for name in names):
             raise ValueError("request argument names must be unique ASCII strings")
-        object.__setattr__(self, "arguments", tuple((name, canonical_argument(value)) for name, value in self.arguments))
+        object.__setattr__(self, "arguments", tuple(sorted(
+            ((name, canonical_argument(value)) for name, value in self.arguments), key=lambda item: item[0])))
         object.__setattr__(self, "target", canonical_argument(self.target))
+
+    def identity_bytes(self) -> bytes:
+        from .canonical import canonical_bytes
+        return canonical_bytes({
+            "candidate_id": self.candidate_id,
+            "attempt_id": self.attempt_id,
+            "action": {"identity": self.action.identity, "version": self.action.version,
+                       "digest": self.action.digest},
+            "arguments": {name: value for name, value in self.arguments},
+            "target": self.target,
+        })
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, ExactRequest) and self.identity_bytes() == other.identity_bytes()
+
+    def __hash__(self) -> int:
+        return hash(self.identity_bytes())
 
 
 @dataclass(frozen=True, slots=True)

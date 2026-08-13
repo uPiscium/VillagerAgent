@@ -4,7 +4,7 @@ from .authority import AuthorityError, AuthorityStateReader, CandidateStateWrite
 from .gateway import EffectGateway, EffectRejected
 from .model import (
     ActionRef, ActorScope, AttemptRecord, AuditRecord, CandidateLifecycle, DependencyManifest,
-    EPreRef, EpistemicAdmissibility, EvidenceRoot, ExactRequest, FencingToken,
+    EPreAssessment, EPreRef, EpistemicAdmissibility, EvidenceRoot, ExactRequest, FencingToken,
     JustificationWitness, NativeEffectResult, PermitLifecycle, PermitView, PolicyRef, ProfileRef,
     Proposition, PropositionKey, ProvenanceRecord, RejectionReason, SupportDerivation,
     WitnessValidity,

@@ -10,7 +10,7 @@ from hashlib import sha256
 from typing import Iterable, Mapping, Protocol, Sequence, runtime_checkable
 
 from .canonical import canonical_bytes
-from .model import (ActorScope, EvidenceRoot, EpistemicAdmissibility, EPreRef,
+from .model import (ActorScope, EPreAssessment, EvidenceRoot, EpistemicAdmissibility, EPreRef,
                     JustificationWitness, Proposition, PropositionKey,
                     ProvenanceRecord, SupportDerivation, WitnessValidity,
                     PolicyRef, ProfileRef)
@@ -205,6 +205,57 @@ def _derivation_witness(derivation, actor, roots, derivations, provenance, profi
                                 tuple(root.root_id for root in roots_used) + tuple(item.derivation_id for item in derivations_used))
 
 
+def _assessment(prop, actor, roots, derivations, provenance, profile, witness, opposite, rule_evaluators):
+    relevant_roots = tuple(root for root in roots if _same(root.proposition, prop)
+                           and root.root_type in _SUFFICIENT)
+    relevant_derivations = tuple(item for item in derivations if _same(item.conclusion, prop)
+                                 and _allowed_rule(item.rule, profile))
+    provenance_ids = {item.provenance_id for item in provenance}
+    has_declared_support = bool(relevant_roots or relevant_derivations)
+    scoped_roots = tuple(root for root in relevant_roots if _visible(root, actor))
+    grounded_roots = tuple(root for root in relevant_roots if root.provenance_id in provenance_ids)
+    fresh_roots = tuple(root for root in relevant_roots if _fresh(root, roots))
+    root_grounded = bool(grounded_roots)
+    derivation_grounded = False
+    for derivation in relevant_derivations:
+        derivation_grounded = (_derivation_witness(
+            derivation, actor, roots, derivations, provenance, profile, {}, rule_evaluators,
+            frozenset(), 0) is not None)
+        if derivation_grounded:
+            break
+    scoped = (bool(scoped_roots) or derivation_grounded) if has_declared_support else False
+    grounded = root_grounded or derivation_grounded
+    fresh = bool(fresh_roots) or derivation_grounded
+    non_defeated = opposite is None
+    supports = witness is not None
+    validity = ((WitnessValidity.SCOPED, scoped), (WitnessValidity.GROUNDED, grounded),
+                (WitnessValidity.FRESH, fresh), (WitnessValidity.NON_DEFEATED, non_defeated),
+                (WitnessValidity.SUPPORTS, supports))
+    reasons = []
+    recoveries = []
+    if not has_declared_support:
+        reasons.append("supports.no_allowed_path"); recoveries.append("gather_observation")
+    elif not scoped:
+        reasons.append("scoped.invisible"); recoveries.append("gather_observation")
+    if has_declared_support and not grounded:
+        reasons.append("grounded.no_finite_path"); recoveries.append("gather_observation")
+    if has_declared_support and not fresh:
+        reasons.append("fresh.stale_or_superseded"); recoveries.append("wait_for_evidence")
+    if not non_defeated:
+        reasons.append("non_defeated.conflict"); recoveries.append("request_clarification")
+    if has_declared_support and not supports:
+        reasons.append("supports.no_allowed_path"); recoveries.append("gather_observation")
+    if not reasons and witness is None:
+        reasons.append("supports.no_valid_combined_path"); recoveries.append("gather_observation")
+    dependencies = tuple(dict.fromkeys(
+        [root.root_id for root in relevant_roots]
+        + [item.derivation_id for item in relevant_derivations]
+    ))[:128]
+    admissible = witness is not None and all(value for unused_dimension, value in validity)
+    return EPreAssessment(prop, admissible, validity, witness.witness_id if witness else None,
+                          dependencies, tuple(reasons), tuple(dict.fromkeys(recoveries)))
+
+
 def evaluate_epistemic_admissibility(actor: ActorScope, propositions: Iterable[Proposition], state: EvidenceState | Mapping[str, object],
                                      policy: PolicyBinding | None = None, profile: SourceProfileBinding | None = None,
                                      *, epre: EPreRef | None = None, rule_evaluators=None,
@@ -219,17 +270,27 @@ def evaluate_epistemic_admissibility(actor: ActorScope, propositions: Iterable[P
                 and not root.evidence_gathering_action))
         props = tuple(propositions)
         if any(not isinstance(p, Proposition) for p in props): raise ValueError("unknown proposition")
-        witnesses: list[JustificationWitness] = []; reasons: list[str] = []
+        witnesses: list[JustificationWitness] = []; assessments: list[EPreAssessment] = []
         for prop in props:
             memo: dict[tuple, JustificationWitness | None] = {}
             witness = _witness(prop, actor, roots, derivations, provenance, profile, include_defeat=False, memo=memo, rule_evaluators=rule_evaluators)
             opposite = _witness(Proposition(prop.key, not prop.polarity), actor, roots, derivations, provenance, profile, include_defeat=False, memo=memo, rule_evaluators=rule_evaluators)
-            if witness and opposite:
-                reasons.append(f"conflict:{prop.key.namespace}:{prop.key.predicate}")
+            assessment = _assessment(prop, actor, roots, derivations, provenance, profile,
+                                     witness, opposite, rule_evaluators)
+            if not assessment.admissible:
                 witness = None
-            if witness: witnesses.append(witness)
-            else: reasons.append(f"unsupported:{prop.key.namespace}:{prop.key.predicate}")
-        return EpistemicAdmissibility(bool(props) and len(witnesses) == len(props) and not reasons, tuple(witnesses), tuple(reasons), (), policy_ref(policy), profile_ref(profile))
+            if witness:
+                witnesses.append(witness)
+            assessments.append(assessment)
+        reasons = tuple(dict.fromkeys(reason for item in assessments for reason in item.reasons))
+        recoveries = tuple(dict.fromkeys(recovery for item in assessments for recovery in item.recoveries))
+        explicitly_classified = bool(props) or epre is not None
+        if not explicitly_classified:
+            reasons = ("classification.missing_epre",)
+        return EpistemicAdmissibility(
+            explicitly_classified and len(witnesses) == len(props) and all(item.admissible for item in assessments),
+            tuple(witnesses), reasons, recoveries, policy_ref(policy), profile_ref(profile),
+            tuple(assessments))
     except Exception as exc:
         return EpistemicAdmissibility(False, (), (f"fail_closed:{type(exc).__name__}",), (), None, None)
 
