@@ -83,7 +83,15 @@ class ActorScope:
     scope: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if (not isinstance(self.actor_id, str) or not self.actor_id
+                or any("\ud800" <= char <= "\udfff" for char in self.actor_id)
+                or not isinstance(self.visibility_revision, (int, str))
+                or isinstance(self.visibility_revision, bool)
+                or (isinstance(self.visibility_revision, str) and not self.visibility_revision)):
+            raise ValueError("invalid actor scope identity or visibility revision")
         object.__setattr__(self, "scope", tuple(self.scope))
+        if any(not isinstance(item, str) or not item for item in self.scope):
+            raise ValueError("actor scope entries must be non-empty strings")
 
 
 @dataclass(frozen=True, slots=True)

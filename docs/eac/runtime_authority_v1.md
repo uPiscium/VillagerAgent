@@ -99,6 +99,17 @@ fencing token. Relevant mutation and permit CAS share this epoch domain. The
 effect gateway rejects missing, old, replayed, or mismatched tokens, including
 tokens invalidated after the initial validation.
 
+Action definitions, declared EPre definitions, and actor scope are immutable
+semantic bindings identified by their complete version/content state. Actor
+scope binds actor ID, visibility revision, and canonical scope content. A
+binding change retires the exact old binding and requires a new candidate and
+attempt; merely registering a parallel version does not invalidate another
+binding. SupportPolicy and SourceProfile are immutable for an authority
+instance; rotating either retires that authority's semantic bindings and
+requires a new authority instance. External snapshots retain a separate
+actor-level dynamic scope watch and must provide unique dependency IDs with
+non-boolean, unambiguous revisions.
+
 ## 6. Effect gateway and independent checks
 
 Authority effects flow through the lowest common supported effect gateway:

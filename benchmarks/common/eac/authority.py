@@ -110,6 +110,31 @@ def _binding_slot(kind: str, reference) -> str:
     return f"{kind}-binding:" + sha256(canonical_bytes(payload)).hexdigest()
 
 
+def _actor_scope_binding(actor: ActorScope) -> str:
+    payload = [actor.actor_id, actor.visibility_revision, list(actor.scope)]
+    return "actor-scope-binding:" + sha256(canonical_bytes(payload)).hexdigest()
+
+
+def _revision_map(items: Iterable[tuple[str, int | str]]) -> dict[str, int | str]:
+    result: dict[str, int | str] = {}
+    if not isinstance(items, (tuple, list)):
+        raise ValueError("dependency revisions must be a sequence")
+    for item in items:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("dependency revision entry must be an ID/revision pair")
+        dependency_id, revision = item
+        if (not isinstance(dependency_id, str) or not dependency_id or dependency_id in result
+                or any("\ud800" <= char <= "\udfff" for char in dependency_id)):
+            raise ValueError("dependency revision IDs must be unique non-empty strings")
+        if (not isinstance(revision, (int, str)) or isinstance(revision, bool)
+                or (isinstance(revision, int) and revision < 0)
+                or (isinstance(revision, str) and (not revision or any(
+                    "\ud800" <= char <= "\udfff" for char in revision)))):
+            raise ValueError("dependency revision must be an unambiguous integer or string")
+        result[dependency_id] = revision
+    return result
+
+
 class RuntimeAuthority:
     """Lock-serialized reference authority for one immutable run/mode.
 
@@ -240,9 +265,22 @@ class RuntimeAuthority:
             self._retired_bindings.update(new_slots)
             self._bump(new_slots)
 
+    def retire_actor_scope(self, actor: ActorScope) -> None:
+        """Obsolete one exact actor visibility/scope binding for future issuance."""
+        if not isinstance(actor, ActorScope):
+            raise ValueError("typed actor scope required")
+        with self._lock:
+            self._ensure_mutable()
+            slot = _actor_scope_binding(actor)
+            if slot in self._retired_bindings:
+                return
+            self._retired_bindings.add(slot)
+            self._bump((slot,))
+
     def _candidate_bindings_current(self, candidate: _Candidate) -> bool:
         return (_binding_slot("action", candidate.request.action) not in self._retired_bindings
                 and _binding_slot("epre", candidate.epre_ref) not in self._retired_bindings
+                and _actor_scope_binding(candidate.actor) not in self._retired_bindings
                 and _binding_slot("policy", self.policy) not in self._retired_bindings
                 and _binding_slot("profile", self.profile) not in self._retired_bindings
                 and self.policy == PolicyRef(self.policy_binding.policy_id, self.policy_binding.policy_version,
@@ -319,7 +357,7 @@ class RuntimeAuthority:
             if (snapshot.authenticated_profile_digest != self.profile.digest
                     or snapshot.revision_complete is not True):
                 raise ValueError("store snapshot is not authenticated and revision-complete")
-            versions = dict(snapshot.dependency_versions)
+            versions = _revision_map(snapshot.dependency_versions)
             required = {
                 *("evidence:" + item.root_id for item in snapshot.roots),
                 *("derivation:" + item.derivation_id for item in snapshot.derivations),
@@ -461,6 +499,7 @@ class RuntimeAuthority:
         dependency_ids = {
             _binding_slot("action", candidate.request.action),
             _binding_slot("epre", candidate.epre_ref),
+            _actor_scope_binding(candidate.actor),
             "scope:" + candidate.actor.actor_id,
             _binding_slot("policy", self.policy),
             _binding_slot("profile", self.profile),
@@ -474,7 +513,7 @@ class RuntimeAuthority:
             dependency_ids.update("derivation:" + item.derivation_id for item in witness.derivations)
             for provenance in witness.provenance:
                 dependency_ids.add("provenance:" + provenance.provenance_id)
-        snapshot_versions = dict(snapshot.dependency_versions)
+        snapshot_versions = _revision_map(snapshot.dependency_versions)
         external_ids = set(dependency_ids).intersection(snapshot_versions)
         for dependency_id in external_ids:
             revision = snapshot_versions[dependency_id]
@@ -496,7 +535,8 @@ class RuntimeAuthority:
             candidate.request, candidate.actor, expectations, candidate.request.action,
             candidate.epre_ref, self.policy, self.profile, None, candidate.epre,
             tuple(witness.witness_id for witness in decision.witnesses),
-            max((item.revision for item in expectations), default=0), self._nonce,
+            max((item.revision for item in expectations if type(item.revision) is int), default=0),
+            self._nonce,
         )
         return replace(manifest, fingerprint=_digest(manifest))
 
@@ -595,7 +635,10 @@ class RuntimeAuthority:
                 or snapshot.authenticated_profile_digest != self.profile.digest
                 or snapshot.revision_complete is not True):
             return False
-        observed = dict(snapshot.dependency_versions)
+        try:
+            observed = _revision_map(snapshot.dependency_versions)
+        except ValueError:
+            return False
         return all(observed.get(item.dependency_id) == item.revision
                    for item in expectations if item.kind == "external")
 

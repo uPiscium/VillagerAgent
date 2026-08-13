@@ -386,6 +386,79 @@ def test_external_scope_revision_stales_permit():
         authority.validate_and_consume(request, permit)
 
 
+def test_actor_scope_retirement_obsoletes_old_candidate_but_allows_new_scope():
+    authority, request, proposition, permit = _permit()
+    old_actor = ActorScope("actor", 1, ("village",))
+    authority.retire_actor_scope(old_actor)
+    assert authority.permit(permit.permit_id).lifecycle.value == "stale"
+    with pytest.raises(AuthorityError, match="semantic_binding_retired"):
+        authority.issue_permit(request.candidate_id)
+    with pytest.raises(AuthorityError):
+        authority.validate_and_consume(request, permit)
+
+    new_actor = ActorScope("actor", 2, ("village", "square"))
+    retry = ExactRequest("candidate-v2", "attempt-v2", request.action, request.arguments, request.target)
+    authority.register_candidate(retry, actor=new_actor,
+                                 epre_ref=authority._candidates[request.candidate_id].epre_ref,
+                                 epre=(proposition,), capability_dependencies=("build",))
+    new_permit = authority.issue_permit(retry.candidate_id)
+    assert new_permit.lifecycle.value == "issued"
+
+
+def test_parallel_actor_scope_binding_is_not_spuriously_invalidated():
+    authority, request, proposition, first = _permit()
+    actor_v2 = ActorScope("actor", 2, ("village", "square"))
+    second_request = ExactRequest("candidate-v2", "attempt-v2", request.action)
+    authority.register_candidate(second_request, actor=actor_v2,
+                                 epre_ref=authority._candidates[request.candidate_id].epre_ref,
+                                 epre=(proposition,), capability_dependencies=("build",))
+    second = authority.issue_permit(second_request.candidate_id)
+    authority.retire_actor_scope(ActorScope("actor", 1, ("village",)))
+    assert authority.permit(first.permit_id).lifecycle.value == "stale"
+    assert authority.permit(second.permit_id).lifecycle.value == "issued"
+
+
+@pytest.mark.parametrize("versions", [
+    (("scope:actor", 1), ("scope:actor", 2)),
+    (("scope:actor", True),),
+    (("scope:actor", -1),),
+    (("scope:\ud800", 1),),
+    (("scope:actor", "\ud800"),),
+    None,
+])
+def test_external_dependency_revisions_fail_closed_when_ambiguous(versions):
+    proposition = Proposition(PropositionKey("test", "ready", ("village",), "run"))
+
+    class Reader:
+        def evidence_snapshot(self, unused_actor):
+            from benchmarks.common.eac.witness import EvidenceSnapshot
+            return EvidenceSnapshot((), (), (), versions, _profile().digest_sha256, True)
+
+    authority, request, _ = _setup(reader=Reader())
+    with pytest.raises((ValueError, AuthorityError)):
+        authority.issue_permit(request.candidate_id)
+
+
+def test_external_opaque_string_revisions_are_supported():
+    proposition = Proposition(PropositionKey("test", "ready", ("village",), "run"))
+    from benchmarks.common.eac.authority import _proposition_slot
+
+    class Reader:
+        def evidence_snapshot(self, unused_actor):
+            from benchmarks.common.eac.witness import EvidenceSnapshot
+            return EvidenceSnapshot(
+                (EvidenceRoot("root", "direct_observation", proposition, "sensor", "root-v1",
+                              ("actor",), "prov", mapping_rule_id="direct"),), (),
+                (ProvenanceRecord("prov", "sensor"),),
+                (("evidence:root", "root-v1"), ("provenance:prov", "prov-v1"),
+                 (_proposition_slot(proposition), "conflict-v1"), ("scope:actor", "scope-v1")),
+                _profile().digest_sha256, True)
+
+    authority, request, _ = _setup(reader=Reader())
+    permit = authority.issue_permit(request.candidate_id)
+    assert permit.lifecycle.value == "issued"
+
+
 def test_record_ingestion_requires_profile_bound_source_authentication():
     policy, profile = load_support_policy(), _profile()
     record = {

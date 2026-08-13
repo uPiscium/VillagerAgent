@@ -33,7 +33,7 @@ class EvidenceSnapshot:
     roots: tuple[EvidenceRoot, ...] = ()
     derivations: tuple[SupportDerivation, ...] = ()
     provenance: tuple[ProvenanceRecord, ...] = ()
-    dependency_versions: tuple[tuple[str, int], ...] = ()
+    dependency_versions: tuple[tuple[str, int | str], ...] = ()
     authenticated_profile_digest: str | None = None
     revision_complete: bool = False
 
