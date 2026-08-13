@@ -1,4 +1,8 @@
 import json
+import io
+import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -53,3 +57,28 @@ def test_eac_premanifest_admission_fails_closed(tmp_path):
 def test_symbolic_execution_revision_is_rejected():
     with pytest.raises(ValueError, match="full Git commit"):
         runtime_identity(RuntimeExecution.resolve(ROOT), execution_revision="issue-510-minecraft-eac-v1")
+
+
+def test_committed_premanifest_recomputes_from_frozen_git_execution():
+    premanifest = json.loads((ROOT / "docs/eac/minecraft_eac_premanifest_v1.json").read_text())
+    revision = premanifest["execution_revision"]
+    with tempfile.TemporaryDirectory(prefix="issue510-eac-frozen-") as temporary:
+        archive = subprocess.run(
+            ["git", "archive", "--format=tar", revision], cwd=ROOT,
+            check=True, capture_output=True,
+        ).stdout
+        checkout = Path(temporary) / "checkout"
+        checkout.mkdir()
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as stream:
+            stream.extractall(checkout, filter="data")
+        execution = RuntimeExecution.resolve(checkout)
+        assert runtime_identity(execution, execution_revision=revision) == premanifest
+
+
+def test_authority_and_advisory_fixtures_bind_same_execution_identity():
+    authority = json.loads((ROOT / "docs/eac/minecraft_eac_nonjudged_fixture_v1.json").read_text())
+    advisory = json.loads((ROOT / "docs/eac/minecraft_eac_nonjudged_advisory_fixture_v1.json").read_text())
+    assert authority["task_selection_policy"] == "dual_dag_authority"
+    assert advisory["task_selection_policy"] == "dual_dag_advisory"
+    assert authority["eac_execution_revision"] == advisory["eac_execution_revision"]
+    assert authority["eac_premanifest"] == advisory["eac_premanifest"]
