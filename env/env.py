@@ -74,6 +74,7 @@ class VillagerBench:
         self.meta_diagnostics_dir = None
         self._tool_action_enter = lambda: None
         self._tool_action_exit = lambda: None
+        self._eac_runtime = None
         atomic_write_json(self.runtime_paths.score, {})
         atomic_write_json(self.runtime_paths.action_log, {})
         atomic_write_json(self.runtime_paths.llm_inference, {"time": 0})
@@ -297,7 +298,7 @@ class VillagerBench:
         '''
         register the agent to the environment
         '''
-        agent_tool = self.guard_tool_actions(agent_tool or ())
+        agent_tool = list(agent_tool or ())
         name_list = list(name_list or ())
         if len(name_list) != agent_number:
             self.logger.warning(
@@ -305,17 +306,18 @@ class VillagerBench:
             name_list = [names.get_first_name() for i in range(agent_number)]
 
         for i in range(agent_number):
+            owned_tools = self.guard_tool_actions(agent_tool, actor_name=name_list[i])
             agent = Agent(
                 name_list[i],
-                tools=agent_tool,
+                tools=owned_tools,
                 local_port=self.base_port + len(self.agent_pool),
                 model=self.langchain_model,
                 runtime_paths=self.runtime_paths,
                 runtime_execution=self.runtime_execution,
             )
             agent.reflection_output_dir = self.runtime_paths.run_result_dir(self.task_name)
-            if len(agent_tool) != 0:
-                agent.tool = agent_tool
+            if len(owned_tools) != 0:
+                agent.tool = owned_tools
             self.agent_pool.append(agent)
             self.log[agent.name] = []
 
@@ -323,10 +325,28 @@ class VillagerBench:
         self._tool_action_enter = enter
         self._tool_action_exit = exit
 
-    def guard_tool_actions(self, tools) -> list:
-        return [self._guard_tool_action(tool) for tool in tools]
+    def configure_eac_runtime(self, runtime) -> None:
+        if self.agent_pool:
+            raise RuntimeError("Minecraft EAC runtime must be configured before agent registration")
+        if self._eac_runtime is not None and self._eac_runtime is not runtime:
+            raise RuntimeError("Minecraft EAC runtime mode is immutable")
+        self._eac_runtime = runtime
 
-    def _guard_tool_action(self, tool):
+    def get_eac_audit_artifact(self) -> dict:
+        if self._eac_runtime is None:
+            return {"configured": False, "read_only_projection": True}
+        return self._eac_runtime.audit_artifact()
+
+    def guard_tool_actions(self, tools, *, actor_name: str | None = None) -> list:
+        runtime = getattr(self, "_eac_runtime", None)
+        if runtime is None:
+            return [self._guard_tool_action(tool) for tool in tools]
+        if not actor_name:
+            raise RuntimeError("Minecraft EAC guarded tools require an owning actor")
+        return [self._guard_tool_action(tool, actor_name=actor_name) for tool in tools
+                if runtime.supports_tool(getattr(tool, "name", ""))]
+
+    def _guard_tool_action(self, tool, *, actor_name: str | None = None):
         original = getattr(tool, "func", None)
         if not callable(original):
             return tool
@@ -336,6 +356,12 @@ class VillagerBench:
         def guarded(*args, **kwargs):
             self._tool_action_enter()
             try:
+                if getattr(self, "_eac_runtime", None) is not None:
+                    tool_name = getattr(tool, "name", None) or getattr(original, "__name__", "")
+                    supplied_actor = kwargs.get("player_name", args[0] if args else None)
+                    if supplied_actor != actor_name:
+                        raise RuntimeError("Minecraft EAC actor identity mismatch")
+                    return self._eac_runtime.mediate_tool(tool_name, original, args, kwargs)
                 return original(*args, **kwargs)
             finally:
                 self._tool_action_exit()

@@ -179,7 +179,8 @@ async def find(request: Request):
                 pos_data.append({"x": floor(pos.x + .5), "y": floor(pos.y + .5), "z": floor(pos.z + .5)})
         observation += str_pos_list
         done = True
-        return JSONResponse({'message': observation, 'status': done, 'data':pos_data})
+        return JSONResponse({'message': observation, 'status': done, 'data':pos_data,
+                             'observed_name': name})
     else:
         observation += f"can not find {name}, there is no {name} around."
         done = False
@@ -190,7 +191,7 @@ async def find(request: Request):
 async def hand(request: Request):
     """hand item to entity_name: hand item to entity_name."""
     data = await request.json()
-    entity_name, item_name, count = data.get('target_name'), data.get('item_name'), data.get('count')
+    entity_name, item_name, count = data.get('target_name'), data.get('item_name'), data.get('item_count')
     envs_info = get_envs_info(bot, 128)
     tag, msg = move_to_nearest_(pathfinder, bot, Vec3, envs_info, mcData, 1, entity_name)
     if not tag:
@@ -648,6 +649,77 @@ async def talk_to(request: Request):
     entity_name, message = data.get('entity_name'), data.get('message')
     chat_long(bot, entity_name, message, "talk")
     return JSONResponse({'message': f"I talk to {entity_name} {message}", 'status': True})
+
+
+@app.post('/post_eac_preflight')
+@timeout(10)
+async def eac_preflight(request: Request):
+    """Read-only native legality preflight for the classified EAC subset."""
+    data = await request.json()
+    action_name, arguments = data.get('action'), data.get('arguments', {})
+    if not isinstance(arguments, dict):
+        return JSONResponse({'status': False, 'reason': 'invalid_arguments'})
+    try:
+        normalize = lambda value: value.lower().replace(' ', '_') if isinstance(value, str) else value
+        if action_name in {'MineBlock', 'placeBlock', 'navigateTo'}:
+            coordinates = tuple(arguments.get(key) for key in ('x', 'y', 'z'))
+            if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in coordinates):
+                return JSONResponse({'status': False, 'reason': 'invalid_target'})
+            target = Vec3(*coordinates)
+            if action_name == 'MineBlock':
+                block = bot.blockAt(target)
+                legal = block is not None and block.name != 'air'
+            elif action_name == 'placeBlock':
+                item_name = normalize(arguments.get('item_name'))
+                facing = arguments.get('facing')
+                facing_aliases = {'default': 'A', 'up': 'y', 'down': 'y',
+                                  'north': 'z', 'south': 'z', 'west': 'x', 'east': 'x'}
+                if isinstance(facing, str):
+                    facing = facing_aliases.get(facing.lower(), facing)
+                block = bot.blockAt(target)
+                legal = (facing in {'W', 'E', 'S', 'N', 'x', 'y', 'z', 'A', None}
+                         and block is not None and block.name in {'air', 'water', 'dirt'}
+                         and any(item.name == item_name and item.count > 0 for item in bot.inventory.items()))
+            else:
+                legal = bot.blockAt(target) is not None
+        elif action_name == 'attackTarget':
+            target_name = normalize(arguments.get('target_name'))
+            legal = any(normalize(getattr(entity, 'name', None)) == target_name
+                        or normalize(getattr(entity, 'username', None)) == target_name
+                        for entity in bot.entities.values())
+        elif action_name == 'handoverBlock':
+            item_name, count = normalize(arguments.get('item_name')), arguments.get('item_count')
+            target_name = normalize(arguments.get('target_player_name'))
+            target_exists = any(normalize(getattr(entity, 'username', None)) == target_name
+                                for entity in bot.entities.values())
+            legal = (isinstance(count, int) and not isinstance(count, bool) and count > 0
+                     and target_exists
+                     and sum(item.count for item in bot.inventory.items() if item.name == item_name) >= count)
+        elif action_name in {'scanNearbyEntities', 'talkTo', 'waitForFeedback'}:
+            legal = True
+        else:
+            legal = False
+        return JSONResponse({'status': legal, 'action': action_name})
+    except Exception:
+        return JSONResponse({'status': False, 'reason': 'preflight_error'})
+
+
+@app.post('/post_wait_for_feedback')
+@timeout(35)
+async def wait_for_feedback(request: Request):
+    data = await request.json()
+    entity_name, seconds = data.get('entity_name'), min(int(data.get('seconds', 10)), 30)
+    chat_long(bot, entity_name, f"I am waiting for feedback, please reply in {seconds} seconds.", "talk")
+    start_time = time.time()
+    while time.time() - start_time < seconds:
+        tag, message = info_bot.check_new_reply_from(entity_name)
+        if tag:
+            events = info_bot.get_action_description_new()
+            return JSONResponse({'message': f"I receive feedback from {entity_name}: {message}",
+                                 'status': True, 'new_events': events})
+        await asyncio.sleep(0.2)
+    return JSONResponse({'message': f"I do not receive feedback from {entity_name}",
+                         'status': False, 'new_events': info_bot.get_action_description_new()})
 
 
 @app.post('/post_done')

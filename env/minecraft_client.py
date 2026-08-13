@@ -1304,14 +1304,17 @@ class Agent():
         for act, obs in zip(actions, observations):
             instruction += f"\n{act['log']}\n{obs}"
         
+        # Only the registered tool capability set is admissible here. In EAC
+        # mode this set has already been classified and wrapped by VillagerBench.
+        tools = []
         recommended_tools = []
         for action in recommended_actions:
-            for tool in self.all_tools:
+            for tool in self.tools:
                 if tool.name == action:
                     recommended_tools.append(tool)
         
         if recommended_tools == []:
-            recommended_tools = self.all_tools if len(tools) == 0 else tools
+            recommended_tools = self.tools if len(tools) == 0 else tools
         llmhandler = LLMHandler()
 
         while max_try_turn > 0:

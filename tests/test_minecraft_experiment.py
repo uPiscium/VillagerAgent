@@ -517,6 +517,48 @@ def test_minecraft_meta_runtime_forwards_top_level_task_scenario(tmp_path, monke
     assert captured["kwargs"]["position_convention"] == "entity_feet"
 
 
+def test_eac_nonjudged_fixture_wires_premanifest_and_revision_without_execution(monkeypatch, tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    config = json.loads((root / "docs/eac/minecraft_eac_nonjudged_fixture_v1.json").read_text())
+    captured = {}
+    monkeypatch.setattr(
+        "model.ollama_config.make_ollama_llm_config",
+        lambda **kwargs: {"api_model": kwargs.get("api_model", "model"),
+                          "api_base": kwargs.get("api_base", "http://example.test/v1"),
+                          "api_key_list": []},
+    )
+    monkeypatch.setattr("start_with_config.run", lambda *args, **kwargs: captured.update(kwargs) or {})
+
+    _execute_real_runtime(
+        config,
+        dual_dag_config={"eac_mode": "dual_dag_authority"},
+        runtime_result_path=tmp_path / "runtime_result.json",
+    )
+
+    eac = captured["minecraft_dual_dag_config"]
+    assert eac["eac_premanifest"] == "docs/eac/minecraft_eac_premanifest_v1.json"
+    assert eac["eac_execution_revision"] == "issue-510-minecraft-eac-v1"
+    assert eac["judged_execution"] is False and eac["production"] is False
+
+
+@pytest.mark.parametrize("field", ["judged_execution", "production"])
+def test_eac_execute_rejects_judged_or_production_launch(field, tmp_path):
+    config = _minecraft_config("eac_rejected")
+    config.update({
+        "eac_premanifest": "docs/eac/minecraft_eac_premanifest_v1.json",
+        "eac_execution_revision": "issue-510-minecraft-eac-v1",
+        "judged_execution": False,
+        "production": False,
+    })
+    config[field] = True
+    with pytest.raises(ValueError, match="non-judged, non-production"):
+        _execute_real_runtime(
+            config,
+            dual_dag_config={"eac_mode": "dual_dag_authority"},
+            runtime_result_path=tmp_path / "runtime_result.json",
+        )
+
+
 def test_minecraft_experiment_emits_one_terminal_event_when_finalization_raises(tmp_path, monkeypatch):
     config_path = tmp_path / "minecraft_config.json"
     config_path.write_text(json.dumps(_minecraft_config("terminal_once")), encoding="utf-8")

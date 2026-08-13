@@ -1,0 +1,26 @@
+{
+  "artifact_identity": "minecraft-eac-audit/1",
+  "child_count": 18,
+  "child_manifest_sha256": "19557a87926b5825273406814d59b9ed8acb9e5b397d1c8382f1d29456f2965a",
+  "eac_source_profile": {
+    "digest": "0bdfd40f6cf7a0d2575498e00cf18020edf7bf9a1246217a5acbff6b948bdb01",
+    "identity": "minecraft-eac-primary",
+    "version": 1
+  },
+  "epre_classification": {
+    "digest": "34f887d45280fe1e0cd61c7799d81ed208badf2b255d287dcb0777d2924b911a",
+    "identity": "minecraft-preconditions",
+    "version": 1
+  },
+  "execution_identity": "minecraft-eac-runtime-v1",
+  "execution_revision": "issue-510-minecraft-eac-v1",
+  "judged_execution": false,
+  "premanifest_identity": "d37043ae4790de6b6d390205323cc5aacd514fde0703439de7468d7a349cad4a",
+  "production": false,
+  "runtime_digest": "sha256:ca4e619e10f76963eef68137c3b5271a9fe0790e105f17bbd0e0a4bf6e2f6f89",
+  "support_policy": {
+    "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+    "identity": "eac-primary-support",
+    "version": 1
+  }
+}
