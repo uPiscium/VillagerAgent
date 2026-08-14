@@ -179,7 +179,8 @@ async def find(request: Request):
                 pos_data.append({"x": floor(pos.x + .5), "y": floor(pos.y + .5), "z": floor(pos.z + .5)})
         observation += str_pos_list
         done = True
-        return JSONResponse({'message': observation, 'status': done, 'data':pos_data})
+        return JSONResponse({'message': observation, 'status': done, 'data':pos_data,
+                             'observed_name': name})
     else:
         observation += f"can not find {name}, there is no {name} around."
         done = False
@@ -190,7 +191,7 @@ async def find(request: Request):
 async def hand(request: Request):
     """hand item to entity_name: hand item to entity_name."""
     data = await request.json()
-    entity_name, item_name, count = data.get('target_name'), data.get('item_name'), data.get('count')
+    entity_name, item_name, count = data.get('target_name'), data.get('item_name'), data.get('item_count')
     envs_info = get_envs_info(bot, 128)
     tag, msg = move_to_nearest_(pathfinder, bot, Vec3, envs_info, mcData, 1, entity_name)
     if not tag:
@@ -648,6 +649,30 @@ async def talk_to(request: Request):
     entity_name, message = data.get('entity_name'), data.get('message')
     chat_long(bot, entity_name, message, "talk")
     return JSONResponse({'message': f"I talk to {entity_name} {message}", 'status': True})
+
+
+from minecraft_eac_bridge import install_minecraft_server_eac_route
+eac_preflight = install_minecraft_server_eac_route(
+    app, native_bot=bot, Vec3=Vec3, timeout_decorator=timeout,
+)
+
+
+@app.post('/post_wait_for_feedback')
+@timeout(35)
+async def wait_for_feedback(request: Request):
+    data = await request.json()
+    entity_name, seconds = data.get('entity_name'), min(int(data.get('seconds', 10)), 30)
+    chat_long(bot, entity_name, f"I am waiting for feedback, please reply in {seconds} seconds.", "talk")
+    start_time = time.time()
+    while time.time() - start_time < seconds:
+        tag, message = info_bot.check_new_reply_from(entity_name)
+        if tag:
+            events = info_bot.get_action_description_new()
+            return JSONResponse({'message': f"I receive feedback from {entity_name}: {message}",
+                                 'status': True, 'new_events': events})
+        await asyncio.sleep(0.2)
+    return JSONResponse({'message': f"I do not receive feedback from {entity_name}",
+                         'status': False, 'new_events': info_bot.get_action_description_new()})
 
 
 @app.post('/post_done')

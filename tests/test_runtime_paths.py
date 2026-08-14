@@ -728,6 +728,90 @@ def test_minecraft_agent_does_not_retry_terminal_blocked_tool(monkeypatch):
     assert attempts == [True]
 
 
+def _capture_step_tools(monkeypatch, registered_tools, requested_tools, recommended_actions=()):
+    captured = []
+    agent = object.__new__(MinecraftAgent)
+    agent.name = "Alice"
+    agent.model = "test"
+    agent.api_key_list = ["test-key"]
+    agent.llm = object()
+    agent.tools = registered_tools
+    monkeypatch.setattr(MinecraftAgent, "provider", "ollama")
+    monkeypatch.setattr(MinecraftAgent, "api_key_list", ["test-key"])
+    monkeypatch.setattr("env.minecraft_client.random.shuffle", lambda unused: None)
+    monkeypatch.setattr(
+        "env.minecraft_client.OllamaReasoningChatOpenAI", lambda **unused: object())
+
+    class StopExecutor:
+        handle_parsing_errors = False
+
+        def __call__(self, unused):
+            raise ToolActionBlockedError("stop after tool selection")
+
+    def initialize(**kwargs):
+        captured.extend(kwargs["tools"])
+        return StopExecutor()
+
+    monkeypatch.setattr("env.minecraft_client.initialize_agent", initialize)
+    with pytest.raises(ToolActionBlockedError, match="stop after tool selection"):
+        agent.step(
+            "move", max_try_turn=1, tools=requested_tools,
+            recommended_actions=list(recommended_actions),
+        )
+    return captured
+
+
+def test_minecraft_agent_step_resolves_explicit_subset_to_registered_wrapped_tools(monkeypatch):
+    registered_mine = SimpleNamespace(name="MineBlock", wrapped=True)
+    registered_scan = SimpleNamespace(name="scanNearbyEntities", wrapped=True)
+    raw_mine = SimpleNamespace(name="MineBlock", wrapped=False)
+
+    selected = _capture_step_tools(
+        monkeypatch, [registered_mine, registered_scan], [raw_mine])
+
+    assert selected == [registered_mine]
+    assert selected[0] is registered_mine and selected[0] is not raw_mine
+
+
+def test_minecraft_agent_step_rejects_unregistered_raw_tool(monkeypatch):
+    registered = SimpleNamespace(name="MineBlock", wrapped=True)
+    raw_unknown = SimpleNamespace(name="unregisteredTool", wrapped=False)
+
+    assert _capture_step_tools(monkeypatch, [registered], [raw_unknown]) == []
+
+
+def test_minecraft_agent_step_empty_subset_preserves_registered_tools(monkeypatch):
+    registered = [SimpleNamespace(name="MineBlock"), SimpleNamespace(name="scanNearbyEntities")]
+
+    selected = _capture_step_tools(monkeypatch, registered, [])
+
+    assert selected == registered
+    assert all(selected_tool is registered_tool
+               for selected_tool, registered_tool in zip(selected, registered))
+
+
+def test_minecraft_agent_step_recommendations_cannot_widen_explicit_subset(monkeypatch):
+    registered_mine = SimpleNamespace(name="MineBlock")
+    registered_scan = SimpleNamespace(name="scanNearbyEntities")
+
+    selected = _capture_step_tools(
+        monkeypatch, [registered_mine, registered_scan],
+        [SimpleNamespace(name="MineBlock")],
+        recommended_actions=("MineBlock", "scanNearbyEntities"),
+    )
+
+    assert selected == [registered_mine]
+
+
+def test_minecraft_agent_step_invalid_recommendations_fail_closed(monkeypatch):
+    registered = SimpleNamespace(name="MineBlock")
+
+    selected = _capture_step_tools(
+        monkeypatch, [registered], [], recommended_actions=("unregisteredTool",))
+
+    assert selected == []
+
+
 @pytest.mark.parametrize("timeout_error", [requests.ConnectTimeout, requests.ReadTimeout])
 def test_minecraft_request_converts_transport_timeout(tmp_path, monkeypatch, timeout_error):
     paths = RuntimePaths.isolated(tmp_path / "attempt")

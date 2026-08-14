@@ -192,6 +192,12 @@ def _default_runtime_assets(root: Path) -> tuple[RuntimeAssetSpec, ...]:
             if "__pycache__" not in path.parts
         )
     candidates.extend((root / "data").glob("*.json"))
+    eac_docs = root / "docs/eac"
+    if eac_docs.is_dir():
+        candidates.extend(
+            path for path in eac_docs.glob("*.json")
+            if "premanifest" not in path.name and "fixture" not in path.name
+        )
     for path in sorted(candidates):
         try:
             relative = path.relative_to(root).as_posix()
@@ -228,6 +234,10 @@ class RuntimeExecution:
         if getattr(self, "_sealed", False):
             raise AttributeError("RuntimeExecution is immutable")
         object.__setattr__(self, name, value)
+
+    @property
+    def asset_count(self) -> int:
+        return len(self.assets)
 
     @classmethod
     def resolve(cls, root: str | Path | None = None, specs: Iterable[RuntimeAssetSpec] | None = None):

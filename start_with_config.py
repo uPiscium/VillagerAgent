@@ -127,6 +127,11 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
         "runtime_task_dag_snapshot": runtime_snapshot,
         "task_graph_snapshot": task_graph_snapshot,
         "controller": controller_snapshot,
+        "minecraft_eac_audit": (
+            env.get_eac_audit_artifact()
+            if env is not None and hasattr(env, "get_eac_audit_artifact")
+            else {"configured": False, "read_only_projection": True}
+        ),
         "bridge_cleanup": dict(getattr(env, "bridge_cleanup_result", {}) or {}),
         "collection_errors": collection_errors,
         "error": error,
@@ -406,9 +411,33 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         env = VillagerBench(env_type=env_type.meta, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     elif task_type == "gen":
         env = VillagerBench(env_type=env_type.gen, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
+    elif task_type == "none":
+        env = VillagerBench(env_type=env_type.none, task_id=task_idx, dig_needed=False, host=host, port=port, max_task_num=max_task_num, task_name=task_name, _virtual_debug=False, runtime_paths=runtime_paths, runtime_execution=runtime_execution)
     else:
         raise NotImplementedError
     env.attempt_id = attempt_id
+    eac_mode = (minecraft_dual_dag_config or {}).get("eac_mode")
+    if eac_mode is not None:
+        from benchmarks.minecraft.eac_identity import verify_eac_premanifest
+        from benchmarks.minecraft.eac_runtime import install_minecraft_eac
+        premanifest_path = (minecraft_dual_dag_config or {}).get("eac_premanifest")
+        if not premanifest_path:
+            raise ValueError("Minecraft EAC runtime requires an explicit premanifest")
+        execution_revision = (minecraft_dual_dag_config or {}).get("eac_execution_revision")
+        if not execution_revision:
+            raise ValueError("Minecraft EAC runtime requires an explicit execution revision")
+        if ((minecraft_dual_dag_config or {}).get("judged_execution") is not False
+                or (minecraft_dual_dag_config or {}).get("production") is not False):
+            raise ValueError("Minecraft EAC runtime requires explicit non-judged, non-production admission")
+        if eac_mode not in {"dual_dag_advisory", "dual_dag_authority"}:
+            raise ValueError("Minecraft EAC execution requires an admitted EAC mode")
+        if task_type != "none":
+            raise ValueError("Minecraft EAC non-judged identity requires task_type=none")
+        identity = verify_eac_premanifest(
+            Path(premanifest_path), execution=runtime_execution,
+            execution_revision=execution_revision,
+        )
+        install_minecraft_eac(env, mode=eac_mode, run_id=attempt_id, identity_binding=identity)
     if task_type == "meta" and runtime_result_path:
         env.meta_diagnostics_dir = os.path.dirname(runtime_result_path) or "."
 
@@ -423,7 +452,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
     elif task_type == "puzzle":
         agent_tool = [Agent.placeBlock, Agent.fetchContainerContents, Agent.MineBlock, Agent.scanNearbyEntities, Agent.equipItem,
                       Agent.navigateTo, Agent.withdrawItem, Agent.ToggleAction, Agent.handoverBlock]
-    elif task_type == "meta" or task_type == "gen":
+    elif task_type == "meta" or task_type == "gen" or task_type == "none":
         agent_tool = [Agent.scanNearbyEntities, Agent.navigateTo, Agent.attackTarget, Agent.useItemOnEntity, Agent.useItemOnBlock,
                       Agent.MineBlock, Agent.placeBlock, Agent.equipItem, Agent.handoverBlock, Agent.SmeltingCooking, Agent.withdrawItem, 
                       Agent.storeItem, Agent.craftBlock, Agent.eat, Agent.fetchContainerContents, Agent.wake, Agent.talkTo, Agent.waitForFeedback,

@@ -61,7 +61,7 @@ from type_define.graph import Graph, Task
 
 DEFAULT_OUTPUT_ROOT = Path("result/minecraft")
 REQUIRED_CONFIG_FIELDS = ("task_type", "task_idx", "agent_num", "task_goal", "host", "port", "task_name")
-TASK_SELECTION_POLICIES = ("dual-dag", "original")
+TASK_SELECTION_POLICIES = ("dual-dag", "original", "dual_dag_advisory", "dual_dag_authority")
 RUNTIME_TERMINATE_GRACE_SECONDS = 1.0
 DEFAULT_JUDGED_REQUIRED_ARTIFACTS = (
     "score",
@@ -250,6 +250,9 @@ def _run_minecraft_experiment_attempt(
     })
     runtime_launch_config = dict(launch_config)
     if execute:
+        premanifest = runtime_launch_config.get("eac_premanifest")
+        if isinstance(premanifest, str) and premanifest:
+            runtime_launch_config["eac_premanifest"] = str(Path(premanifest).resolve(strict=True))
         runtime_launch_config["task_name"] = f"{launch_config['task_name']}_{attempt_id[:12]}"
         runtime_launch_config["attempt_id"] = attempt_id
     safe_emit_runtime_event(event_sink, "run_started", source="benchmarks.minecraft.experiment", payload={"mode": "execute" if execute else "dry_run"})
@@ -334,6 +337,7 @@ def _run_minecraft_experiment_attempt(
     score: dict = {}
     score_ownership_verified = False
     runtime_result: dict = {}
+    minecraft_eac_audit: dict = {"configured": False, "read_only_projection": True}
     error = None
     error_type = ""
     timed_out = False
@@ -484,6 +488,11 @@ def _run_minecraft_experiment_attempt(
         action_log_available = isinstance(runtime_result.get("action_log"), dict)
         action_log = runtime_result.get("action_log") if action_log_available else {}
         score = runtime_result.get("score") if isinstance(runtime_result.get("score"), dict) else {}
+        minecraft_eac_audit = runtime_result.get("minecraft_eac_audit", {"configured": False, "read_only_projection": True})
+        persisted_eac_audit = _read_json(
+            runtime_result_path.parent / "data" / "minecraft_eac_audit.json", default={})
+        if persisted_eac_audit:
+            minecraft_eac_audit = persisted_eac_audit
         if score:
             try:
                 validate_score_identity(
@@ -943,6 +952,7 @@ def _run_minecraft_experiment_attempt(
     artifact = sanitize_artifact_value(artifact, secret_values=secret_values)
     decision_support = sanitize_artifact_value(decision_support, secret_values=secret_values)
     metrics = sanitize_artifact_value(metrics, secret_values=secret_values)
+    minecraft_eac_audit = sanitize_artifact_value(minecraft_eac_audit, secret_values=secret_values)
     judged_iteration_trace = sanitize_artifact_value(
         judged_iteration_trace,
         secret_values=secret_values,
@@ -962,6 +972,8 @@ def _run_minecraft_experiment_attempt(
     _write_json(output_dir / "dual_dag_artifact.json", artifact)
     _write_json(output_dir / "decision_support.json", decision_support)
     _write_json(output_dir / "metrics.json", metrics)
+    if minecraft_eac_audit.get("configured") is not False:
+        _write_json(output_dir / "minecraft_eac_audit.json", minecraft_eac_audit)
     _write_json(output_dir / "summary.json", persisted_summary)
     if execute and launch_config.get("task_type") == "meta":
         _write_json(output_dir / "judged_iteration_trace.json", judged_iteration_trace)
@@ -1272,6 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute-timeout-seconds", type=float, default=None, help="Bound real execute mode and preserve artifacts on timeout")
     parser.add_argument("--retain-runtime-result", action="store_true", help="Keep the per-run internal runtime result after normalized artifacts are written")
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing non-empty run directory")
+    parser.add_argument("--execution-root", help="Immutable runtime execution checkout")
     args = parser.parse_args(argv)
 
     summary = run_minecraft_experiment(
@@ -1286,6 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
         retain_runtime_result=args.retain_runtime_result,
         command_text=_command_text(args),
         overwrite=args.overwrite,
+        execution_root=args.execution_root,
     )
     print(json.dumps(summary, indent=2))
     return 0 if summary.get("error") is None else 1
@@ -1543,6 +1557,22 @@ def _execute_real_runtime(
     from start_with_config import run
     llm_config = _runtime_llm_config(launch_config)
     config = dict(launch_config)
+    if dual_dag_config.get("eac_mode"):
+        if config.get("judged_execution") is not False or config.get("production") is not False:
+            raise ValueError("EAC execute requires explicit non-judged, non-production admission")
+        premanifest = config.get("eac_premanifest")
+        if not isinstance(premanifest, str) or not premanifest:
+            raise ValueError("EAC execute requires launch_config.eac_premanifest")
+        execution_revision = config.get("eac_execution_revision")
+        if not isinstance(execution_revision, str) or not execution_revision:
+            raise ValueError("EAC execute requires launch_config.eac_execution_revision")
+        dual_dag_config = {
+            **dual_dag_config,
+            "eac_premanifest": premanifest,
+            "eac_execution_revision": execution_revision,
+            "judged_execution": False,
+            "production": False,
+        }
     document = config.get("evaluation_arg", {}) if config.get("task_type") == "meta" else {}
     runtime_root = runtime_root or runtime_result_path.parent
     attempt_id = attempt_id or config.get("attempt_id")
@@ -2445,12 +2475,16 @@ def _policy_from_args(args: argparse.Namespace) -> str:
 
 
 def _dual_dag_config(task_selection_policy: str) -> dict:
-    return {
+    scheduling_policy = "dual-dag" if task_selection_policy.startswith("dual_dag_") else task_selection_policy
+    config = {
         "runtime_task_selection": {
-            "enabled": task_selection_policy == "dual-dag",
-            "policy": task_selection_policy,
+            "enabled": scheduling_policy == "dual-dag",
+            "policy": scheduling_policy,
         }
     }
+    if task_selection_policy in {"dual_dag_advisory", "dual_dag_authority"}:
+        config["eac_mode"] = task_selection_policy
+    return config
 
 
 def _fixture_action_log(config: dict) -> dict:

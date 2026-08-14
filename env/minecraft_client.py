@@ -1304,14 +1304,22 @@ class Agent():
         for act, obs in zip(actions, observations):
             instruction += f"\n{act['log']}\n{obs}"
         
-        recommended_tools = []
-        for action in recommended_actions:
-            for tool in self.all_tools:
-                if tool.name == action:
-                    recommended_tools.append(tool)
-        
-        if recommended_tools == []:
-            recommended_tools = self.all_tools if len(tools) == 0 else tools
+        # Caller tools are selectors only. Resolve names against the registered
+        # capability objects so raw inputs cannot bypass VillagerBench wrappers.
+        selected_tools = self.tools
+        if tools:
+            requested_names = {
+                getattr(requested_tool, "name", None) for requested_tool in tools
+            }
+            selected_tools = [
+                registered_tool for registered_tool in self.tools
+                if registered_tool.name in requested_names
+            ]
+        recommended_tools = (
+            [registered_tool for registered_tool in selected_tools
+             if registered_tool.name in recommended_actions]
+            if recommended_actions else selected_tools
+        )
         llmhandler = LLMHandler()
 
         while max_try_turn > 0:

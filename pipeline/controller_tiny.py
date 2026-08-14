@@ -104,11 +104,7 @@ class GlobalController:
                 self._begin_tool_action,
                 self._end_tool_action,
             )
-        all_tools = (
-            env.guard_tool_actions(all_tools or ())
-            if hasattr(env, "guard_tool_actions")
-            else list(all_tools or ())
-        )
+        all_tools = list(all_tools or ())
         tm_llm_config = llm_config.copy() if tm_llm_config is None else tm_llm_config
         tm_llm_config["role_name"] = "TaskManager"
         self.task_manager.llm = init_language_model(tm_llm_config)
@@ -143,7 +139,8 @@ class GlobalController:
                 data_manager,
                 name=a.name,
                 silent=False,
-                all_tools=all_tools,
+                all_tools=(env.guard_tool_actions(all_tools, actor_name=a.name)
+                           if hasattr(env, "guard_tool_actions") else all_tools),
                 **base_agent_output_config,
                 **base_agent_runtime_config,
             )
