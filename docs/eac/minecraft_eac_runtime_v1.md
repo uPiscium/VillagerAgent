@@ -20,6 +20,14 @@ meta-judger private state, simulator-only truth, and post-hoc judged artifacts
 are rejected as evidence origins. Hidden world change without actor-visible
 evidence does not mutate witness freshness.
 
+The real `VillagerBench.get_init_state()` block snapshot returned to
+`DataManager` is sanitized by the authenticated observation adapter and
+ingested actor-by-actor into the same current-fluent stream. Positive visible
+block observations and negative successful MineBlock outcomes supersede the
+previous polarity for that actor and proposition key while retaining the old
+root as non-current audit history; a later visible replacement can therefore
+restore admissibility.
+
 The Authority claim covers classified tools registered through an
 EAC-configured `VillagerBench`. Direct Python calls to `Agent`, direct bridge
 HTTP calls, bridge internals, judgers, setup/admin paths, and unclassified tools
@@ -29,9 +37,9 @@ capabilities; this is not an OS or hostile-plugin sandbox.
 The non-judged execution fixture is
 `docs/eac/minecraft_eac_nonjudged_fixture_v1.json`. It binds the independently
 verifiable `docs/eac/minecraft_eac_premanifest_v1.json` and immutable Git
-revision `530bd53fe48085b65cdc211f8b354b8fbb57943e`. The premanifest was generated
+revision `cdbac92c37aa8672480a3cb58ee4150363da5108`. The premanifest was generated
 from `RuntimeExecution.resolve()` over that detached revision (152 assets;
-manifest `ef7ba40d0c62c26db5553226015c72933ad1b31cefcfa50e793d7eb3a05479c3`). Both values are carried from
+manifest `a2f2b776cf21e7c4c1554cf49adf3d4056f4a3e291d6e87fcfc4d0ccf9960a9e`). Both values are carried from
 the launch configuration to startup; ambient environment variables cannot
 select a different admitted revision. This fixture is an integration/admission
 artifact only and does not authorize judged, Gate A/B/C, or production runs.
