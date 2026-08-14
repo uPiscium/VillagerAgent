@@ -49,7 +49,7 @@ def test_frozen_minecraft_artifacts_authenticate_and_include_dual_class_fixture(
     mine_class = next(item for item in classification["actions"] if item["action_identity"] == "MineBlock")
     assert mine_class["epre"] is True and mine_class["env_pre"] is True
     assert classification["detached_artifact_sha256"] == "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001"
-    assert source_profile["detached_profile_sha256"] == "a6bab72a19bf5dc8f91dc07cfb68f0a54b2cf8d52accc237df4e527ebd3491e3"
+    assert source_profile["detached_profile_sha256"] == "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be"
 
 
 def test_direct_observation_allows_authority_effect_and_visible_outcome_is_ingested():
@@ -144,6 +144,35 @@ def test_cross_actor_supersession_is_rejected():
         subject.ingest_actor_record(actor_id="Alice", proposition=replace(proposition, polarity=False),
                                     record_type="direct_observation", source="alice-forged-bob",
                                     visible_to=("Bob",), revision=2, supersedes=(bob.root_id,))
+
+
+def test_trusted_tool_result_cannot_be_reassigned_to_another_actor():
+    subject = runtime()
+    proposition = Proposition(PropositionKey(
+        "minecraft", "entity_target_observed", ("cow",), "current"))
+    with pytest.raises(MinecraftEACError, match="private to its observing actor"):
+        subject.ingest_actor_record(
+            actor_id="Alice", proposition=proposition, record_type="trusted_tool_result",
+            source="minecraft-observation-adapter", visible_to=("Bob",),
+        )
+
+
+def test_explicit_supersession_updates_tracked_current_fluent():
+    subject = runtime()
+    proposition = subject._proposition(
+        subject.classification_for("MineBlock"), {"x": 1, "y": 2, "z": 3})
+    first = subject.ingest_target_observation(
+        "Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    second = subject.ingest_actor_record(
+        actor_id="Alice", proposition=replace(proposition, polarity=False),
+        record_type="direct_observation", source="minecraft-visible-observation",
+        revision=2, supersedes=(first.root_id,),
+    )
+    third = subject.ingest_target_observation(
+        "Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    assert subject._current_roots[("Alice", proposition.key)] == third.root_id
+    assert not subject.authority._roots[first.root_id].current
+    assert not subject.authority._roots[second.root_id].current
 
 
 def test_villagerbench_real_initial_state_is_same_source_for_model_and_authority():
@@ -384,6 +413,31 @@ def test_scan_result_and_message_are_ingested_at_runtime():
     }, (), {"player_name": "Alice", "entity_name": "Bob", "message": "hello", "emotion": []})
     assert any(item["record_type"] == "peer_report"
                for item in subject.audit_artifact()["evidence_index"])
+
+
+def test_scan_and_initial_state_discard_noncanonical_coordinates_without_raising():
+    subject = runtime("dual_dag_advisory")
+    result = subject.mediate_tool("scanNearbyEntities", lambda **kwargs: {
+        "status": True, "data": [
+            {"name": "cow", "x": 1.5, "y": 2, "z": 3},
+            {"name": {"forged": "name"}, "x": float("nan"), "y": 2, "z": 3},
+            {"name": "sheep", "x": 4.0, "y": 5.0, "z": 6.0},
+        ],
+    }, (), {"player_name": "Alice", "item_name": "cow", "radius": 5,
+            "item_num": 1, "emotion": [], "murmur": ""})
+    assert result["status"] is True
+    roots = tuple(subject.authority._roots.values())
+    assert any(root.proposition.key.arguments == ("cow", None) for root in roots)
+    sheep_arguments = PropositionKey(
+        "minecraft", "entity_observed", ("sheep", [4, 5, 6]), "current").arguments
+    assert any(root.proposition.key.arguments == sheep_arguments for root in roots)
+    state = {"status": True, "message": {"blocks": [
+        {"name": "stone", "position": [1.5, 2, 3]},
+        {"name": "dirt", "position": [4.0, 5.0, 6.0]},
+    ]}}
+    initial = subject.ingest_initial_actor_state("Alice", state)
+    assert len(initial) == 1
+    assert initial[0].proposition.key.arguments == (4, 5, 6)
 
 
 def test_scan_observation_can_ground_a_later_target_candidate():

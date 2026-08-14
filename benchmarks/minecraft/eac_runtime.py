@@ -331,8 +331,13 @@ class MinecraftEACRuntime:
                                    "visible_action_outcome", "peer_report"}:
                 raise MinecraftEACError("unknown Minecraft evidence record type")
             visible = tuple(visible_to or (actor_id,))
-            if record_type in {"direct_observation", "visible_action_outcome"} and visible != (actor_id,):
-                raise MinecraftEACError("current-fluent evidence must be private to its observing actor")
+            if visible != (actor_id,):
+                raise MinecraftEACError("evidence must be private to its observing actor")
+            current_slot = ((actor_id, proposition.key)
+                            if record_type in {"direct_observation", "visible_action_outcome"} else None)
+            tracked_current = self._current_roots.get(current_slot) if current_slot else None
+            if supersedes and tracked_current is not None and tracked_current not in supersedes:
+                raise MinecraftEACError("supersession must replace the tracked current fluent")
             self._sequence += 1
             rid = root_id or f"minecraft-root:{self.run_id}:{self._sequence}"
             provenance_id = "minecraft-prov:" + rid
@@ -362,6 +367,9 @@ class MinecraftEACRuntime:
             root = self.authority.ingest_record(
                 record, proposition=proposition, root_id=rid, revision=revision,
                 provenance_id=provenance_id, supersedes=supersedes)
+            if current_slot is not None and (supersedes or tracked_current is None):
+                self._current_roots[current_slot] = root.root_id
+                self._fluent_revision = max(self._fluent_revision, revision)
             evidence_kind = payload.get("evidence_kind") if isinstance(payload, Mapping) else None
             self._records.append({"root_id": rid, "record_type": evidence_kind or record_type,
                                   "authority_record_type": record_type,
@@ -402,7 +410,7 @@ class MinecraftEACRuntime:
             roots = []
             for block_name, coordinates in sanitized_visible_blocks(state):
                 proposition = Proposition(PropositionKey(
-                    "minecraft", "target_block_present", coordinates, "current"))
+                    "minecraft", "target_block_present", tuple(coordinates), "current"))
                 roots.append(self._ingest_current_fluent(
                     actor_id, proposition, source="minecraft-initial-visible-state",
                     evidence_kind="initial_visible_block", payload={"block_name": block_name},
