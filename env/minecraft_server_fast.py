@@ -651,15 +651,11 @@ async def talk_to(request: Request):
     return JSONResponse({'message': f"I talk to {entity_name} {message}", 'status': True})
 
 
-@app.post('/post_eac_preflight')
-@timeout(10)
-async def eac_preflight(request: Request):
-    """Read-only native legality preflight for the classified EAC subset."""
-    data = await request.json()
-    action_name, arguments = data.get('action'), data.get('arguments', {})
-    from eac_preflight import evaluate_eac_preflight
-    return JSONResponse({'status': evaluate_eac_preflight(action_name, arguments, bot, Vec3),
-                         'action': action_name})
+from eac_preflight import register_eac_preflight_route
+eac_preflight = register_eac_preflight_route(
+    app, bot_provider=lambda: bot, vec3_provider=lambda: Vec3,
+    timeout_decorator=timeout,
+)
 
 
 @app.post('/post_wait_for_feedback')

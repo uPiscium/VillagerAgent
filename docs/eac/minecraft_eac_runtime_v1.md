@@ -45,3 +45,12 @@ select a different admitted revision. This fixture is an integration/admission
 artifact only and does not authorize judged, Gate A/B/C, or production runs.
 The Advisory fixture binds the same premanifest and enters the same startup
 path; only final permit enforcement differs.
+
+Operators must launch from a detached checkout of the revision named above; PR
+HEAD is intentionally rejected because it is not the admitted execution root.
+For example, create the checkout with `git worktree add --detach
+/path/to/minecraft-eac-execution <execution-revision>`, then pass it to the
+bounded harness as `--execution-root /path/to/minecraft-eac-execution` with
+either committed non-judged fixture. The harness verifies the checkout HEAD,
+the complete `RuntimeExecution` closure, and the premanifest before installing
+the EAC runtime or entering the environment run boundary.

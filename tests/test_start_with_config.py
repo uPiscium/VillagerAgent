@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -6,6 +8,8 @@ import pytest
 
 import start_with_config
 from env.minecraft_client import MinecraftBridgeCleanupError
+from env.runtime_execution import RuntimeExecution
+from env.runtime_paths import RuntimePaths
 
 
 def test_runtime_result_preserves_observed_agent_iteration_limit():
@@ -464,6 +468,85 @@ def test_judged_runtime_validator_rejects_invalid_action_log(action_log):
 
     with pytest.raises(start_with_config.JudgedRuntimeValidationError, match="action log"):
         start_with_config.validate_judged_runtime_result(result)
+
+
+def test_eac_modes_pass_real_frozen_admission_and_install_before_environment_run(
+        monkeypatch, tmp_path, request):
+    class StopBeforeEnvironmentRun(Exception):
+        pass
+
+    root = Path(__file__).resolve().parents[1]
+    fixture_paths = [
+        root / "docs/eac/minecraft_eac_nonjudged_fixture_v1.json",
+        root / "docs/eac/minecraft_eac_nonjudged_advisory_fixture_v1.json",
+    ]
+    fixtures = [json.loads(path.read_text(encoding="utf-8")) for path in fixture_paths]
+    revision = fixtures[0]["eac_execution_revision"]
+    assert all(fixture["eac_execution_revision"] == revision for fixture in fixtures)
+    checkout = tmp_path / "frozen-execution"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(checkout), revision],
+        cwd=root,
+        check=True, capture_output=True,
+    )
+    request.addfinalizer(lambda: subprocess.run(
+        ["git", "worktree", "remove", "--force", str(checkout)], cwd=root,
+        check=False, capture_output=True,
+    ))
+    execution = RuntimeExecution.resolve(checkout)
+
+    installed = []
+    registered = []
+    original_configure = start_with_config.VillagerBench.configure_eac_runtime
+
+    def capture_configure(environment, runtime):
+        original_configure(environment, runtime)
+        installed.append(runtime)
+
+    monkeypatch.setattr(
+        start_with_config.VillagerBench, "configure_eac_runtime", capture_configure)
+    monkeypatch.setattr(
+        start_with_config.VillagerBench, "agent_register",
+        lambda self, **kwargs: registered.append((self, kwargs)),
+    )
+    monkeypatch.setattr(
+        start_with_config.VillagerBench, "run",
+        lambda self, **unused: (_ for _ in ()).throw(StopBeforeEnvironmentRun()),
+    )
+    monkeypatch.setattr(start_with_config, "load_agent_api_key_list", lambda: [])
+    monkeypatch.setattr(start_with_config, "configure_ollama_agent", lambda *args, **kwargs: None)
+
+    for fixture in fixtures:
+        mode = fixture["task_selection_policy"]
+        with pytest.raises(StopBeforeEnvironmentRun):
+            start_with_config.run(
+                fixture["api_model"], fixture["api_base"], fixture["task_type"],
+                fixture["task_idx"], fixture["agent_num"], False, 1,
+                fixture["task_goal"], None, fixture["host"], fixture["port"],
+                fixture["task_name"], document={},
+                minecraft_dual_dag_config={
+                    "eac_mode": mode,
+                    "eac_premanifest": str(root / fixture["eac_premanifest"]),
+                    "eac_execution_revision": revision,
+                    "judged_execution": fixture["judged_execution"],
+                    "production": fixture["production"],
+                },
+                task_scenario=fixture["task_scenario"],
+                runtime_paths=RuntimePaths.isolated(tmp_path / mode),
+                attempt_id="admission-" + mode,
+                runtime_execution=execution,
+            )
+
+    assert len(installed) == 2 and len(registered) == 2
+    authority, advisory = installed
+    assert [runtime.mode for runtime in installed] == [
+        "dual_dag_authority", "dual_dag_advisory"]
+    assert [runtime.authority.mode for runtime in installed] == ["authority", "advisory"]
+    assert authority.identity_binding == advisory.identity_binding
+    assert authority.policy_binding.digest_sha256 == advisory.policy_binding.digest_sha256
+    assert authority.profile_binding.digest_sha256 == advisory.profile_binding.digest_sha256
+    assert authority.classification_identity == advisory.classification_identity
+    assert authority.identity_binding["execution_revision"] == revision
 
 
 def _judged_runtime_result():

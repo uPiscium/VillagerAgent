@@ -3,8 +3,27 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 _DIG_DATA = json.loads((Path(__file__).resolve().parents[1] / "data/dig_item.json").read_text())
+
+
+def register_eac_preflight_route(app, *, bot_provider, vec3_provider,
+                                 timeout_decorator=lambda unused: (lambda function: function)):
+    """Install the production read-only EAC preflight route on a FastAPI app."""
+    @app.post('/post_eac_preflight')
+    @timeout_decorator(10)
+    async def eac_preflight(request: Request):
+        data = await request.json()
+        action_name, arguments = data.get('action'), data.get('arguments', {})
+        return JSONResponse({
+            'status': evaluate_eac_preflight(
+                action_name, arguments, bot_provider(), vec3_provider()),
+            'action': action_name,
+        })
+
+    return eac_preflight
 
 
 def evaluate_eac_preflight(action_name, arguments, native_bot, Vec3):
