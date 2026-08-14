@@ -1,9 +1,9 @@
 {
   "artifact_identity": "minecraft-eac-audit/1",
   "child_count": 152,
-  "child_manifest_sha256": "da3863f2f0be92a2310097ee811e2e1de7b43a7e791a98ecbaee70b5241fbe1a",
+  "child_manifest_sha256": "506f3f5fe29b9ac4e7d200f095dfd33ac8ca47e91e0181254876982872af005e",
   "eac_source_profile": {
-    "digest": "a6bab72a19bf5dc8f91dc07cfb68f0a54b2cf8d52accc237df4e527ebd3491e3",
+    "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
     "identity": "minecraft-eac-primary",
     "version": 1
   },
@@ -13,11 +13,11 @@
     "version": 1
   },
   "execution_identity": "minecraft-eac-runtime-v1",
-  "execution_revision": "af42bc397d6de3a80f7f181ec3de00db1e653b74",
+  "execution_revision": "eb1e771ccc7a1d3043bd203a8bd0c4598809e0a7",
   "judged_execution": false,
-  "premanifest_identity": "4594045baf017689af088099c4e93d8caa68c87116bec4d038596f40404b3492",
+  "premanifest_identity": "35d827510c68ee5e0f306c3e600ba490a7942df665cbab0ee063acc733845763",
   "production": false,
-  "runtime_digest": "sha256:c529b6db3d30e54020d1740d36ae03e17e63550fae00e137a8df9cb425345616",
+  "runtime_digest": "sha256:32fea859e7b0329ee9e0b43c0e4c50e43c500bf9936bf6e3f646043b41baf6d1",
   "support_policy": {
     "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
     "identity": "eac-primary-support",
