@@ -336,8 +336,17 @@ class MinecraftEACRuntime:
             current_slot = ((actor_id, proposition.key)
                             if record_type in {"direct_observation", "visible_action_outcome"} else None)
             tracked_current = self._current_roots.get(current_slot) if current_slot else None
-            if supersedes and tracked_current is not None and tracked_current not in supersedes:
-                raise MinecraftEACError("supersession must replace the tracked current fluent")
+            if current_slot is not None:
+                if isinstance(revision, bool) or not isinstance(revision, int):
+                    raise MinecraftEACError("current-fluent revision must be an integer")
+                if tracked_current is None and supersedes:
+                    raise MinecraftEACError("supersession requires a tracked current fluent")
+                if tracked_current is not None:
+                    if supersedes != (tracked_current,):
+                        raise MinecraftEACError("new current evidence must supersede the tracked fluent")
+                    previous_revision = self.authority._roots[tracked_current].source_stream_revision
+                    if previous_revision is None or revision <= previous_revision:
+                        raise MinecraftEACError("current-fluent revision must increase monotonically")
             self._sequence += 1
             rid = root_id or f"minecraft-root:{self.run_id}:{self._sequence}"
             provenance_id = "minecraft-prov:" + rid
@@ -367,7 +376,7 @@ class MinecraftEACRuntime:
             root = self.authority.ingest_record(
                 record, proposition=proposition, root_id=rid, revision=revision,
                 provenance_id=provenance_id, supersedes=supersedes)
-            if current_slot is not None and (supersedes or tracked_current is None):
+            if current_slot is not None:
                 self._current_roots[current_slot] = root.root_id
                 self._fluent_revision = max(self._fluent_revision, revision)
             evidence_kind = payload.get("evidence_kind") if isinstance(payload, Mapping) else None

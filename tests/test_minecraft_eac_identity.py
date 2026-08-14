@@ -82,3 +82,5 @@ def test_authority_and_advisory_fixtures_bind_same_execution_identity():
     assert advisory["task_selection_policy"] == "dual_dag_advisory"
     assert authority["eac_execution_revision"] == advisory["eac_execution_revision"]
     assert authority["eac_premanifest"] == advisory["eac_premanifest"]
+    assert ({key: value for key, value in authority.items() if key != "task_selection_policy"}
+            == {key: value for key, value in advisory.items() if key != "task_selection_policy"})

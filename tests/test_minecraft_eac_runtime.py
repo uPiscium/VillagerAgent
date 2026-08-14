@@ -136,7 +136,7 @@ def test_cross_actor_supersession_is_rejected():
     proposition = subject._proposition(subject.classification_for("MineBlock"), {"x": 1, "y": 2, "z": 3})
     bob = subject.ingest_actor_record(actor_id="Bob", proposition=proposition,
                                       record_type="direct_observation", source="bob-visible", revision=1)
-    with pytest.raises(ValueError, match="unauthorized"):
+    with pytest.raises(MinecraftEACError, match="tracked current fluent"):
         subject.ingest_actor_record(actor_id="Alice", proposition=replace(proposition, polarity=False),
                                     record_type="direct_observation", source="alice-visible",
                                     revision=2, supersedes=(bob.root_id,))
@@ -173,6 +173,26 @@ def test_explicit_supersession_updates_tracked_current_fluent():
     assert subject._current_roots[("Alice", proposition.key)] == third.root_id
     assert not subject.authority._roots[first.root_id].current
     assert not subject.authority._roots[second.root_id].current
+
+
+def test_current_fluent_rejects_untracked_or_nonmonotonic_updates():
+    subject = runtime()
+    proposition = subject._proposition(
+        subject.classification_for("MineBlock"), {"x": 1, "y": 2, "z": 3})
+    first = subject.ingest_target_observation(
+        "Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    with pytest.raises(MinecraftEACError, match="must supersede"):
+        subject.ingest_actor_record(
+            actor_id="Alice", proposition=replace(proposition, polarity=False),
+            record_type="direct_observation", source="minecraft-visible-observation", revision=2,
+        )
+    for revision in (True, 1):
+        with pytest.raises(MinecraftEACError, match="revision|monotonically"):
+            subject.ingest_actor_record(
+                actor_id="Alice", proposition=replace(proposition, polarity=False),
+                record_type="direct_observation", source="minecraft-visible-observation",
+                revision=revision, supersedes=(first.root_id,),
+            )
 
 
 def test_villagerbench_real_initial_state_is_same_source_for_model_and_authority():
@@ -267,8 +287,7 @@ def test_post_permit_conflict_and_epre_retirement_reject_old_permits():
         candidate = subject.authority._candidates[prepared.request.candidate_id]
         if mutation == "conflict":
             opposite = replace(candidate.epre[0], polarity=False)
-            subject.ingest_actor_record(actor_id="Alice", proposition=opposite,
-                                        record_type="direct_observation", source="visible-conflict")
+            subject._ingest_current_fluent("Alice", opposite, source="visible-conflict")
         else:
             subject.authority.retire_definition("epre", candidate.epre_ref)
         with pytest.raises(MinecraftEACError, match="stale"):
