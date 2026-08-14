@@ -63,7 +63,12 @@ def test_direct_observation_allows_authority_effect_and_visible_outcome_is_inges
     audit = subject.audit_artifact()
     assert audit["runtime_identity"] == RUNTIME_ID
     assert audit["oracle_state_included"] is False
-    assert any(item["record_type"] == "visible_action_outcome" for item in audit["evidence_index"])
+    assert any(item["record_type"] == "visible_action_outcome"
+               and item["authority_record_type"] == "visible_action_outcome"
+               for item in audit["evidence_index"])
+    assert any(root.root_type == "visible_action_outcome"
+               and root.proposition.key.predicate == "mineblock_success_observed"
+               for root in subject.authority._roots.values())
     with pytest.raises(MinecraftEACError, match="not_admissible"):
         subject.prepare_tool("MineBlock", mine, (), {
             "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",

@@ -395,13 +395,14 @@ class MinecraftEACRuntime:
                                            source="minecraft-visible-observation")
 
     def _ingest_current_fluent(self, actor_id: str, proposition: Proposition, *, source: str,
-                               evidence_kind: str = "direct_observation", payload=None):
+                               evidence_kind: str = "direct_observation", payload=None,
+                               record_type: str = "direct_observation"):
         with self._lock:
             slot = (actor_id, proposition.key)
             self._fluent_revision += 1
             previous = self._current_roots.get(slot)
             root = self.ingest_actor_record(
-                actor_id=actor_id, proposition=proposition, record_type="direct_observation",
+                actor_id=actor_id, proposition=proposition, record_type=record_type,
                 source=source, payload={"evidence_kind": evidence_kind, **(payload or {})},
                 revision=self._fluent_revision, supersedes=(previous,) if previous else (),
             )
@@ -437,7 +438,14 @@ class MinecraftEACRuntime:
             return
         self._ingest_current_fluent(
             actor_id, replace(proposition, polarity=False), source="minecraft-action:MineBlock",
-            evidence_kind="visible_action_outcome",
+            evidence_kind="action_derived_direct_observation",
+            payload={"status": result.get("status") if isinstance(result, Mapping) else None})
+        outcome = Proposition(PropositionKey(
+            proposition.key.namespace, "mineblock_success_observed",
+            proposition.key.arguments, proposition.key.temporal_scope))
+        self._ingest_current_fluent(
+            actor_id, outcome, source="minecraft-action:MineBlock",
+            evidence_kind="visible_action_outcome", record_type="visible_action_outcome",
             payload={"status": result.get("status") if isinstance(result, Mapping) else None})
 
     def _ingest_result_evidence(self, actor_id: str, tool_name: str, result: Any,
