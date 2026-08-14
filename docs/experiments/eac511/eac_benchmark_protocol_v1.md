@@ -14,6 +14,11 @@ runtime information-flow property, not security by obscurity: the subject
 runtime receives neither scenario metadata nor evaluator artifacts, those
 artifacts are not mounted in its process boundary, and tests must prove no
 oracle state enters actor-visible Authority inputs.
+Each evaluator label is a versioned `eac-evaluator-record/1` object whose digest
+binds protocol, scenario digest, condition, seed, opportunity, logical instant,
+scenario commitment, label-rule identity, source-fixture digest, and independent
+labels before subject outcome. Missing labels fail closed; subject outcomes are
+never used as oracle fallback.
 
 ## Frozen inputs
 
@@ -46,6 +51,11 @@ analysis closed; permit/effect/enforcement outputs are intentionally excluded.
 Condition-comparison observations must carry the validated snapshot digest, and
 the statistical comparison API rejects missing, substituted, unequal, or
 incompletely paired Advisory/Authority snapshots before estimating effects.
+Baseline instead emits a control-plane opportunity snapshot containing only
+scenario/seed, task, action/ExactRequest, materialized fixture and initial state,
+history, opportunity, and detached runtime identities. `EPre`, policy,
+SourceProfile, witness, EAdm, and EAC dependency manifests are forbidden. A
+complete Baseline stream validates without synthetic EPre/EAdm events.
 The current matrix contains planned contract identities only. Materialized
 task/initial-state digests remain preregistration approvals; no execution is
 authorized until those bytes are frozen and verified identically across the
@@ -156,6 +166,15 @@ overhead. In particular:
 * Baseline has no synthetic EAdm; it uses oracle-unsupported attempt/effect
   rates;
 * independent adequacy and utility are never inferred from runtime integrity.
+
+Metrics consume only canonical `eac-analysis-run-summary/1` artifacts produced
+by the deterministic reducer from a validated stream and its bound evaluator
+and reference registries. Metric ingestion accepts only the original immutable
+`AnalysisBundle`, revalidates it, and reruns the reducer; caller-supplied or
+mutated summaries/derived flags are rejected. Integrity
+and adequacy denominators are opportunity-level; utility success is exactly one
+observation per non-infrastructure run, with goal completion separately derived
+from the terminal event.
 
 A zero denominator is `NA`. Recovery classes are `OBSERVE`, `CLARIFY`,
 `COMMUNICATE`, `WAIT`, `ALTERNATE_ACTION`, `REPLAN`, `RESOLVE_CONFLICT`,

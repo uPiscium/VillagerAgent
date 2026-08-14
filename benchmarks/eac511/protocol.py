@@ -17,6 +17,11 @@ PRE_GATE_EQUIVALENCE_FIELDS = (
     "materialized_fixture_digest", "runtime_identity", "history_prefix_digest",
     "opportunity_id", "opportunity_role",
 )
+BASELINE_CONTROL_SNAPSHOT_FIELDS = (
+    "candidate", "task", "request", "seed", "scenario_digest",
+    "initial_state_digest", "materialized_fixture_digest", "runtime_identity",
+    "history_prefix_digest", "opportunity_id", "opportunity_role",
+)
 ARTIFACT_ROOT = Path(__file__).resolve().parents[2] / "docs/experiments/eac511"
 PROTOCOL_PATH = ARTIFACT_ROOT / "eac_benchmark_protocol_v1.json"
 SCENARIOS_PATH = ARTIFACT_ROOT / "eac_benchmark_scenarios_v1.json"
@@ -62,19 +67,26 @@ EVENT_APPLICABILITY = {
 EVENT_PAYLOAD_REQUIRED = {
     "perturbation_scheduled": ["operator_identity", "injection_event_identity"],
     "perturbation_injected": ["operator_identity", "injection_event_identity", "visibility_effect"],
-    "oracle_state_changed": ["oracle_commitment_id", "mutation_identity"],
-    "actor_visible_evidence_exposed": ["evidence_root_id", "root_type", "actor_scope"],
+    "oracle_state_changed": ["oracle_commitment_id", "mutation_identity",
+                             "oracle_record_digest"],
+    "actor_visible_evidence_exposed": ["evidence_root_id", "root_type", "actor_scope",
+                                       "evidence_change"],
     "epre_opportunity": ["opportunity_id"],
-    "eadm_evaluated": ["admissible", "witness_ids", "reason_codes", "dependency_manifest_fingerprint"],
+    "eadm_evaluated": ["admissible", "witness_ids", "reason_codes",
+                       "dependency_manifest_fingerprint", "witness_grounded",
+                       "actor_scope_leakage_detected"],
     "permit_issued": ["permit_id", "dependency_manifest_fingerprint"],
     "permit_staled": ["permit_id", "reason"],
     "permit_rejected": ["permit_id", "reason", "rejection_stage"],
     "envpre_checked": ["envpre_identity", "result"],
-    "effect_attempted": ["attempt_id", "permit_id", "permit_validation_reference"],
+    "effect_attempted": ["attempt_id", "permit_id", "permit_validation_reference",
+                         "attempt_class"],
     "effect_allowed": ["attempt_id", "permit_id", "outcome"],
     "effect_rejected": ["attempt_id", "permit_id", "reason"],
     "recovery_action": ["recovery_class"],
-    "run_terminal": ["run_status"],
+    "run_terminal": ["run_status", "task_success", "task_goals",
+                     "completed_task_goals", "llm_calls", "tokens",
+                     "wall_clock_ms", "eac_overhead_us", "permit_overhead_us"],
 }
 
 RECOVERY_CLASSES = (
@@ -378,6 +390,16 @@ def protocol_document() -> dict[str, Any]:
                 "synthetic_eadm_forbidden": True,
             },
         },
+        "analysis_reduction_contract": {
+            "schema_version": "eac-analysis-run-summary/1",
+            "reducer": "validated_event_stream_plus_bound_evaluator_records",
+            "summary_digest": "sha256_canonical_summary_without_digest",
+            "utility_unit": "one_non_infrastructure_run",
+            "eadm_unit": "one_advisory_or_authority_evaluated_opportunity",
+            "baseline_unit": "one_oracle_labeled_control_opportunity",
+            "caller_supplied_derived_flags": "FORBIDDEN",
+            "metric_ingestion": "AnalysisBundle_only_revalidate_and_rerun_reducer",
+        },
         "normal_regression": {"role": "SECONDARY", "suite": "minecraft-old-12-run-matrix", "acceptable_bound": "REQUIRES_PREREGISTRATION_APPROVAL"},
         "planned_primary_runs": {"conditions": 3, "scenario_fixtures": 14, "seeds": 5, "total": 210},
         "preregistration": {
@@ -399,6 +421,10 @@ def protocol_document() -> dict[str, Any]:
             "snapshot_emission_required_before_enforcement_boundary": True,
             "analysis_fails_closed_on_missing_or_difference": True,
             "permit_effect_and_enforcement_fields_excluded": True,
+            "baseline_control_snapshot_fields": list(BASELINE_CONTROL_SNAPSHOT_FIELDS),
+            "baseline_forbidden_synthetic_fields": ["epre", "policy", "source_profile",
+                                                    "witness", "eadm",
+                                                    "dependency_manifest"],
         },
         "protocol_status": "DESIGN_FROZEN",
         "recovery_classes": list(RECOVERY_CLASSES),
@@ -473,6 +499,13 @@ def event_schema_document() -> dict[str, Any]:
             "authority_decisions": ["admissible", "not_admissible", "issued", "stale",
                                     "allowed", "rejected", "passed"],
             "stale_or_rejected_permit_effect_decision": "rejected",
+            "evaluator_schema_version": "eac-evaluator-record/1",
+            "evaluator_record_digest": "sha256_canonical_record_without_record_digest",
+            "evaluator_label_binding": ["protocol_identity", "scenario_id",
+                                        "scenario_digest", "condition", "seed",
+                                        "opportunity_id", "logical_step", "commitment_id",
+                                        "label_rule_identity", "source_fixture_digest"],
+            "evaluator_missing_label_behavior": "FAIL_CLOSED",
         },
         "injection_phases": [phase.value for phase in InjectionPhase],
         "visibility": [visibility.value for visibility in Visibility],

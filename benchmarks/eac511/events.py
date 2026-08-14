@@ -7,7 +7,9 @@ from .artifacts import validate_publication
 from .model import Condition, InjectionPhase, MatrixCell, Scenario, Visibility
 from .matrix import matrix_cell_digest, validate_matrix_cell
 from .identity import FROZEN_510, semantic_digest
-from .equivalence import pre_gate_snapshot_digest, validate_pre_gate_snapshot
+from .equivalence import (baseline_snapshot_digest, pre_gate_snapshot_digest,
+                          validate_baseline_snapshot, validate_pre_gate_snapshot)
+from .oracle import validate_evaluator_record
 from .protocol import (EVENT_APPLICABILITY, EVENT_PAYLOAD_REQUIRED, EVENT_REQUIRED_FIELDS,
                        EVENT_TYPES, PROTOCOL_ID, RUN_STATUSES)
 
@@ -71,10 +73,17 @@ def _validate_applicability(result: Mapping[str, Any]) -> None:
     if kind not in _ACTION_EVENTS and any(result[field] is not None for field in (
             "candidate_identity", "request_identity", "action_identity", "action_version",
             "action_digest", "epre_identity", "epre_version", "support_policy", "source_profile",
-            "dependency_manifest_fingerprint", "opportunity_id")):
+            "dependency_manifest_fingerprint")):
         raise ValueError(f"action/EAC bindings are not applicable to {kind}")
+    if kind in {"oracle_state_changed", "actor_visible_evidence_exposed", "recovery_action"}:
+        if not isinstance(result["opportunity_id"], str) or not result["opportunity_id"]:
+            raise ValueError(f"{kind} requires opportunity_id")
+    elif kind not in _ACTION_EVENTS and result["opportunity_id"] is not None:
+        raise ValueError(f"opportunity_id is not applicable to {kind}")
     if kind == "eadm_evaluated" and result["condition"] == "baseline":
         raise ValueError("baseline does not emit synthetic EAdm events")
+    if result["condition"] == "baseline" and kind in _EAC_EVENTS:
+        raise ValueError("Baseline does not emit EAC opportunity/permit events")
     if kind.startswith("permit_") and result["condition"] != "authority":
         raise ValueError("execution-permit events are Authority-only")
     requires_authority = (kind in _AUTHORITY_EVENTS and
@@ -106,8 +115,17 @@ def _validate_payload(kind: str, payload: Mapping[str, Any]) -> None:
             raise ValueError("eadm_evaluated.admissible must be boolean")
         if not isinstance(payload["witness_ids"], list) or not isinstance(payload["reason_codes"], list):
             raise ValueError("eadm_evaluated witness/reason fields must be arrays")
+        if (type(payload["witness_grounded"]) is not bool or
+                type(payload["actor_scope_leakage_detected"]) is not bool):
+            raise ValueError("eadm_evaluated diagnostics must be boolean")
     if kind == "envpre_checked" and type(payload["result"]) is not bool:
         raise ValueError("envpre_checked.result must be boolean")
+    if kind == "effect_attempted" and payload["attempt_class"] not in {
+            "NORMAL", "STALE", "REPLAY", "BYPASS"}:
+        raise ValueError("invalid effect attempt class")
+    if kind == "actor_visible_evidence_exposed" and payload["evidence_change"] not in {
+            "EXPOSED", "SUPERSEDED", "INVALIDATED"}:
+        raise ValueError("invalid actor-visible evidence change")
     for field in ("operator_identity", "injection_event_identity", "visibility_effect",
                   "oracle_commitment_id", "mutation_identity", "evidence_root_id",
                   "root_type", "actor_scope", "opportunity_id", "reason",
@@ -131,6 +149,8 @@ def _validate_payload(kind: str, payload: Mapping[str, Any]) -> None:
     for field in ("dependency_manifest_fingerprint", "permit_validation_reference"):
         if field in payload and payload[field] is not None:
             _digest(payload[field], f"{kind}.{field}")
+    if "oracle_record_digest" in payload:
+        _digest(payload["oracle_record_digest"], f"{kind}.oracle_record_digest")
     if "witness_ids" in payload and any(not isinstance(item, str) or not item
                                          for item in payload["witness_ids"]):
         raise ValueError("witness IDs must be non-empty strings")
@@ -143,6 +163,15 @@ def _validate_payload(kind: str, payload: Mapping[str, Any]) -> None:
         raise ValueError("invalid recovery class")
     if kind == "run_terminal" and payload["run_status"] not in RUN_STATUSES:
         raise ValueError("invalid terminal run status")
+    if kind == "run_terminal":
+        if type(payload["task_success"]) is not bool:
+            raise ValueError("run_terminal.task_success must be boolean")
+        for field in ("task_goals", "completed_task_goals", "llm_calls", "tokens",
+                      "wall_clock_ms", "eac_overhead_us", "permit_overhead_us"):
+            if type(payload[field]) is not int or payload[field] < 0:
+                raise ValueError(f"run_terminal.{field} must be a non-negative integer")
+        if payload["completed_task_goals"] > payload["task_goals"]:
+            raise ValueError("completed goals cannot exceed task goals")
 
 
 def _validate_reference_record(record: Mapping[str, Any], reference_type: str) -> None:
@@ -259,8 +288,13 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
     opportunity_ids: set[str] = set()
     primary_count = 0
     for digest, snapshot in pre_gate_snapshots.items():
-        validate_pre_gate_snapshot(cell, scenario, snapshot)
-        if pre_gate_snapshot_digest(snapshot) != digest:
+        if cell.condition is Condition.BASELINE:
+            validate_baseline_snapshot(cell, scenario, snapshot)
+            observed_digest = baseline_snapshot_digest(snapshot)
+        else:
+            validate_pre_gate_snapshot(cell, scenario, snapshot)
+            observed_digest = pre_gate_snapshot_digest(snapshot)
+        if observed_digest != digest:
             raise ValueError("pre-gate snapshot registry digest mismatch")
         if snapshot["opportunity_id"] in opportunity_ids:
             raise ValueError("pre-gate snapshot opportunity IDs must be unique")
@@ -271,6 +305,9 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
     indexes = tuple(event["monotonic_index"] for event in normalized)
     if indexes != tuple(range(len(normalized))):
         raise ValueError("event monotonic indexes must be contiguous from zero")
+    logical_steps = tuple(event["logical_step"] for event in normalized)
+    if logical_steps != tuple(sorted(logical_steps)):
+        raise ValueError("event logical steps must be nondecreasing")
     if len({event["event_id"] for event in normalized}) != len(normalized):
         raise ValueError("event identifiers must be unique")
     if normalized and (len({event["run_id"] for event in normalized}) != 1 or
@@ -290,7 +327,9 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
         if snapshot is None:
             raise ValueError("event pre-gate snapshot is not in the authenticated registry")
         snapshot_request = snapshot["request"]
-        snapshot_manifest = snapshot["dependency_manifest"]
+        snapshot_manifest = snapshot.get("dependency_manifest")
+        if event["opportunity_id"] is not None and event["opportunity_id"] != snapshot["opportunity_id"]:
+            raise ValueError("opportunity-bearing event differs from its authenticated snapshot")
         if (event["run_id"] != cell.run_id or event["scenario_id"] != scenario.scenario_id or
                 event["scenario_digest"] != scenario.digest or
                 event["scenario_digest"] != cell.scenario_digest or
@@ -331,8 +370,20 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
             reference = event[field]
             if reference is not None:
                 record = reference_records.get(reference)
-                if (not isinstance(record, Mapping) or semantic_digest(record) != reference or
-                        record.get("reference_type") != reference_type):
+                if not isinstance(record, Mapping):
+                    raise ValueError(f"{field} is not a resolvable content-addressed record")
+                if reference_type == "evaluator":
+                    validate_evaluator_record(record, cell=cell, scenario=scenario,
+                                              opportunity_id=event["opportunity_id"],
+                                              logical_step=event["logical_step"],
+                                              materialized_fixture_digest=snapshot[
+                                                  "materialized_fixture_digest"])
+                    if (record["record_digest"] != reference or
+                            event["payload"]["oracle_record_digest"] != reference or
+                            event["payload"]["oracle_commitment_id"] != record["commitment_id"]):
+                        raise ValueError("oracle event does not bind its evaluator record")
+                    continue
+                if semantic_digest(record) != reference or record.get("reference_type") != reference_type:
                     raise ValueError(f"{field} is not a resolvable content-addressed record")
                 _validate_reference_record(record, reference_type)
                 if (record["run_id"] != cell.run_id or
@@ -363,16 +414,16 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
                         }.get(event["event_type"])
                     if expected_decision is not None and record.get("decision") != expected_decision:
                         raise ValueError("authority reference decision contradicts the event")
-                if reference_type == "evaluator" and record.get("scenario_id") != scenario.scenario_id:
-                    raise ValueError("evaluator reference does not match the frozen scenario")
     issued_permits: dict[str, tuple[str, str, str, str, str, str]] = {}
     attempted_effects: dict[tuple[str, str], tuple[str, str, Any, str, str, str, str]] = {}
-    completed_effects: set[tuple[str, str]] = set()
     opportunities: dict[str, tuple[str, str, str, str, bool | None]] = {}
+    referenced_opportunities: set[str] = set()
     primary_opportunity = next(snapshot["opportunity_id"] for snapshot in pre_gate_snapshots.values()
                                if snapshot["opportunity_role"] == "primary")
     for event in normalized:
         payload = event["payload"]
+        if event["event_type"] in _ACTION_EVENTS:
+            referenced_opportunities.add(event["opportunity_id"])
         if event["event_type"] == "epre_opportunity":
             if event["opportunity_id"] in opportunities:
                 raise ValueError("EPre opportunity identifiers cannot be repeated")
@@ -411,44 +462,57 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
         elif event["event_type"] == "effect_attempted":
             attempt_key = (event["candidate_identity"], payload["attempt_id"])
             if attempt_key in attempted_effects:
-                raise ValueError("effect attempt identifiers cannot be repeated")
+                raise ValueError("effect attempt already awaits a result")
             if payload["attempt_id"] != event["request_identity"]["attempt_id"]:
                 raise ValueError("effect attempt must bind the ExactRequest attempt")
             permit_id = payload["permit_id"]
             if event["condition"] == "authority":
+                attempt_class = payload["attempt_class"]
                 permit_binding = issued_permits.get(permit_id)
-                if (permit_binding is None or permit_binding[:5] !=
-                        (event["candidate_identity"], payload["attempt_id"],
-                         event["opportunity_id"], event["pre_gate_snapshot_digest"],
-                         event["dependency_manifest_fingerprint"])):
-                    raise ValueError("Authority effect attempt must bind an earlier issued permit")
                 validation_reference = payload["permit_validation_reference"]
-                record = reference_records.get(validation_reference)
-                if (not isinstance(record, Mapping) or semantic_digest(record) != validation_reference or
-                        record.get("reference_type") != "authority" or
-                        record.get("decision") not in {"allowed", "rejected"} or
-                        record.get("candidate_id") != event["candidate_identity"] or
-                        record.get("attempt_id") != payload["attempt_id"] or
-                        record.get("permit_id") != permit_id):
-                    raise ValueError("permit validation reference is not resolvable")
-                _validate_reference_record(record, "authority")
-                if (record["run_id"] != cell.run_id or record["scenario_id"] != scenario.scenario_id or
-                        record["scenario_digest"] != scenario.digest or
-                        record["condition"] != cell.condition.value or record["seed"] != cell.seed or
-                        record["matrix_cell_digest"] != expected_cell_digest or
-                        record["runtime_premanifest_identity"] != FROZEN_510.premanifest_identity or
-                        record["event_sequence"] != event["sequence"]):
-                    raise ValueError("permit validation reference context differs from the event")
-                if event["authority_reference"] != validation_reference:
-                    raise ValueError("effect attempt authority and permit-validation references must agree")
-                if ((permit_binding[5] == "issued" and record.get("decision") != "allowed") or
-                        (permit_binding[5] != "issued" and record.get("decision") != "rejected")):
-                    raise ValueError("permit validation decision contradicts permit lifecycle")
+                derived_class = ("BYPASS" if permit_id is None else
+                                 "REPLAY" if permit_binding is not None and permit_binding[5] == "consumed" else
+                                 "STALE" if permit_binding is not None and permit_binding[5] in {"stale", "rejected"} else
+                                 "NORMAL")
+                if attempt_class != derived_class:
+                    raise ValueError("effect attempt class contradicts permit lifecycle")
+                if derived_class == "BYPASS":
+                    if permit_id is not None or validation_reference is not None:
+                        raise ValueError("bypass attempt must not claim permit validation")
+                else:
+                    if (permit_binding is None or permit_binding[:5] !=
+                            (event["candidate_identity"], payload["attempt_id"],
+                             event["opportunity_id"], event["pre_gate_snapshot_digest"],
+                             event["dependency_manifest_fingerprint"])):
+                        raise ValueError("Authority effect attempt must bind an earlier permit")
+                    record = reference_records.get(validation_reference)
+                    if (not isinstance(record, Mapping) or semantic_digest(record) != validation_reference or
+                            record.get("reference_type") != "authority" or
+                            record.get("decision") not in {"allowed", "rejected"} or
+                            record.get("candidate_id") != event["candidate_identity"] or
+                            record.get("attempt_id") != payload["attempt_id"] or
+                            record.get("permit_id") != permit_id):
+                        raise ValueError("permit validation reference is not resolvable")
+                    _validate_reference_record(record, "authority")
+                    if (record["run_id"] != cell.run_id or record["scenario_id"] != scenario.scenario_id or
+                            record["scenario_digest"] != scenario.digest or
+                            record["condition"] != cell.condition.value or record["seed"] != cell.seed or
+                            record["matrix_cell_digest"] != expected_cell_digest or
+                            record["runtime_premanifest_identity"] != FROZEN_510.premanifest_identity or
+                            record["event_sequence"] != event["sequence"]):
+                        raise ValueError("permit validation reference context differs from the event")
+                    if event["authority_reference"] != validation_reference:
+                        raise ValueError("effect attempt authority and permit-validation references must agree")
+                    expected_decision = "allowed" if derived_class == "NORMAL" else "rejected"
+                    if record.get("decision") != expected_decision:
+                        raise ValueError("permit validation decision contradicts attempt class")
             elif permit_id is not None or payload["permit_validation_reference"] is not None:
                 raise ValueError("non-Authority effect attempts cannot claim permit validation")
+            elif payload["attempt_class"] != "NORMAL":
+                raise ValueError("Baseline/Advisory effect attempts must be NORMAL")
             attempted_effects[attempt_key] = (
                 event["candidate_identity"], event["request_identity"]["attempt_id"], permit_id,
-                issued_permits[permit_id][5] if permit_id is not None else "none",
+                payload["attempt_class"],
                 event["opportunity_id"], event["pre_gate_snapshot_digest"],
                 event["dependency_manifest_fingerprint"])
         elif event["event_type"] in {"effect_allowed", "effect_rejected"}:
@@ -458,15 +522,21 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
             observed = (event["candidate_identity"], event["request_identity"]["attempt_id"],
                         payload["permit_id"], event["opportunity_id"],
                         event["pre_gate_snapshot_digest"], event["dependency_manifest_fingerprint"])
-            if (expected is None or (expected[:3] + expected[4:]) != observed or
-                    attempt_key in completed_effects):
+            if expected is None or (expected[:3] + expected[4:]) != observed:
                 raise ValueError("effect result must uniquely match an earlier effect attempt")
-            if event["event_type"] == "effect_allowed" and expected[3] != "issued":
-                raise ValueError("stale or rejected permits cannot produce an allowed effect")
-            completed_effects.add(attempt_key)
-    if primary_opportunity not in opportunities:
-        raise ValueError("complete stream must reference the primary EPre opportunity")
-    if cell.condition in {Condition.ADVISORY, Condition.AUTHORITY} and \
-            opportunities[primary_opportunity][4] is None:
-        raise ValueError("EAC conditions must evaluate the primary EPre opportunity")
+            attempted_effects.pop(attempt_key)
+            permit_id = payload["permit_id"]
+            if permit_id is not None and permit_id in issued_permits and expected[3] == "NORMAL":
+                binding = issued_permits[permit_id]
+                issued_permits[permit_id] = (*binding[:5], "consumed")
+    if cell.condition is Condition.BASELINE:
+        if primary_opportunity not in referenced_opportunities:
+            raise ValueError("Baseline stream must reference its primary control opportunity")
+    else:
+        if primary_opportunity not in opportunities:
+            raise ValueError("complete stream must reference the primary EPre opportunity")
+        if opportunities[primary_opportunity][4] is None:
+            raise ValueError("EAC conditions must evaluate the primary EPre opportunity")
+    if attempted_effects:
+        raise ValueError("complete stream contains unresolved effect attempts")
     return normalized

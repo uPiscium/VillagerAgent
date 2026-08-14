@@ -3,10 +3,19 @@ from __future__ import annotations
 import hashlib, math
 from typing import Any, Mapping, Sequence
 
-from .equivalence import compare_paired_pre_gate, pre_gate_snapshot_digest
+from .equivalence import (baseline_snapshot_digest, compare_baseline_control,
+                          compare_paired_pre_gate, pre_gate_snapshot_digest)
 from .model import MatrixCell, Scenario
+from .metrics import AnalysisBundle, reduce_analysis_bundles
 
 PREREGISTERED_SEED = 51120260814
+_BINARY_COMPARISON_METRICS = frozenset({"task_success"})
+_COUNT_LATENCY_COMPARISON_METRICS = frozenset({
+    "task_goals", "completed_task_goals", "llm_calls", "tokens", "wall_clock_ms",
+    "eac_overhead_us", "permit_overhead_us", "total_actions", "rejected_actions",
+    "observation_actions", "clarification_actions", "communication_actions",
+    "recovery_actions",
+})
 
 def _finite(x: float) -> float:
     x = float(x)
@@ -85,34 +94,75 @@ def paired_latency_median_difference(left: Sequence[float], right: Sequence[floa
     return paired_count_difference([a for a, _ in pairs], [b for _, b in pairs])
 
 def compare_conditions(
-    observations: Mapping[str, Sequence[Mapping[str, Any]]], metric: str,
-    resamples: int = 10000, seed: int = PREREGISTERED_SEED,
-    *, paired_pre_gate: Sequence[tuple[MatrixCell, MatrixCell, Scenario,
-                                       Mapping[str, Any], Mapping[str, Any]]] | None = None,
+    bundles: Sequence[AnalysisBundle], metric: str,
+    *, paired_pre_gate: Sequence[tuple[MatrixCell, MatrixCell, MatrixCell, Scenario,
+                                       Mapping[str, Any], Mapping[str, Any],
+                                       Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
+    if metric not in _BINARY_COMPARISON_METRICS | _COUNT_LATENCY_COMPARISON_METRICS:
+        raise ValueError("metric is not registered in the frozen paired analysis plan")
     if paired_pre_gate is None:
         raise ValueError("paired analysis requires canonical pre-gate snapshots")
+    summaries = [summary.as_mapping() for summary in reduce_analysis_bundles(bundles)]
+    if any(summary["infrastructure_failure"] or summary["run_status"] != "COMPLETED"
+           for summary in summaries):
+        raise ValueError("paired analysis requires completed non-infrastructure runs")
+    observations = {condition: [summary for summary in summaries
+                                if summary["condition"] == condition]
+                    for condition in ("baseline", "advisory", "authority")}
+    if any(not rows for rows in observations.values()):
+        raise ValueError("paired analysis requires all three conditions")
+    bundle_index = {(bundle.cell.scenario_id, bundle.cell.seed,
+                     bundle.cell.condition.value): bundle for bundle in bundles}
+    if len(bundle_index) != len(bundles):
+        raise ValueError("analysis bundles must have unique condition-paired keys")
     expected_pairs = validate_paired_keys(observations["advisory"], observations["authority"])
     expected_keys = {(left["scenario_id"], left["seed"]) for left, unused in expected_pairs}
     observed_keys: set[tuple[str, int]] = set()
-    for advisory_cell, authority_cell, scenario, advisory_snapshot, authority_snapshot in paired_pre_gate:
+    baseline_rows = {(row["scenario_id"], row["seed"]): row
+                     for row in observations["baseline"]}
+    for (baseline_cell, advisory_cell, authority_cell, scenario, baseline_snapshot,
+         advisory_snapshot, authority_snapshot) in paired_pre_gate:
         compare_paired_pre_gate(advisory_cell, authority_cell, scenario,
                                 advisory_snapshot, authority_snapshot)
+        compare_baseline_control(baseline_cell, advisory_cell, scenario,
+                                 baseline_snapshot, advisory_snapshot)
+        compare_baseline_control(baseline_cell, authority_cell, scenario,
+                                 baseline_snapshot, authority_snapshot)
         key = (scenario.scenario_id, advisory_cell.seed)
         if key in observed_keys:
             raise ValueError("paired pre-gate contexts must be unique")
         observed_keys.add(key)
         pair = next((pair for pair in expected_pairs
                      if (pair[0]["scenario_id"], pair[0]["seed"]) == key), None)
-        if pair is None or pair[0].get("pre_gate_snapshot_digest") != pre_gate_snapshot_digest(advisory_snapshot) or \
-                pair[1].get("pre_gate_snapshot_digest") != pre_gate_snapshot_digest(authority_snapshot):
-            raise ValueError("analysis observations do not bind the supplied pre-gate snapshots")
+        bound = [bundle_index.get((*key, condition))
+                 for condition in ("baseline", "advisory", "authority")]
+        if pair is None or any(bundle is None for bundle in bound):
+            raise ValueError("analysis bundles do not cover the supplied paired context")
+        expected_digests = (baseline_snapshot_digest(baseline_snapshot),
+                            pre_gate_snapshot_digest(advisory_snapshot),
+                            pre_gate_snapshot_digest(authority_snapshot))
+        for digest, bundle in zip(expected_digests, bound):
+            primaries = [(candidate_digest, snapshot)
+                         for candidate_digest, snapshot in bundle.pre_gate_snapshots.items()
+                         if snapshot.get("opportunity_role") == "primary"]
+            if len(primaries) != 1 or primaries[0][0] != digest:
+                raise ValueError("analysis bundle does not uniquely bind its primary snapshot")
+        baseline_row = baseline_rows.get(key)
+        if baseline_row is None:
+            raise ValueError("Baseline bundle is absent from its paired context")
     if observed_keys != expected_keys:
         raise ValueError("paired pre-gate contexts must cover every Advisory/Authority unit")
     out = {}
     for name, a, b in (("baseline-vs-advisory", "baseline", "advisory"), ("advisory-vs-authority", "advisory", "authority"), ("baseline-vs-authority", "baseline", "authority")):
         pairs = validate_paired_keys(observations[a], observations[b])
-        out[name] = paired_bootstrap_ci([_finite(x[metric]) for x, _ in pairs], [_finite(y[metric]) for _, y in pairs], resamples=resamples, seed=seed)
+        left = [x[metric] for x, unused in pairs]
+        right = [y[metric] for unused, y in pairs]
+        if metric in _BINARY_COMPARISON_METRICS:
+            out[name] = paired_binary_risk_difference(left, right)
+        else:
+            out[name] = paired_bootstrap_ci(left, right, statistic="median",
+                                             resamples=10000, seed=PREREGISTERED_SEED)
     return out
 
 def benjamini_hochberg(p_values: Sequence[float], q: float = .05) -> list[dict[str, Any]]:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from benchmarks.common.eac.canonical import canonical_bytes
-from .protocol import PRE_GATE_EQUIVALENCE_FIELDS
+from .protocol import BASELINE_CONTROL_SNAPSHOT_FIELDS, PRE_GATE_EQUIVALENCE_FIELDS
 from .identity import FROZEN_510, semantic_digest
 from .matrix import paired_cell_equal, validate_matrix_cell
 from .model import Condition, MatrixCell, Scenario
@@ -144,6 +144,29 @@ def pre_gate_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
     return semantic_digest(_projection(snapshot))
 
 
+def _control_projection(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(snapshot, Mapping) or set(snapshot) != set(BASELINE_CONTROL_SNAPSHOT_FIELDS):
+        raise ValueError("Baseline control snapshot fields do not match the frozen contract")
+    projected = dict(snapshot)
+    _validate_request(projected["request"])
+    if type(projected["seed"]) is not int:
+        raise ValueError("Baseline snapshot seed must be an integer")
+    for field in ("scenario_digest", "initial_state_digest", "materialized_fixture_digest",
+                  "history_prefix_digest"):
+        _sha256(projected[field], field)
+    _validate_runtime_identity(projected["runtime_identity"])
+    if (not isinstance(projected["candidate"], str) or not projected["candidate"] or
+            not isinstance(projected["task"], str) or not projected["task"] or
+            not isinstance(projected["opportunity_id"], str) or not projected["opportunity_id"] or
+            projected["opportunity_role"] not in {"primary", "recovery"}):
+        raise ValueError("Baseline control opportunity identity is invalid")
+    return projected
+
+
+def baseline_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
+    return semantic_digest(_control_projection(snapshot))
+
+
 def validate_pre_gate_snapshot(cell: MatrixCell, scenario: Scenario,
                                snapshot: Mapping[str, Any]) -> None:
     validate_matrix_cell(cell, scenario)
@@ -165,6 +188,23 @@ def validate_pre_gate_snapshot(cell: MatrixCell, scenario: Scenario,
         raise ValueError("primary snapshot EPre differs from the frozen scenario")
 
 
+def validate_baseline_snapshot(cell: MatrixCell, scenario: Scenario,
+                               snapshot: Mapping[str, Any]) -> None:
+    validate_matrix_cell(cell, scenario)
+    if cell.condition is not Condition.BASELINE:
+        raise ValueError("Baseline control snapshots are Baseline-only")
+    projected = _control_projection(snapshot)
+    expected_runtime = {
+        "execution_revision": FROZEN_510.execution_revision,
+        "manifest_digest": FROZEN_510.runtime_manifest_digest,
+        "premanifest_identity": FROZEN_510.premanifest_identity,
+    }
+    if (projected["seed"] != cell.seed or projected["scenario_digest"] != scenario.digest or
+            projected["task"] != scenario.document["task_fixture_id"] or
+            projected["runtime_identity"] != expected_runtime):
+        raise ValueError("Baseline snapshot differs from its cell, scenario, or runtime")
+
+
 def compare_paired_pre_gate(advisory_cell: MatrixCell, authority_cell: MatrixCell,
                             scenario: Scenario, advisory_snapshot: Mapping[str, Any],
                             authority_snapshot: Mapping[str, Any]) -> GateComparison:
@@ -184,3 +224,26 @@ def compare_paired_pre_gate(advisory_cell: MatrixCell, authority_cell: MatrixCel
     if not comparison.equivalent:
         raise ValueError(f"paired pre-gate snapshots differ: {comparison.differences}")
     return comparison
+
+
+def compare_baseline_control(baseline_cell: MatrixCell, eac_cell: MatrixCell,
+                             scenario: Scenario, baseline_snapshot: Mapping[str, Any],
+                             eac_snapshot: Mapping[str, Any]) -> None:
+    """Require Baseline and an EAC condition to share every control input."""
+    validate_baseline_snapshot(baseline_cell, scenario, baseline_snapshot)
+    validate_pre_gate_snapshot(eac_cell, scenario, eac_snapshot)
+    if (baseline_snapshot["opportunity_role"] != "primary" or
+            eac_snapshot["opportunity_role"] != "primary"):
+        raise ValueError("Baseline comparison requires primary control snapshots")
+    if (eac_cell.condition not in {Condition.ADVISORY, Condition.AUTHORITY} or
+            baseline_cell.scenario_id != eac_cell.scenario_id or
+            baseline_cell.seed != eac_cell.seed):
+        raise ValueError("Baseline control comparison requires paired cells")
+    baseline_projection = _control_projection(baseline_snapshot)
+    eac_projection = {field: _projection(eac_snapshot)[field]
+                      for field in BASELINE_CONTROL_SNAPSHOT_FIELDS}
+    differences = tuple(field for field in BASELINE_CONTROL_SNAPSHOT_FIELDS
+                        if canonical_bytes(baseline_projection[field]) !=
+                        canonical_bytes(eac_projection[field]))
+    if differences:
+        raise ValueError(f"Baseline control snapshot differs: {differences}")

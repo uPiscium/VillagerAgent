@@ -4,8 +4,12 @@ import argparse
 from .fixtures import tier1_fixtures
 from .identity import verify_frozen_runtime_inputs
 from .matrix import expand_matrix
-from .protocol import (PROTOCOL_ID, freeze_design_artifacts, load_committed_protocol,
-                       load_committed_scenarios)
+from .artifacts import load_json_object
+from .protocol import (EVENT_SCHEMA_PATH, PROTOCOL_ID, SCENARIO_SCHEMA_PATH,
+                        event_schema_document, freeze_design_artifacts,
+                        load_committed_protocol, load_committed_scenarios,
+                        protocol_document, scenario_definitions,
+                        scenario_schema_document)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,8 +29,15 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(str(path) for path in freeze_design_artifacts()))
     else:
         verify_frozen_runtime_inputs()
-        load_committed_protocol()
+        if load_committed_protocol() != protocol_document():
+            raise ValueError("committed protocol differs from authoritative source")
         scenarios = load_committed_scenarios()
+        if tuple(scenario.document for scenario in scenarios) != scenario_definitions():
+            raise ValueError("committed scenarios differ from authoritative source")
+        if load_json_object(SCENARIO_SCHEMA_PATH) != scenario_schema_document():
+            raise ValueError("committed scenario schema differs from authoritative source")
+        if load_json_object(EVENT_SCHEMA_PATH) != event_schema_document():
+            raise ValueError("committed event schema differs from authoritative source")
         if len(expand_matrix(scenarios)) != 210:
             return 1
         print("design-valid")

@@ -9,7 +9,9 @@ import tarfile
 
 import pytest
 
-from benchmarks.eac511.equivalence import (compare_paired_pre_gate, compare_pre_gate,
+from benchmarks.eac511 import cli as eac_cli
+from benchmarks.eac511.equivalence import (baseline_snapshot_digest,
+                                           compare_paired_pre_gate, compare_pre_gate,
                                            pre_gate_snapshot_digest)
 from benchmarks.eac511.artifacts import load_json_object
 from benchmarks.eac511.events import normalize_event, validate_event_stream
@@ -18,9 +20,10 @@ from benchmarks.eac511.fixtures import _authority
 from benchmarks.eac511.identity import (FROZEN_510, detached_digest, semantic_digest, verify_detached,
                                         verify_frozen_runtime_inputs)
 from benchmarks.eac511.matrix import expand_matrix, matrix_cell_digest, paired_cell_equal
-from benchmarks.eac511.metrics import calculate_metrics
+from benchmarks.eac511.metrics import analysis_bundle, calculate_metrics, reduce_run
 from benchmarks.eac511.model import Condition, PerturbationFamily, SEEDS, Tier
-from benchmarks.eac511.oracle import sanitize_publication
+from benchmarks.eac511.oracle import (EvaluatorOracle, evaluator_record_digest,
+                                      label_rule_identity, sanitize_publication)
 from benchmarks.eac511.perturbations import apply_operator, perturbation_plan
 from benchmarks.eac511.protocol import (
     EVENT_PAYLOAD_REQUIRED, EVENT_SCHEMA_PATH, EVENT_TYPES, HYPOTHESES,
@@ -120,6 +123,9 @@ def test_p4_changes_only_evaluator_state_and_publication_is_recursive() -> None:
     scenario_public = sanitize_publication(scenario_definitions()[6])
     assert "independent_adequacy_oracle" not in scenario_public
     assert "truth_status" not in scenario_public
+    with pytest.raises(ValueError, match="expected label"):
+        EvaluatorOracle({}).evaluate({"outcome": True})
+    assert EvaluatorOracle({"expected": False}).evaluate({"outcome": True}) is False
 
 
 def test_perturbation_plan_is_complete_and_deterministic() -> None:
@@ -180,11 +186,25 @@ def _snapshot_registry(scenario=None) -> dict[str, dict[str, object]]:
     return {pre_gate_snapshot_digest(snapshot): snapshot}
 
 
-def _reference_records(sequence: int = 0) -> dict[str, dict[str, object]]:
+def _baseline_snapshot(scenario=None) -> dict[str, object]:
+    full = _pre_gate_snapshot(scenario)
+    fields = ("candidate", "task", "request", "seed", "scenario_digest",
+              "initial_state_digest", "materialized_fixture_digest", "runtime_identity",
+              "history_prefix_digest", "opportunity_id", "opportunity_role")
+    return {field: full[field] for field in fields}
+
+
+def _baseline_snapshot_registry(scenario=None) -> dict[str, dict[str, object]]:
+    snapshot = _baseline_snapshot(scenario)
+    return {baseline_snapshot_digest(snapshot): snapshot}
+
+
+def _reference_records(sequence: int = 0,
+                       condition: Condition = Condition.AUTHORITY) -> dict[str, dict[str, object]]:
     scenario = load_committed_scenarios()[0]
     cell = next(cell for cell in expand_matrix(load_committed_scenarios())
                 if cell.scenario_id == scenario.scenario_id and cell.seed == 11 and
-                cell.condition is Condition.AUTHORITY)
+                cell.condition is condition)
     context = {"run_id": cell.run_id, "scenario_id": scenario.scenario_id,
                "scenario_digest": scenario.digest, "condition": cell.condition.value,
                "seed": cell.seed, "matrix_cell_digest": matrix_cell_digest(cell),
@@ -199,14 +219,31 @@ def _reference_records(sequence: int = 0) -> dict[str, dict[str, object]]:
                                     ("allowed", "permit-v1"), ("rejected", "permit-v1"),
                                     ("passed", "permit-v1"))
     ]
-    records = authority + [{"reference_type": "evaluator",
-                            "artifact_identity": "evaluator-oracle-v1", **context}]
-    return {semantic_digest(record): record for record in records}
+    evaluator = {
+        "schema_version": "eac-evaluator-record/1", "record_digest": "0" * 64,
+        "protocol_identity": "eac-adversarial-benchmark/1", "protocol_version": 1,
+        "run_id": cell.run_id, "scenario_id": scenario.scenario_id,
+        "scenario_digest": scenario.digest, "condition": cell.condition.value,
+        "seed": cell.seed, "opportunity_id": "opportunity-v1", "logical_step": sequence,
+        "commitment_id": scenario.document["independent_adequacy_oracle"]["commitment_id"],
+        "label_rule_identity": label_rule_identity(scenario),
+        "justification_adequate": False, "proposition_true": False,
+        "blocking_conflict_expected": False, "supersession_expected": False,
+        "actor_scope_leakage_expected": False, "scope_isolation_applicable": True,
+        "invalidation_expectation": "NOT_APPLICABLE", "recovery_required": True,
+        "recorded_before_subject_outcome": True, "source_fixture_digest": "3" * 64,
+    }
+    evaluator["record_digest"] = evaluator_record_digest(evaluator)
+    records = authority
+    result = {semantic_digest(record): record for record in records}
+    result[evaluator["record_digest"]] = evaluator
+    return result
 
 
-def _stream_reference_records(last_sequence: int) -> dict[str, dict[str, object]]:
+def _stream_reference_records(last_sequence: int,
+                              condition: Condition = Condition.AUTHORITY) -> dict[str, dict[str, object]]:
     return {digest: record for sequence in range(last_sequence + 1)
-            for digest, record in _reference_records(sequence).items()}
+            for digest, record in _reference_records(sequence, condition).items()}
 
 
 def test_p2_expected_transitions_follow_frozen_support_policy() -> None:
@@ -232,17 +269,18 @@ def test_p2_expected_transitions_follow_frozen_support_policy() -> None:
     assert "non_defeated.conflict" in defeated.reasons
 
 
-def _event(index: int, event_type: str) -> dict[str, object]:
+def _event(index: int, event_type: str,
+           condition: Condition = Condition.AUTHORITY) -> dict[str, object]:
     scenario = load_committed_scenarios()[0]
     cell = next(cell for cell in expand_matrix(load_committed_scenarios())
                 if cell.scenario_id == scenario.scenario_id and cell.seed == 11 and
-                cell.condition is Condition.AUTHORITY)
+                cell.condition is condition)
     semantic = event_type in {
         "epre_opportunity", "eadm_evaluated", "permit_issued", "permit_staled",
         "permit_rejected", "envpre_checked", "effect_attempted", "effect_allowed",
         "effect_rejected",
     }
-    references = _reference_records(index)
+    references = _reference_records(index, condition)
     expected_decision = {
         "eadm_evaluated": "admissible", "permit_issued": "issued",
         "permit_staled": "stale", "permit_rejected": "rejected",
@@ -256,21 +294,33 @@ def _event(index: int, event_type: str) -> dict[str, object]:
     payload_values = {
         "operator_identity": "operator-v1", "injection_event_identity": "inject-v1",
         "visibility_effect": "actor-visible", "oracle_commitment_id": "oracle:v1",
-        "mutation_identity": "mutation-v1", "evidence_root_id": "root-v1",
+        "mutation_identity": "mutation-v1", "oracle_record_digest": "0" * 64,
+        "evidence_root_id": "root-v1",
         "root_type": "direct_observation", "actor_scope": "Alice",
+        "evidence_change": "EXPOSED",
         "opportunity_id": "opportunity-v1", "admissible": True,
         "witness_ids": ["witness-v1"], "reason_codes": [],
+        "witness_grounded": True, "actor_scope_leakage_detected": False,
         "dependency_manifest_fingerprint": "c" * 64, "permit_id": "permit-v1",
         "reason": "stale", "rejection_stage": "validation",
         "envpre_identity": "envpre-v1", "result": True,
         "attempt_id": "attempt-v1", "outcome": "succeeded",
+        "attempt_class": "NORMAL",
         "permit_validation_reference": permit_reference,
         "recovery_class": "REPLAN", "run_status": "COMPLETED",
+        "task_success": True, "task_goals": 1, "completed_task_goals": 1,
+        "llm_calls": 2, "tokens": 20, "wall_clock_ms": 100,
+        "eac_overhead_us": 10, "permit_overhead_us": 5,
     }
     payload = {field: payload_values[field] for field in EVENT_PAYLOAD_REQUIRED[event_type]}
     is_oracle = event_type == "oracle_state_changed"
-    condition = "authority"
-    return {
+    if is_oracle:
+        evaluator_digest = next(digest for digest, record in references.items()
+                                if record.get("schema_version") == "eac-evaluator-record/1")
+        payload["oracle_record_digest"] = evaluator_digest
+        payload["oracle_commitment_id"] = scenario.document[
+            "independent_adequacy_oracle"]["commitment_id"]
+    event = {
         "schema_version": 1,
         "event_id": f"event-{index}",
         "run_id": cell.run_id,
@@ -283,7 +333,7 @@ def _event(index: int, event_type: str) -> dict[str, object]:
         "emission_status": "RECORDED",
         "protocol_identity": "eac-adversarial-benchmark/1",
         "protocol_version": 1,
-        "condition": condition,
+        "condition": condition.value,
         "seed": 11,
         "actor_id": "Alice" if event_type not in {"perturbation_scheduled",
                                                      "oracle_state_changed", "run_terminal"} else None,
@@ -303,16 +353,33 @@ def _event(index: int, event_type: str) -> dict[str, object]:
         "sequence": index,
         "authority_reference": (authority_reference if semantic and
                                 event_type != "epre_opportunity" else None),
-        "evaluator_reference": (next(digest for digest, record in _reference_records().items()
-                                     if record["reference_type"] == "evaluator") if is_oracle else None),
+        "evaluator_reference": (next(digest for digest, record in references.items()
+                                     if record.get("schema_version") == "eac-evaluator-record/1")
+                                if is_oracle else None),
         "scenario_digest": scenario.digest,
         "matrix_cell_digest": matrix_cell_digest(cell),
-        "pre_gate_snapshot_digest": pre_gate_snapshot_digest(_pre_gate_snapshot(scenario)),
+        "pre_gate_snapshot_digest": (baseline_snapshot_digest(_baseline_snapshot(scenario))
+                                     if condition is Condition.BASELINE else
+                                     pre_gate_snapshot_digest(_pre_gate_snapshot(scenario))),
         "runtime_premanifest_identity": FROZEN_510.premanifest_identity,
         "action_digest": "b" * 64 if semantic else None,
         "dependency_manifest_fingerprint": "c" * 64 if semantic else None,
-        "opportunity_id": "opportunity-v1" if semantic else None,
+        "opportunity_id": ("opportunity-v1" if semantic or is_oracle or event_type in {
+            "actor_visible_evidence_exposed", "recovery_action"} else None),
     }
+    if condition is Condition.BASELINE and semantic:
+        for field in ("epre_identity", "epre_version", "support_policy", "source_profile",
+                      "dependency_manifest_fingerprint", "authority_reference"):
+            event[field] = None
+        if event_type.startswith("effect_"):
+            event["payload"]["permit_id"] = None
+            if event_type == "effect_attempted":
+                event["payload"]["permit_validation_reference"] = None
+    elif condition is Condition.ADVISORY and event_type.startswith("effect_"):
+        event["payload"]["permit_id"] = None
+        if event_type == "effect_attempted":
+            event["payload"]["permit_validation_reference"] = None
+    return event
 
 
 def test_event_contract_requires_identity_visibility_and_order() -> None:
@@ -366,6 +433,25 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
     baseline_eadm["condition"] = "baseline"
     with pytest.raises(ValueError, match="synthetic EAdm"):
         normalize_event(baseline_eadm)
+    baseline_epre = _event(0, "epre_opportunity")
+    baseline_epre["condition"] = "baseline"
+    with pytest.raises(ValueError, match="does not emit EAC"):
+        normalize_event(baseline_epre)
+    baseline_cell = next(cell for cell in expand_matrix(load_committed_scenarios())
+                         if cell.scenario_id == scenario.scenario_id and cell.seed == 11 and
+                         cell.condition is Condition.BASELINE)
+    baseline_stream = [_event(0, "oracle_state_changed", Condition.BASELINE),
+                       _event(1, "effect_attempted", Condition.BASELINE),
+                       _event(2, "effect_allowed", Condition.BASELINE),
+                       _event(3, "run_terminal", Condition.BASELINE)]
+    validated_baseline = validate_event_stream(
+        baseline_stream, cell=baseline_cell, scenario=scenario,
+        pre_gate_snapshots=_baseline_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(3, Condition.BASELINE))
+    assert len(validated_baseline) == 4
+    baseline_snapshot = next(iter(_baseline_snapshot_registry(scenario).values()))
+    assert not {"epre", "policy", "source_profile", "witness", "eadm",
+                "dependency_manifest"}.intersection(baseline_snapshot)
     wrong_snapshot = [_event(0, EVENT_TYPES[0]), _event(1, EVENT_TYPES[1]),
                       _event(2, "epre_opportunity"), _event(3, "eadm_evaluated"),
                       _event(4, "run_terminal")]
@@ -387,6 +473,11 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
         authority_lifecycle, cell=cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
         reference_records=_stream_reference_records(5))) == 6
+    unresolved = authority_lifecycle[:4] + [_event(4, "run_terminal")]
+    with pytest.raises(ValueError, match="unresolved effect attempts"):
+        validate_event_stream(unresolved, cell=cell, scenario=scenario,
+                              pre_gate_snapshots=_snapshot_registry(scenario),
+                              reference_records=_stream_reference_records(4))
     contradictory = [_event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
                      _event(2, "permit_issued"), _event(3, "effect_attempted"),
                      _event(4, "effect_allowed"), _event(5, "effect_rejected"),
@@ -431,6 +522,7 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
                        _event(4, "effect_attempted"), _event(5, "effect_rejected"),
                        _event(6, "run_terminal")]
     stale_references = _stream_reference_records(6)
+    stale_lifecycle[4]["payload"]["attempt_class"] = "STALE"
     for index in (4, 5):
         rejected_digest = next(digest for digest, record in _reference_records(index).items()
                                if record.get("decision") == "rejected")
@@ -443,10 +535,10 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
         reference_records=stale_references)) == 7
     stale_allowed = list(stale_lifecycle)
     stale_allowed[5] = _event(5, "effect_allowed")
-    with pytest.raises(ValueError, match="cannot produce an allowed effect"):
-        validate_event_stream(stale_allowed, cell=cell, scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=stale_references)
+    assert len(validate_event_stream(
+        stale_allowed, cell=cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=stale_references)) == 7
 
 
 def test_advisory_authority_equivalence_stops_at_gate() -> None:
@@ -478,80 +570,115 @@ def test_advisory_authority_equivalence_stops_at_gate() -> None:
 
 
 def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
-    rows = [
-        {"event_id": "a", "run_id": "run-a", "scenario_id": "P4", "condition": "advisory",
-         "seed": 11, "event_type": "eadm_evaluated", "payload": {"admissible": True},
-         "effect_executed": False, "task_success": False,
-         "perturbed": True, "recovered": False, "provenance": {"trace": "a"}},
-        {"event_id": "b", "run_id": "run-b", "scenario_id": "P8", "condition": "authority",
-         "seed": 11, "event_type": "eadm_evaluated", "payload": {"admissible": False},
-         "permit_accepted": False, "task_success": False,
-         "perturbed": True, "recovered": False, "provenance": {"trace": "b"}},
-        {"event_id": "c", "run_id": "run-c", "scenario_id": "P1", "condition": "baseline",
-         "seed": 11, "event_type": "effect_attempted",
-         "attempted": True, "effected": True, "task_success": True,
-         "perturbed": True, "recovered": True, "provenance": {"trace": "c"}},
+    scenario = load_committed_scenarios()[0]
+    cells = expand_matrix(load_committed_scenarios())
+    authority_cell = next(cell for cell in cells if cell.scenario_id == scenario.scenario_id and
+                          cell.seed == 11 and cell.condition is Condition.AUTHORITY)
+    baseline_cell = next(cell for cell in cells if cell.scenario_id == scenario.scenario_id and
+                         cell.seed == 11 and cell.condition is Condition.BASELINE)
+    authority_events = [
+        _event(0, "oracle_state_changed"), _event(1, "epre_opportunity"),
+        _event(2, "eadm_evaluated"), _event(3, "permit_issued"),
+        _event(4, "effect_attempted"), _event(5, "effect_allowed"),
+        _event(6, "run_terminal"),
     ]
-    oracle = [
-        {"record_id": "a", "run_id": "run-a", "scenario_id": "P4",
-         "condition": "advisory", "seed": 11, "admissible": False,
-         "non_admissible_attempt": True,
-         "provenance": {"fixture": "hidden-change"}},
-        {"record_id": "b", "run_id": "run-b", "scenario_id": "P8",
-         "condition": "authority", "seed": 11, "admissible": True,
-         "stale_permit_attempt": True,
-         "provenance": {"fixture": "stale"}},
-        {"record_id": "c", "run_id": "run-c", "scenario_id": "P1",
-         "condition": "baseline", "seed": 11, "supported": False,
-         "provenance": {"fixture": "baseline-unsupported"}},
+    authority_summary = reduce_run(
+        authority_events, cell=authority_cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(6))
+    baseline_events = [
+        _event(0, "oracle_state_changed", Condition.BASELINE),
+        _event(1, "effect_attempted", Condition.BASELINE),
+        _event(2, "effect_allowed", Condition.BASELINE),
+        _event(3, "run_terminal", Condition.BASELINE),
     ]
-    metrics = calculate_metrics(rows, oracle)
-    assert metrics["runtime_integrity"]["BAER"] == {"numerator": 0, "denominator": 1, "rate": 0.0}
-    assert metrics["runtime_integrity"]["SPER"] == {"numerator": 0, "denominator": 1, "rate": 0.0}
+    baseline_summary = reduce_run(
+        baseline_events, cell=baseline_cell, scenario=scenario,
+        pre_gate_snapshots=_baseline_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(3, Condition.BASELINE))
+    assert authority_summary == reduce_run(
+        authority_events, cell=authority_cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(6))
+    authority_bundle = analysis_bundle(
+        authority_events, cell=authority_cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(6))
+    baseline_bundle = analysis_bundle(
+        baseline_events, cell=baseline_cell, scenario=scenario,
+        pre_gate_snapshots=_baseline_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(3, Condition.BASELINE))
+    metrics = calculate_metrics([authority_bundle, baseline_bundle])
     assert metrics["epistemic_adequacy"]["false_positive_admissibility_rate"] == {
-        "numerator": 1, "denominator": 2, "rate": 0.5}
-    assert metrics["epistemic_adequacy"]["oracle_negative_conditional_false_positive_rate"] == {
         "numerator": 1, "denominator": 1, "rate": 1.0}
-    assert metrics["epistemic_adequacy"]["eadm_denominator"] == 2
-    assert metrics["oracle_unsupported"]["attempt"] == {"numerator": 1, "denominator": 1, "rate": 1.0}
-    with pytest.raises(ValueError, match="unique"):
-        calculate_metrics(rows, [oracle[0], oracle[0]])
-    missing_label = [dict(item) for item in oracle]
-    missing_label[0].pop("admissible")
-    with pytest.raises(ValueError, match="independent adequacy label"):
-        calculate_metrics(rows, missing_label)
+    assert metrics["epistemic_adequacy"]["eadm_denominator"] == 1
+    assert metrics["oracle_unsupported"]["attempt"] == {
+        "numerator": 1, "denominator": 1, "rate": 1.0}
+    assert metrics["oracle_unsupported"]["effect"] == {
+        "numerator": 1, "denominator": 1, "rate": 1.0}
+    assert metrics["task_utility"]["success"] == {
+        "numerator": 2, "denominator": 2, "rate": 1.0}
+    mutated = {**authority_summary.as_mapping(), "effect_executed": True}
+    with pytest.raises(TypeError, match="AnalysisBundle"):
+        calculate_metrics([mutated])
+    exported = authority_summary.as_mapping()
+    exported["opportunities"][0]["effect_allowed"] = False
+    assert authority_summary.as_mapping()["opportunities"][0]["effect_allowed"] is True
+    authority_bundle.events[0]["payload"]["phase"] = "tampered"
+    with pytest.raises(ValueError, match="Bundle digest"):
+        calculate_metrics([authority_bundle])
 
-    infrastructure_row = [
-        {"event_id": "infra-eadm", "run_id": "run-infra", "scenario_id": "P1",
-         "condition": "authority", "seed": 11, "event_type": "eadm_evaluated",
-         "payload": {"admissible": True}},
-        {"event_id": "infra-terminal", "run_id": "run-infra", "scenario_id": "P1",
-         "condition": "authority", "seed": 11, "event_type": "run_terminal",
-         "payload": {"run_status": "INFRASTRUCTURE_FAILURE"}},
+    replay_events = [
+        _event(0, "oracle_state_changed"), _event(1, "epre_opportunity"),
+        _event(2, "eadm_evaluated"), _event(3, "permit_issued"),
+        _event(4, "effect_attempted"), _event(5, "effect_allowed"),
+        _event(6, "effect_attempted"), _event(7, "effect_rejected"),
+        _event(8, "run_terminal"),
     ]
-    infrastructure_oracle = [
-        {"record_id": "infra-eadm", "run_id": "run-infra", "scenario_id": "P1",
-         "condition": "authority", "seed": 11, "admissible": False},
-        {"record_id": "infra-terminal", "run_id": "run-infra", "scenario_id": "P1",
-         "condition": "authority", "seed": 11},
+    replay_events[6]["payload"]["attempt_class"] = "REPLAY"
+    rejected_digest = next(digest for digest, record in _reference_records(6).items()
+                           if record.get("decision") == "rejected")
+    replay_events[6]["authority_reference"] = rejected_digest
+    replay_events[6]["payload"]["permit_validation_reference"] = rejected_digest
+    replay_summary = reduce_run(
+        replay_events, cell=authority_cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(8))
+    assert replay_summary.as_mapping()["opportunities"][0]["replay_attempt"] is True
+    assert replay_summary.as_mapping()["opportunities"][0]["replay_escape"] is False
+    tampered_references = _stream_reference_records(6)
+    oracle_digest = authority_events[0]["evaluator_reference"]
+    tampered_references[oracle_digest] = {
+        **tampered_references[oracle_digest], "justification_adequate": True}
+    with pytest.raises(ValueError, match="digest mismatch"):
+        reduce_run(authority_events, cell=authority_cell, scenario=scenario,
+                   pre_gate_snapshots=_snapshot_registry(scenario),
+                   reference_records=tampered_references)
+    late_oracle_events = [
+        _event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
+        _event(2, "permit_issued"), _event(3, "effect_attempted"),
+        _event(4, "effect_allowed"), _event(5, "oracle_state_changed"),
+        _event(6, "run_terminal"),
     ]
-    assert calculate_metrics(infrastructure_row, infrastructure_oracle)[
-        "epistemic_adequacy"]["eadm_denominator"] == 0
-
-    repeated_ids = [
-        {"event_id": "same", "run_id": "run-1", "scenario_id": "P1",
-         "condition": "baseline", "seed": 11, "event_type": "effect_attempted"},
-        {"event_id": "same", "run_id": "run-2", "scenario_id": "P1",
-         "condition": "baseline", "seed": 23, "event_type": "effect_attempted"},
-    ]
-    repeated_oracle = [
-        {"record_id": "same", "run_id": "run-1", "scenario_id": "P1",
-         "condition": "baseline", "seed": 11, "supported": True},
-        {"record_id": "same", "run_id": "run-2", "scenario_id": "P1",
-         "condition": "baseline", "seed": 23, "supported": True},
-    ]
-    assert calculate_metrics(repeated_ids, repeated_oracle)[
-        "epistemic_adequacy"]["eadm_denominator"] == 0
+    with pytest.raises(ValueError, match="precede"):
+        reduce_run(late_oracle_events, cell=authority_cell, scenario=scenario,
+                   pre_gate_snapshots=_snapshot_registry(scenario),
+                   reference_records=_stream_reference_records(6))
+    fixture_mismatch_events = [dict(event) for event in authority_events]
+    fixture_mismatch_events[0] = {**fixture_mismatch_events[0],
+                                  "payload": dict(fixture_mismatch_events[0]["payload"])}
+    mismatch_references = _stream_reference_records(6)
+    original_oracle = mismatch_references[authority_events[0]["evaluator_reference"]]
+    mismatch_oracle = {**original_oracle, "source_fixture_digest": "8" * 64,
+                       "record_digest": "0" * 64}
+    mismatch_oracle["record_digest"] = evaluator_record_digest(mismatch_oracle)
+    mismatch_references[mismatch_oracle["record_digest"]] = mismatch_oracle
+    fixture_mismatch_events[0]["evaluator_reference"] = mismatch_oracle["record_digest"]
+    fixture_mismatch_events[0]["payload"]["oracle_record_digest"] = mismatch_oracle["record_digest"]
+    with pytest.raises(ValueError, match="different materialized fixture"):
+        reduce_run(fixture_mismatch_events, cell=authority_cell, scenario=scenario,
+                   pre_gate_snapshots=_snapshot_registry(scenario),
+                   reference_records=mismatch_references)
 
 
 def test_statistics_are_deterministic_and_preregistered() -> None:
@@ -567,18 +694,65 @@ def test_statistics_are_deterministic_and_preregistered() -> None:
     cells = expand_matrix(load_committed_scenarios())
     selected = {cell.condition.value: cell for cell in cells
                 if cell.scenario_id == scenario.scenario_id and cell.seed == 11}
-    snapshot_digest = pre_gate_snapshot_digest(_pre_gate_snapshot(scenario))
-    observations = {condition: [{"scenario_id": scenario.scenario_id, "seed": 11,
-                                 "score": value, "pre_gate_snapshot_digest": snapshot_digest}]
-                    for condition, value in (("baseline", 0), ("advisory", 1),
-                                             ("authority", 2))}
+    event_sets = {
+        "baseline": [_event(0, "oracle_state_changed", Condition.BASELINE),
+                     _event(1, "effect_attempted", Condition.BASELINE),
+                     _event(2, "effect_allowed", Condition.BASELINE),
+                     _event(3, "run_terminal", Condition.BASELINE)],
+        "advisory": [_event(0, "oracle_state_changed", Condition.ADVISORY),
+                     _event(1, "epre_opportunity", Condition.ADVISORY),
+                     _event(2, "eadm_evaluated", Condition.ADVISORY),
+                     _event(3, "effect_attempted", Condition.ADVISORY),
+                     _event(4, "effect_allowed", Condition.ADVISORY),
+                     _event(5, "run_terminal", Condition.ADVISORY)],
+        "authority": [_event(0, "oracle_state_changed"), _event(1, "epre_opportunity"),
+                      _event(2, "eadm_evaluated"), _event(3, "permit_issued"),
+                      _event(4, "effect_attempted"), _event(5, "effect_allowed"),
+                      _event(6, "run_terminal")],
+    }
+    bundles = []
+    for condition, value in (("baseline", 0), ("advisory", 1), ("authority", 2)):
+        events = event_sets[condition]
+        events[-1]["payload"]["llm_calls"] = value
+        cell = selected[condition]
+        bundles.append(analysis_bundle(
+            events, cell=cell, scenario=scenario,
+            pre_gate_snapshots=(_baseline_snapshot_registry(scenario)
+                                if condition == "baseline" else _snapshot_registry(scenario)),
+            reference_records=_stream_reference_records(
+                len(events) - 1, Condition(condition))))
     with pytest.raises(ValueError, match="pre-gate snapshots"):
-        compare_conditions(observations, "score", resamples=100)
+        compare_conditions(bundles, "llm_calls")
     comparisons = compare_conditions(
-        observations, "score", resamples=100,
-        paired_pre_gate=[(selected["advisory"], selected["authority"], scenario,
+        bundles, "llm_calls",
+        paired_pre_gate=[(selected["baseline"], selected["advisory"],
+                          selected["authority"], scenario, _baseline_snapshot(scenario),
                           _pre_gate_snapshot(scenario), _pre_gate_snapshot(scenario))])
     assert comparisons["advisory-vs-authority"]["estimate"] == 1.0
+    changed_baseline = {**_baseline_snapshot(scenario), "initial_state_digest": "9" * 64}
+    with pytest.raises(ValueError, match="Baseline control snapshot differs"):
+        compare_conditions(
+            bundles, "llm_calls",
+            paired_pre_gate=[(selected["baseline"], selected["advisory"],
+                              selected["authority"], scenario, changed_baseline,
+                              _pre_gate_snapshot(scenario), _pre_gate_snapshot(scenario))])
+    recovery_baseline = {**_baseline_snapshot(scenario), "opportunity_id": "recovery-v1",
+                         "opportunity_role": "recovery"}
+    with pytest.raises(ValueError, match="primary control snapshots"):
+        compare_conditions(
+            bundles, "llm_calls",
+            paired_pre_gate=[(selected["baseline"], selected["advisory"],
+                              selected["authority"], scenario, recovery_baseline,
+                              _pre_gate_snapshot(scenario), _pre_gate_snapshot(scenario))])
+
+
+def test_validate_cli_checks_committed_artifacts_against_source(monkeypatch, capsys) -> None:
+    assert eac_cli.main(["validate"]) == 0
+    assert capsys.readouterr().out.strip() == "design-valid"
+    monkeypatch.setattr(eac_cli, "load_committed_protocol",
+                        lambda: {**eac_cli.protocol_document(), "planned_primary_runs": {"total": 1}})
+    with pytest.raises(ValueError, match="authoritative source"):
+        eac_cli.main(["validate"])
 
 
 def test_real_tier1_controls_all_pass_and_are_deterministic() -> None:
