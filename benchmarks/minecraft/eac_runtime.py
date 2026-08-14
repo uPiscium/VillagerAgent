@@ -22,7 +22,7 @@ from benchmarks.common.eac import (
 )
 from benchmarks.common.eac.model import NativeEffectResult
 from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
-from env.eac_observation_adapter import sanitized_scan_rows
+from env.eac_observation_adapter import sanitized_scan_rows, sanitized_visible_blocks
 from benchmarks.common.eac.authority import _plain as _authority_plain
 from env.runtime_paths import atomic_write_json
 
@@ -153,7 +153,9 @@ class MinecraftEACRuntime:
         self._lock = RLock()
         self._records = deque(maxlen=256)
         self._evidence_total = 0
-        self._current_roots: dict[tuple[str, PropositionKey, bool], str] = {}
+        self._current_roots: dict[tuple[str, PropositionKey], str] = {}
+        self._fluent_revision = 0
+        self._initial_state_ingested: set[str] = set()
         self._last_permit: dict[str, Any] = {}
         self._audit_path = Path(audit_path) if audit_path is not None else None
         self._persist_audit()
@@ -357,9 +359,10 @@ class MinecraftEACRuntime:
         root = self.authority.ingest_record(
             record, proposition=proposition, root_id=rid, revision=revision,
             provenance_id=provenance_id, supersedes=supersedes)
-        self._records.append({"root_id": rid, "record_type": record_type,
+        evidence_kind = payload.get("evidence_kind") if isinstance(payload, Mapping) else None
+        self._records.append({"root_id": rid, "record_type": evidence_kind or record_type,
+                              "authority_record_type": record_type,
                               "actor_id": actor_id, "source": source})
-        self._current_roots[(actor_id, proposition.key, proposition.polarity)] = rid
         self._evidence_total += 1
         self._persist_audit()
         return root
@@ -368,9 +371,37 @@ class MinecraftEACRuntime:
                                   arguments: Mapping[str, Any], *, revision: int | str = 1):
         classification = self.classification_for(action_name)
         proposition = self._proposition(classification, arguments)
-        return self.ingest_actor_record(
-            actor_id=actor_id, proposition=proposition, record_type="direct_observation",
-            source="minecraft-visible-observation", revision=revision)
+        return self._ingest_current_fluent(actor_id, proposition,
+                                           source="minecraft-visible-observation")
+
+    def _ingest_current_fluent(self, actor_id: str, proposition: Proposition, *, source: str,
+                               evidence_kind: str = "direct_observation", payload=None):
+        with self._lock:
+            slot = (actor_id, proposition.key)
+            self._fluent_revision += 1
+            previous = self._current_roots.get(slot)
+            root = self.ingest_actor_record(
+                actor_id=actor_id, proposition=proposition, record_type="direct_observation",
+                source=source, payload={"evidence_kind": evidence_kind, **(payload or {})},
+                revision=self._fluent_revision, supersedes=(previous,) if previous else (),
+            )
+            self._current_roots[slot] = root.root_id
+            return root
+
+    def ingest_initial_actor_state(self, actor_id: str, state: Mapping[str, Any]):
+        with self._lock:
+            if actor_id in self._initial_state_ingested:
+                return ()
+            roots = []
+            for block_name, coordinates in sanitized_visible_blocks(state):
+                proposition = Proposition(PropositionKey(
+                    "minecraft", "target_block_present", coordinates, "current"))
+                roots.append(self._ingest_current_fluent(
+                    actor_id, proposition, source="minecraft-initial-visible-state",
+                    evidence_kind="initial_visible_block", payload={"block_name": block_name},
+                ))
+            self._initial_state_ingested.add(actor_id)
+            return tuple(roots)
 
     def ingest_peer_report(self, actor_id: str, proposition: Proposition, sender: str):
         return self.ingest_actor_record(
@@ -380,11 +411,10 @@ class MinecraftEACRuntime:
     def _ingest_visible_outcome(self, actor_id, tool_name, proposition, result) -> None:
         if tool_name != "MineBlock":
             return
-        self.ingest_actor_record(
-            actor_id=actor_id, proposition=replace(proposition, polarity=False),
-            record_type="visible_action_outcome", source="minecraft-action:MineBlock",
-            payload={"status": result.get("status") if isinstance(result, Mapping) else None},
-            revision=self._sequence + 1)
+        self._ingest_current_fluent(
+            actor_id, replace(proposition, polarity=False), source="minecraft-action:MineBlock",
+            evidence_kind="visible_action_outcome",
+            payload={"status": result.get("status") if isinstance(result, Mapping) else None})
 
     def _ingest_result_evidence(self, actor_id: str, tool_name: str, result: Any,
                                 request_arguments: Mapping[str, Any] | None = None) -> None:

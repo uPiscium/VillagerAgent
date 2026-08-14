@@ -49,7 +49,7 @@ def test_frozen_minecraft_artifacts_authenticate_and_include_dual_class_fixture(
     mine_class = next(item for item in classification["actions"] if item["action_identity"] == "MineBlock")
     assert mine_class["epre"] is True and mine_class["env_pre"] is True
     assert classification["detached_artifact_sha256"] == "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001"
-    assert source_profile["detached_profile_sha256"] == "2bd2269879b76b0f8540779db26715d738b627eb058f4004dbd44fd5b224a988"
+    assert source_profile["detached_profile_sha256"] == "e0b238e85d064fcb43a7666329994e6e6722cd7d0350f901de83a075dc5911ad"
 
 
 def test_direct_observation_allows_authority_effect_and_visible_outcome_is_ingested():
@@ -68,6 +68,61 @@ def test_direct_observation_allows_authority_effect_and_visible_outcome_is_inges
         subject.prepare_tool("MineBlock", mine, (), {
             "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
         })
+
+
+def test_initial_visible_state_grounds_mine_and_current_fluent_recovers():
+    subject = runtime()
+    state = {"status": True, "message": {"my_name": "Mallory", "blocks": [
+        {"name": "stone", "position": [1, 2, 3]},
+    ]}}
+    roots = subject.ingest_initial_actor_state("Alice", state)
+    assert len(roots) == 1
+    first = subject.prepare_tool("MineBlock", lambda **kwargs: {"status": True}, (), {
+        "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+    })
+    subject.execute_prepared(first)
+    positive = roots[0]
+    assert subject.authority._roots[positive.root_id].current is False
+    with pytest.raises(MinecraftEACError, match="not_admissible"):
+        subject.prepare_tool("MineBlock", mine, (), {
+            "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+        })
+    negative = subject.authority._roots[subject._current_roots[("Alice", positive.proposition.key)]]
+    replacement = subject.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    assert subject.authority._roots[negative.root_id].current is False
+    assert replacement.current is True
+    assert subject.prepare_tool("MineBlock", mine, (), {
+        "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+    }).permit is not None
+
+
+def test_initial_state_ingestion_is_actor_bound_and_one_shot():
+    subject = runtime()
+    state = {"status": True, "message": {"my_name": "Bob", "blocks": [
+        {"name": "stone", "position": [1, 2, 3]},
+    ]}}
+    assert len(subject.ingest_initial_actor_state("Alice", state)) == 1
+    assert subject.ingest_initial_actor_state("Alice", state) == ()
+    with pytest.raises(MinecraftEACError, match="not_admissible"):
+        subject.prepare_tool("MineBlock", mine, (), {
+            "player_name": "Bob", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+        })
+
+
+def test_villagerbench_real_initial_state_is_same_source_for_model_and_authority():
+    environment = VillagerBench(env_type.none, 0, False, _virtual_debug=True)
+    subject = runtime()
+    environment.configure_eac_runtime(subject)
+    environment.running = True
+    environment.agent_pool = [type("VisibleAgent", (), {"name": "Alice"})()]
+    state = {"status": True, "message": {"blocks": [
+        {"name": "stone", "position": [1, 2, 3]},
+    ]}}
+    environment.agent_status = lambda unused: state
+    assert environment.get_init_state() == [state]
+    assert subject.prepare_tool("MineBlock", mine, (), {
+        "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+    }).permit is not None
 
 
 def test_missing_epre_witness_rejects_even_when_envpre_is_true_with_zero_effect():

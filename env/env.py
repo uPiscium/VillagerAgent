@@ -214,7 +214,11 @@ class VillagerBench:
         if not self.running and not self._virtual_debug:
             raise RuntimeError("Environment is not running; call '.launch()' first")
         if self.running:
-            return [self.agent_status(agent.name) for agent in self.agent_pool]
+            states = [self.agent_status(agent.name) for agent in self.agent_pool]
+            if self._eac_runtime is not None:
+                for agent, state in zip(self.agent_pool, states):
+                    self._eac_runtime.ingest_initial_actor_state(agent.name, state)
+            return states
         else:
             return [VillagerBench.virtual_env(agent.name) for agent in self.agent_pool]
 

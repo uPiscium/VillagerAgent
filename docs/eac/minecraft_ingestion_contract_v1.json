@@ -1,7 +1,7 @@
 {
   "artifact_id": "minecraft-eac-ingestion-contract",
   "artifact_version": 1,
-  "detached_artifact_sha256": "49ddd5ad00bb66869504fcd9107dce47395a0332d47be917c298e966a9bd9b5a",
+  "detached_artifact_sha256": "e7dd6e334f99737cc7dcb2be21bcf526f083eae80504d91d2be7631f127f8d99",
   "issuer_authentication": {
     "rule_id": "minecraft-runtime-event-authentication",
     "issuer": "minecraft-eac-adapter",
@@ -12,10 +12,10 @@
   "trusted_observation_adapter": {
     "tool_identity": "minecraft-observation-adapter",
     "tool_version": "1",
-    "accepted_native_source": "successful scanNearbyEntities bridge response",
-    "sanitization": "at most 128 mapping rows; names normalized; positions copied from visible response",
+    "accepted_native_source": "successful scanNearbyEntities bridge response or actor-visible get_init_state block snapshot",
+    "sanitization": "at most 128 mapping rows; names normalized; finite positions copied from the same visible response returned to the actor model",
     "implementation_path": "env/eac_observation_adapter.py",
-    "implementation_sha256": "1653bebccd523464da7c74ae68e1abcc589ffbbd4271cbff5b70c0c3fd9f9376",
+    "implementation_sha256": "b2f1f5415036957f206f2d76235f66e0d7401f01eee7324d59aa302ea97b934d",
     "forbidden_origins": ["evaluator", "oracle", "meta_judger", "score", "simulator_truth"]
   },
   "rule_evaluation": {
