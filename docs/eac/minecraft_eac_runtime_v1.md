@@ -37,9 +37,9 @@ capabilities; this is not an OS or hostile-plugin sandbox.
 The non-judged execution fixture is
 `docs/eac/minecraft_eac_nonjudged_fixture_v1.json`. It binds the independently
 verifiable `docs/eac/minecraft_eac_premanifest_v1.json` and immutable Git
-revision `cdbac92c37aa8672480a3cb58ee4150363da5108`. The premanifest was generated
+revision `09fe4a9e7cbe715a48db64edcee451f823825be7`. The premanifest was generated
 from `RuntimeExecution.resolve()` over that detached revision (152 assets;
-manifest `a2f2b776cf21e7c4c1554cf49adf3d4056f4a3e291d6e87fcfc4d0ccf9960a9e`). Both values are carried from
+manifest `5944e4b8672347fd9cd2300ed8412aeeeb43dbd9002aa53ea39dc5fbeeab234a`). Both values are carried from
 the launch configuration to startup; ambient environment variables cannot
 select a different admitted revision. This fixture is an integration/admission
 artifact only and does not authorize judged, Gate A/B/C, or production runs.
