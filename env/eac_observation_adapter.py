@@ -43,7 +43,8 @@ def sanitized_visible_blocks(state, *, limit=128):
                      and isinstance(value, (list, tuple)) and len(value) == 3]
             if len(named) == 1:
                 name, position = named[0]
-        if (not isinstance(name, str) or not name or "air" in name
+        normalized_name = name.removeprefix("minecraft:") if isinstance(name, str) else name
+        if (not isinstance(name, str) or not name or normalized_name in {"air", "cave_air", "void_air"}
                 or not isinstance(position, (list, tuple)) or len(position) != 3
                 or any(isinstance(value, bool) or not isinstance(value, (int, float))
                        or not math.isfinite(value) for value in position)):

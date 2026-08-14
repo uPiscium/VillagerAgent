@@ -99,10 +99,16 @@ def _digest(value: Any) -> str:
     return "sha256:" + sha256(canonical_bytes(_plain(value))).hexdigest()
 
 
-def _proposition_slot(proposition: Proposition, polarity: bool | None = None) -> str:
+def _proposition_slot(proposition: Proposition, actor_id: str | None = None) -> str:
     key = proposition.key
-    payload = [key.namespace, key.predicate, list(key.arguments), key.temporal_scope]
+    payload = ([key.namespace, key.predicate, list(key.arguments), key.temporal_scope]
+               if actor_id is None else
+               [actor_id, key.namespace, key.predicate, list(key.arguments), key.temporal_scope])
     return "conflict:" + _digest(payload)
+
+
+def _root_proposition_slots(root: EvidenceRoot) -> set[str]:
+    return {_proposition_slot(root.proposition, actor_id) for actor_id in root.visible_to}
 
 
 def _binding_slot(kind: str, reference) -> str:
@@ -393,7 +399,7 @@ class RuntimeAuthority:
             old = self._roots.get(root.root_id)
             if old == root:
                 return
-            changed = {"evidence:" + root.root_id, _proposition_slot(root.proposition)}
+            changed = {"evidence:" + root.root_id, *_root_proposition_slots(root)}
             if root.provenance_id:
                 changed.add("provenance:" + root.provenance_id)
             replacements = []
@@ -401,6 +407,7 @@ class RuntimeAuthority:
                 previous = self._roots.get(old_id)
                 if (previous is not None and previous.proposition.key == root.proposition.key
                         and previous.source_stream_id == root.source_stream_id
+                        and previous.visible_to == root.visible_to
                         and root.source_stream_id is not None
                         and root.source_stream_revision is not None
                         and previous.source_stream_revision is not None
@@ -455,7 +462,7 @@ class RuntimeAuthority:
             self._ensure_mutable()
             root = self._roots.pop(root_id, None)
             if root is not None:
-                self._bump(("evidence:" + root_id, _proposition_slot(root.proposition)))
+                self._bump(("evidence:" + root_id, *_root_proposition_slots(root)))
 
     def put_derivation(self, derivation: SupportDerivation) -> None:
         if not isinstance(derivation, SupportDerivation):
@@ -467,7 +474,7 @@ class RuntimeAuthority:
                 return
             self._derivations[derivation.derivation_id] = derivation
             self._bump(("derivation:" + derivation.derivation_id,
-                        _proposition_slot(derivation.conclusion)))
+                        _proposition_slot(derivation.conclusion, "*")))
 
     def mutate_dependencies(self, dependency_ids: Iterable[str], *, reason: str) -> None:
         with self._lock:
@@ -507,7 +514,10 @@ class RuntimeAuthority:
             *("sec_pre:" + item for item in candidate.sec_pre),
         }
         for proposition in candidate.epre:
-            dependency_ids.add(_proposition_slot(proposition))
+            dependency_ids.add(_proposition_slot(proposition, candidate.actor.actor_id))
+            dependency_ids.add(_proposition_slot(proposition, "*"))
+            if self._reader is not None:
+                dependency_ids.add(_proposition_slot(proposition))
         for witness in decision.witnesses:
             dependency_ids.update("evidence:" + root.root_id for root in witness.roots)
             dependency_ids.update("derivation:" + item.derivation_id for item in witness.derivations)
@@ -528,6 +538,7 @@ class RuntimeAuthority:
                 watch = _proposition_slot(proposition)
                 if watch not in external_ids:
                     raise ValueError("external snapshot omits proposition conflict watch")
+                dependency_ids.add(watch)
         expectations = tuple(DependencyExpectation(item, self._version(item),
                                                     "external" if item in external_ids else item.split(":", 1)[0])
                              for item in sorted(dependency_ids))

@@ -49,7 +49,7 @@ def test_frozen_minecraft_artifacts_authenticate_and_include_dual_class_fixture(
     mine_class = next(item for item in classification["actions"] if item["action_identity"] == "MineBlock")
     assert mine_class["epre"] is True and mine_class["env_pre"] is True
     assert classification["detached_artifact_sha256"] == "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001"
-    assert source_profile["detached_profile_sha256"] == "e0b238e85d064fcb43a7666329994e6e6722cd7d0350f901de83a075dc5911ad"
+    assert source_profile["detached_profile_sha256"] == "a6bab72a19bf5dc8f91dc07cfb68f0a54b2cf8d52accc237df4e527ebd3491e3"
 
 
 def test_direct_observation_allows_authority_effect_and_visible_outcome_is_ingested():
@@ -107,6 +107,38 @@ def test_initial_state_ingestion_is_actor_bound_and_one_shot():
         subject.prepare_tool("MineBlock", mine, (), {
             "player_name": "Bob", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
         })
+
+
+def test_failed_initial_snapshot_does_not_consume_later_valid_snapshot():
+    subject = runtime()
+    assert subject.ingest_initial_actor_state("Alice", {"status": False}) == ()
+    valid = {"status": True, "message": {"blocks": [
+        {"name": "oak_stairs", "position": [1, 2, 3]},
+    ]}}
+    assert len(subject.ingest_initial_actor_state("Alice", valid)) == 1
+
+
+def test_other_actor_evidence_does_not_stale_private_permit():
+    subject = runtime()
+    observe_target(subject)
+    prepared = subject.prepare_tool("MineBlock", lambda **kwargs: {"status": True}, (), {
+        "player_name": "Alice", "x": 1, "y": 2, "z": 3, "emotion": [], "murmur": "",
+    })
+    proposition = subject._proposition(subject.classification_for("MineBlock"), {"x": 1, "y": 2, "z": 3})
+    subject.ingest_actor_record(actor_id="Bob", proposition=replace(proposition, polarity=False),
+                                record_type="direct_observation", source="bob-visible", revision=1)
+    assert subject.execute_prepared(prepared)["status"] is True
+
+
+def test_cross_actor_supersession_is_rejected():
+    subject = runtime()
+    proposition = subject._proposition(subject.classification_for("MineBlock"), {"x": 1, "y": 2, "z": 3})
+    bob = subject.ingest_actor_record(actor_id="Bob", proposition=proposition,
+                                      record_type="direct_observation", source="bob-visible", revision=1)
+    with pytest.raises(ValueError, match="unauthorized"):
+        subject.ingest_actor_record(actor_id="Alice", proposition=replace(proposition, polarity=False),
+                                    record_type="direct_observation", source="alice-visible",
+                                    revision=2, supersedes=(bob.root_id,))
 
 
 def test_villagerbench_real_initial_state_is_same_source_for_model_and_authority():

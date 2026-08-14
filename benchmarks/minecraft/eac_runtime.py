@@ -324,48 +324,49 @@ class MinecraftEACRuntime:
                             visible_to: tuple[str, ...] | None = None,
                             root_id: str | None = None, revision: int | str = 1,
                             supersedes: tuple[str, ...] = ()):
-        if source in FORBIDDEN_EVIDENCE_ORIGINS:
-            raise MinecraftEACError("forbidden evaluator/oracle evidence origin")
-        if record_type not in {"direct_observation", "trusted_tool_result",
-                               "visible_action_outcome", "peer_report"}:
-            raise MinecraftEACError("unknown Minecraft evidence record type")
-        visible = tuple(visible_to or (actor_id,))
-        self._sequence += 1
-        rid = root_id or f"minecraft-root:{self.run_id}:{self._sequence}"
-        provenance_id = "minecraft-prov:" + rid
-        self.authority.put_provenance(ProvenanceRecord(provenance_id, source))
-        record = {
-            "namespace": "minecraft", "type": record_type,
-            "visible_to": list(visible), "source_lineage_id": source,
-            "upstream_origin_id": source, "issuer": "minecraft-eac-adapter",
-            "source": source, "proposition": _authority_plain(proposition),
-        }
-        if record_type == "trusted_tool_result":
-            record.update({
-                "tool_identity": "minecraft-observation-adapter", "tool_version": "1",
-                "integrity_contract_sha256": self.profile_document["trusted_tools"][0]["integrity_contract_sha256"],
-            })
-        if payload:
-            record["sanitized_payload"] = _plain(dict(payload))
-        if record_type in {"direct_observation", "visible_action_outcome"}:
-            if not isinstance(revision, int):
+        with self._lock:
+            if source in FORBIDDEN_EVIDENCE_ORIGINS:
+                raise MinecraftEACError("forbidden evaluator/oracle evidence origin")
+            if record_type not in {"direct_observation", "trusted_tool_result",
+                                   "visible_action_outcome", "peer_report"}:
+                raise MinecraftEACError("unknown Minecraft evidence record type")
+            visible = tuple(visible_to or (actor_id,))
+            self._sequence += 1
+            rid = root_id or f"minecraft-root:{self.run_id}:{self._sequence}"
+            provenance_id = "minecraft-prov:" + rid
+            self.authority.put_provenance(ProvenanceRecord(provenance_id, source))
+            record = {
+                "namespace": "minecraft", "type": record_type,
+                "visible_to": list(visible), "source_lineage_id": source,
+                "upstream_origin_id": source, "issuer": "minecraft-eac-adapter",
+                "source": source, "proposition": _authority_plain(proposition),
+            }
+            if record_type == "trusted_tool_result":
+                record.update({
+                    "tool_identity": "minecraft-observation-adapter", "tool_version": "1",
+                    "integrity_contract_sha256": self.profile_document["trusted_tools"][0]["integrity_contract_sha256"],
+                })
+            if payload:
+                record["sanitized_payload"] = _plain(dict(payload))
+            if record_type in {"direct_observation", "visible_action_outcome"}:
+                if not isinstance(revision, int):
+                    raise MinecraftEACError("supersession requires a monotonic direct-observation revision")
+                stream = ("minecraft-visible-state" if record_type == "direct_observation"
+                          else "minecraft-visible-action-state")
+                record.update({"source_stream_id": stream,
+                               "source_stream_revision": revision})
+            elif supersedes:
                 raise MinecraftEACError("supersession requires a monotonic direct-observation revision")
-            stream = ("minecraft-visible-state" if record_type == "direct_observation"
-                      else "minecraft-visible-action-state")
-            record.update({"source_stream_id": stream,
-                           "source_stream_revision": revision})
-        elif supersedes:
-            raise MinecraftEACError("supersession requires a monotonic direct-observation revision")
-        root = self.authority.ingest_record(
-            record, proposition=proposition, root_id=rid, revision=revision,
-            provenance_id=provenance_id, supersedes=supersedes)
-        evidence_kind = payload.get("evidence_kind") if isinstance(payload, Mapping) else None
-        self._records.append({"root_id": rid, "record_type": evidence_kind or record_type,
-                              "authority_record_type": record_type,
-                              "actor_id": actor_id, "source": source})
-        self._evidence_total += 1
-        self._persist_audit()
-        return root
+            root = self.authority.ingest_record(
+                record, proposition=proposition, root_id=rid, revision=revision,
+                provenance_id=provenance_id, supersedes=supersedes)
+            evidence_kind = payload.get("evidence_kind") if isinstance(payload, Mapping) else None
+            self._records.append({"root_id": rid, "record_type": evidence_kind or record_type,
+                                  "authority_record_type": record_type,
+                                  "actor_id": actor_id, "source": source})
+            self._evidence_total += 1
+            self._persist_audit()
+            return root
 
     def ingest_target_observation(self, actor_id: str, action_name: str,
                                   arguments: Mapping[str, Any], *, revision: int | str = 1):
@@ -391,6 +392,8 @@ class MinecraftEACRuntime:
     def ingest_initial_actor_state(self, actor_id: str, state: Mapping[str, Any]):
         with self._lock:
             if actor_id in self._initial_state_ingested:
+                return ()
+            if not isinstance(state, Mapping) or state.get("status") is not True or not isinstance(state.get("message"), Mapping):
                 return ()
             roots = []
             for block_name, coordinates in sanitized_visible_blocks(state):
