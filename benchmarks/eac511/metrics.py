@@ -15,16 +15,19 @@ from typing import Any, Iterable, Mapping, Sequence
 class EventRecord:
     """One observed event, with its immutable evidence trail."""
     event_id: str
+    run_id: str
     scenario_id: str
     condition: str
+    seed: int
     event_type: str
     values: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def as_mapping(self) -> dict[str, Any]:
         result = dict(self.values)
-        result.update(event_id=self.event_id, scenario_id=self.scenario_id,
-                      condition=self.condition, event_type=self.event_type,
+        result.update(event_id=self.event_id, run_id=self.run_id,
+                      scenario_id=self.scenario_id, condition=self.condition,
+                      seed=self.seed, event_type=self.event_type,
                       provenance=dict(self.provenance))
         return result
 
@@ -33,13 +36,18 @@ class EventRecord:
 class OracleRecord:
     """Expected truth for an event or logical step."""
     record_id: str
+    run_id: str
     scenario_id: str
+    condition: str
+    seed: int
     values: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def as_mapping(self) -> dict[str, Any]:
         result = dict(self.values)
-        result.update(record_id=self.record_id, scenario_id=self.scenario_id,
+        result.update(record_id=self.record_id, run_id=self.run_id,
+                      scenario_id=self.scenario_id, condition=self.condition,
+                      seed=self.seed,
                       provenance=dict(self.provenance))
         return result
 
@@ -78,20 +86,30 @@ def _rows(rows: Iterable[Mapping[str, Any] | EventRecord | OracleRecord]) -> lis
     return [_mapping(row) for row in rows]
 
 
+def _record_key(row: Mapping[str, Any], *, oracle: bool = False) -> tuple[str, str, str, int, str]:
+    event_id = _value(row, "record_id" if oracle else "event_id")
+    values = (row.get("run_id"), row.get("scenario_id"), row.get("condition"),
+              row.get("seed"), event_id)
+    if (not all(isinstance(value, str) and value for value in values[:3]) or
+            type(values[3]) is not int or not isinstance(values[4], str) or not values[4]):
+        raise ValueError("metric records require run/scenario/condition/seed/event identity")
+    return values  # type: ignore[return-value]
+
+
 def _attach_oracle(observed: list[Mapping[str, Any]], oracle: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     if not oracle:
         return observed
-    index: dict[Any, Mapping[str, Any]] = {}
+    index: dict[tuple[str, str, str, int, str], Mapping[str, Any]] = {}
     for row in oracle:
-        key = _value(row, "record_id", "event_id")
-        if not isinstance(key, str) or not key or key in index:
-            raise ValueError("oracle record identifiers must be unique non-empty strings")
+        key = _record_key(row, oracle=True)
+        if key in index:
+            raise ValueError("oracle composite identities must be unique")
         index[key] = row
     result = []
-    matched: set[str] = set()
+    matched: set[tuple[str, str, str, int, str]] = set()
     for row in observed:
-        key = _value(row, "event_id", "record_id")
-        if not isinstance(key, str) or key not in index:
+        key = _record_key(row)
+        if key not in index:
             raise ValueError("every observed record requires one matching oracle record")
         truth = index[key]
         matched.add(key)
@@ -102,9 +120,24 @@ def _attach_oracle(observed: list[Mapping[str, Any]], oracle: list[Mapping[str, 
     return result
 
 
+def _joined(rows: Sequence[Mapping[str, Any] | EventRecord],
+            oracle: Sequence[Mapping[str, Any] | OracleRecord]) -> list[Mapping[str, Any]]:
+    """Join before filtering so infrastructure rows cannot desynchronize truth."""
+    return _eligible(_attach_oracle(_rows(rows), _rows(oracle)))
+
+
 def _eligible(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    materialized = list(rows)
     excluded = {"infrastructure_failure", "infra_failure", "setup_failure"}
-    return [r for r in rows if str(_value(r, "status", "run_status") or "").lower() not in excluded]
+    infrastructure_runs = {
+        row.get("run_id") for row in materialized
+        if row.get("event_type") == "run_terminal" and
+        isinstance(row.get("payload"), Mapping) and
+        str(row["payload"].get("run_status", "")).lower() == "infrastructure_failure"
+    }
+    return [row for row in materialized
+            if row.get("run_id") not in infrastructure_runs and
+            str(_value(row, "status", "run_status") or "").lower() not in excluded]
 
 
 def _flag_rate(rows: Sequence[Mapping[str, Any]], names: tuple[str, ...],
@@ -114,10 +147,33 @@ def _flag_rate(rows: Sequence[Mapping[str, Any]], names: tuple[str, ...],
     return _rate(sum(_bool(r, *names) is True for r in observed), len(observed))
 
 
+def _advisory_authority(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Return only EAdm opportunities in the two EAC enforcement modes."""
+    modes = {"advisory", "authority"}
+    return [r for r in rows
+            if str(_value(r, "condition", "enforcement", "mode") or "").lower() in modes]
+
+
+def _oracle_justification_adequate(row: Mapping[str, Any]) -> bool | None:
+    """Read the independent oracle's justification label without guessing."""
+    inadequate = _bool(row, "oracle_inadequate_justification",
+                        "oracle_justification_inadequate")
+    if inadequate is not None:
+        return not inadequate
+    return _bool(row, "oracle_justification_adequate",
+                 "oracle_adequate_justification", "oracle_eadm",
+                  "oracle_admissible", "oracle_epistemically_admissible")
+
+
+def _payload_bool(row: Mapping[str, Any], name: str) -> bool | None:
+    payload = row.get("payload")
+    return _bool(payload, name) if isinstance(payload, Mapping) else None
+
+
 def runtime_integrity_metrics(rows: Sequence[Mapping[str, Any] | EventRecord],
                               oracle: Sequence[Mapping[str, Any] | OracleRecord] = ()) -> dict[str, Any]:
     """Calculate BAER/SPER, replay/bypass, and invalidation correctness/latency."""
-    observed = _eligible(_rows(rows)); combined = _attach_oracle(observed, _rows(oracle))
+    combined = _joined(rows, oracle)
     blocked_attempts = [row for row in combined if _bool(
         row, "oracle_non_admissible_attempt", "oracle_blocked_attempt") is True]
     stale_attempts = [row for row in combined if _bool(row, "oracle_stale_permit_attempt") is True]
@@ -140,40 +196,57 @@ def runtime_integrity_metrics(rows: Sequence[Mapping[str, Any] | EventRecord],
               if ordered else None)
     out["invalidation_latency"] = {"values": latency, "denominator": len(latency),
                                    "median": median}
-    out["provenance"] = [r.get("provenance", {}) for r in observed]
+    out["provenance"] = [r.get("provenance", {}) for r in combined]
     return out
 
 
 def epistemic_adequacy_metrics(rows: Sequence[Mapping[str, Any] | EventRecord],
                                oracle: Sequence[Mapping[str, Any] | OracleRecord] = ()) -> dict[str, Any]:
     """Calculate independent EAdm confusion rates and diagnostic rates."""
-    rs = _eligible(_attach_oracle(_rows(rows), _rows(oracle)))
-    eligible = [r for r in rs if _bool(r, "eadm", "epistemically_admissible", "admissible") is not None]
-    def confusion(pred_names: tuple[str, ...], truth_names: tuple[str, ...], pred: bool, truth: bool, denominator: str) -> dict[str, Any]:
-        pairs = [(_bool(r, *pred_names), _bool(r, *truth_names)) for r in eligible]
-        pairs = [(p, t) for p, t in pairs if p is not None and t is not None]
-        den = sum((p is True if denominator == "predicted" else (t is (denominator == "actual-positive"))) for p, t in pairs)
-        return _rate(sum(p is pred and t is truth for p, t in pairs), den)
+    rs = _advisory_authority(_joined(rows, oracle))
+    eligible = [row for row in rs if row.get("event_type") == "eadm_evaluated"]
+    evaluated = []
+    for row in eligible:
+        predicted = _payload_bool(row, "admissible")
+        adequate = _oracle_justification_adequate(row)
+        if predicted is None:
+            raise ValueError("eadm_evaluated payload requires a boolean admissible verdict")
+        if adequate is None:
+            raise ValueError("every EAdm opportunity requires an independent adequacy label")
+        evaluated.append((row, predicted, adequate))
+    true_positive = sum(predicted and adequate for _, predicted, adequate in evaluated)
+    false_positive = sum(predicted and not adequate for _, predicted, adequate in evaluated)
+    false_negative = sum(not predicted and adequate for _, predicted, adequate in evaluated)
     out = {
-        "precision": confusion(("eadm", "admissible"), ("oracle_eadm", "oracle_admissible", "oracle_epistemically_admissible"), True, True, "predicted"),
-        "recall": confusion(("eadm", "admissible"), ("oracle_eadm", "oracle_admissible", "oracle_epistemically_admissible"), True, True, "actual-positive"),
-        "false_positive_rate": confusion(("eadm", "admissible"), ("oracle_eadm", "oracle_admissible"), True, False, "actual-negative"),
-        "false_negative_rate": confusion(("eadm", "admissible"), ("oracle_eadm", "oracle_admissible"), False, True, "actual-positive"),
+        "precision": _rate(true_positive, sum(predicted for _, predicted, _ in evaluated)),
+        "recall": _rate(true_positive, sum(adequate for _, _, adequate in evaluated)),
+        "false_negative_rate": _rate(false_negative, sum(adequate for _, _, adequate in evaluated)),
     }
-    # Explicit precomputed confusion labels remain supported for hand-built rows.
-    for key, aliases in {"precision": ("epistemic_true_positive",), "recall": ("epistemic_recall",),
-                         "false_positive_rate": ("epistemic_false_positive", "false_positive"),
-                         "false_negative_rate": ("epistemic_false_negative", "false_negative")}.items():
-        if out[key]["denominator"] == 0: out[key] = _flag_rate(eligible, aliases)
+    # The primary estimand is admission with an oracle-inadequate justification
+    # over every evaluated Advisory/Authority opportunity, not a conditional
+    # rate over oracle-negative opportunities.
+    out["false_positive_admissibility_rate"] = _rate(
+        false_positive,
+        len(evaluated),
+    )
+    out["oracle_negative_conditional_false_positive_rate"] = _rate(
+        false_positive,
+        sum(adequate is False for _, _, adequate in evaluated),
+    )
     for key, aliases in {"conflict": ("conflict_detected",), "supersession": ("superseded", "supersession_detected"),
                          "grounding": ("grounded",), "scope": ("actor_scope_leakage", "scope_leakage"),
                          "hidden_change": ("hidden_change_error", "hidden_change_detected")}.items(): out[key] = _flag_rate(eligible, aliases)
-    out["eadm_denominator"] = len(eligible); out["provenance"] = [r.get("provenance", {}) for r in eligible]
+    out["eadm_denominator"] = len(evaluated); out["provenance"] = [r.get("provenance", {}) for r in eligible]
     return out
 
 
-def oracle_unsupported_rates(rows: Sequence[Mapping[str, Any] | EventRecord]) -> dict[str, Any]:
-    selected = [r for r in _eligible(_rows(rows)) if _bool(r, "oracle_supported", "supported_by_oracle") is False]
+def oracle_unsupported_rates(rows: Sequence[Mapping[str, Any] | EventRecord],
+                             oracle: Sequence[Mapping[str, Any] | OracleRecord] = ()) -> dict[str, Any]:
+    combined = _joined(rows, oracle)
+    baseline = [row for row in combined
+                if str(_value(row, "condition", "enforcement", "mode") or "").lower() == "baseline"]
+    selected = [row for row in baseline
+                if _bool(row, "oracle_supported", "oracle_justification_adequate") is False]
     return {"attempt": _flag_rate(selected, ("attempted", "attempt")), "effect": _flag_rate(selected, ("effected", "effect"))}
 
 
@@ -197,7 +270,7 @@ def task_utility_metrics(rows: Sequence[Mapping[str, Any] | EventRecord]) -> dic
 
 def calculate_metrics(rows: Sequence[Mapping[str, Any] | EventRecord], oracle: Sequence[Mapping[str, Any] | OracleRecord] = ()) -> dict[str, Any]:
     return {"runtime_integrity": runtime_integrity_metrics(rows, oracle), "epistemic_adequacy": epistemic_adequacy_metrics(rows, oracle),
-            "oracle_unsupported": oracle_unsupported_rates(rows), "task_utility": task_utility_metrics(rows)}
+            "oracle_unsupported": oracle_unsupported_rates(rows, oracle), "task_utility": task_utility_metrics(rows)}
 
 
 compute_metrics = calculate_metrics

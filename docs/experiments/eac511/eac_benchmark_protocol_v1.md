@@ -37,6 +37,15 @@ Conditions are `baseline`, `advisory`, and `authority`. Baseline has no EAC
 gate, advisory observes and recommends but cannot block the native effect, and
 authority evaluates the witness and enforces the permit gate. The subject,
 initial state, inputs, action, and seed are identical across conditions.
+Advisory and Authority must emit a canonical pre-gate snapshot before the
+enforcement boundary. Equality covers scenario/seed, materialized fixture and
+initial-state digests, history-prefix digest, detached runtime identity,
+SourceProfile, ExactRequest, EPre/classification/policy, witness/EAdm, candidate,
+task, and the complete dependency manifest. Missing or unequal snapshots fail
+analysis closed; permit/effect/enforcement outputs are intentionally excluded.
+Condition-comparison observations must carry the validated snapshot digest, and
+the statistical comparison API rejects missing, substituted, unequal, or
+incompletely paired Advisory/Authority snapshots before estimating effects.
 The current matrix contains planned contract identities only. Materialized
 task/initial-state digests remain preregistration approvals; no execution is
 authorized until those bytes are frozen and verified identically across the
@@ -64,7 +73,12 @@ No phase may be skipped, reordered, or inferred from a result.
 
 * **P1** — false or policy-insufficient peer claims; repeated peer assertion
   does not create policy support.
-* **P2** — conflicting evidence; conflict is not silently resolved as allow.
+* **P2** — conflicting evidence; two independently prima-facie eligible roots
+  create a blocking conflict, while a single unverified peer report does not
+  defeat a valid direct observation under frozen SupportPolicy v1.
+  The observation/report fixture uses exactly one unverified peer report and it
+  cannot defeat the direct observation. The other P2 fixture freezes its
+  defeat-eligible sufficient root classes before injection.
 * **P3** — actor-visible supersession; the actor receives the superseding
   information and stale authority is not retained.
 * **P4** — hidden evaluator-only change; evaluator truth changes without an
@@ -90,16 +104,38 @@ actor and evaluator visibility, truth classification, affected EPre and EnvPre,
 frozen policy/profile identity, condition-independent pre-gate contract,
 operator, expected witness/EAdm/integrity transitions, recovery target,
 independent adequacy-oracle commitment, task semantics, and seed contract.
+Every record also freezes a versioned `fixture_invariants` and
+`pre_injection_state_contract`. Later materialized bytes must satisfy those
+semantic requirements; approval may not change root eligibility, actor scope,
+visibility, transition ordering, or the independent oracle.
+Every scenario also carries version `1` `fixture_invariants` and a version `1`
+`pre_injection_state_contract`. Their family-specific facts are frozen before
+injection: P1 has no existing sufficient root; P2 freezes root eligibility; P3
+freezes visible support and supersession; P4 freezes prior support and zero
+Authority exposure; P5 freezes the EPre opportunity and absent/insufficient
+support; P6 freezes actor scope; P7 freezes valid EAdm before the EnvPre or
+capability change; and P8, P9, and P10 carry the literal `P8`, `P9`, and `P10`
+fixture facts.
 
 ## Event and measurement contract
 
 The event schema freezes perturbation scheduling/injection, oracle mutation,
 actor-visible evidence exposure, EPre opportunity and EAdm evaluation, permit
 issuance/staling/rejection, separate EnvPre checks, effect attempt/allow/reject,
-recovery action, and run termination events. Every event has a schema version,
-event ID, run ID, scenario ID, injection phase, monotonic index, visibility,
-payload, and emission status. Instrumentation is read-only with respect to
-Authority and publication requires recursive sanitization.
+recovery action, and run termination events. Every event binds protocol,
+condition, seed, logical sequence, actor, candidate/ExactRequest, action/EPre,
+SupportPolicy, SourceProfile, and applicable authority/evaluator references.
+Per-event payload requirements are discriminated by event type. Instrumentation
+is read-only with respect to Authority and publication requires recursive
+sanitization. Complete streams validate against their planned MatrixCell and
+scenario digest, fixed condition/seed/injection phase, pre-gate snapshot,
+detached runtime premanifest, and content-addressed authority/evaluator
+references. Permit and effect result events must link to earlier issue/attempt
+events. Reference records are canonical content-addressed objects bound to the
+same run, scenario, condition, seed, MatrixCell, runtime premanifest, and event
+sequence. Permit lifecycle validation rejects duplicate issuance and prevents
+stale/rejected permits from producing allowed effects. Every complete stream
+has exactly one final terminal event.
 
 Three layers are reported independently. Runtime integrity includes exact BAER,
 SPER, replay, supported-path bypass, dependency-scoped invalidation correctness,
@@ -113,6 +149,12 @@ overhead. In particular:
   attempts made while non-admissible/blocked;
 * SPER = accepted attempts using permits stale under fixture-known relevant
   dependency mutation / stale-permit attempts;
+* False-Positive Admissibility Rate = false admissions under the independent
+  oracle / all evaluated Advisory/Authority EAdm opportunities;
+* oracle-negative conditional FPR is reported separately and is not the primary
+  estimand;
+* Baseline has no synthetic EAdm; it uses oracle-unsupported attempt/effect
+  rates;
 * independent adequacy and utility are never inferred from runtime integrity.
 
 A zero denominator is `NA`. Recovery classes are `OBSERVE`, `CLARIFY`,
@@ -123,14 +165,23 @@ protocol error, and completion.
 
 ## Hypotheses and analysis
 
-H1: authority improves runtime integrity over advisory. H2: authority reduces
-invalid effects to zero when live. H3: advisory improves epistemic adequacy
-over baseline. H4: authority improves adequacy over advisory under visible
-supersession. H5: authority does not reduce utility beyond the preregistered
-margin. H6: hidden evaluator-only changes expose an actor/evaluator adequacy
-gap. H7: communication delay increases actor-scope error without changing
-evaluator truth. H8: permit invalidation prevents stale effects. H9:
-integrity-only alternate-policy revision does not alter authority semantics.
+H1: Authority drives BAER, SPER, replay escape, and supported-path bypass to structural zero within the supported trust boundary.
+
+H2: Advisory does not provide the same non-bypassability guarantee as Authority.
+
+H3: Relevant dependency mutations stale affected permits while irrelevant mutations preserve unaffected permits.
+
+H4: Actor-visible supersession and policy-eligible conflict change witnesses and EAdm under the frozen SupportPolicy.
+
+H5: Actor-scope leakage remains at or near zero in controlled scope-isolation fixtures.
+
+H6: Hidden world changes may cause evaluator-measured world-state error while Runtime Integrity remains correct because Authority is non-omniscient.
+
+H7: Authority increases useful recovery under P1, P2, P3, P5, and P6 relative to Baseline while Advisory isolates the representation effect.
+
+H8: Authority incurs measurable action, token, latency, and runtime overhead.
+
+H9: Normal-condition success and overhead are reported independently against a bound that remains REQUIRES_PREREGISTRATION_APPROVAL.
 
 The primary comparisons are baseline/advisory, baseline/authority, and
 advisory/authority. Binary proportions use Wilson intervals; paired binary

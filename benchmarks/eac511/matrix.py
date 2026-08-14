@@ -5,6 +5,40 @@ from .model import Condition, MatrixCell, Scenario, SEEDS, Tier
 from .identity import semantic_digest
 
 
+def matrix_cell_digest(cell: MatrixCell) -> str:
+    return semantic_digest({
+        "condition": cell.condition.value,
+        "enforcement": dict(cell.enforcement),
+        "family": cell.family.value,
+        "pre_gate_input_digest": cell.pre_gate_input_digest,
+        "run_id": cell.run_id,
+        "scenario_digest": cell.scenario_digest,
+        "scenario_id": cell.scenario_id,
+        "seed": cell.seed,
+    })
+
+
+def validate_matrix_cell(cell: MatrixCell, scenario: Scenario) -> None:
+    if (cell.scenario_id != scenario.scenario_id or cell.scenario_digest != scenario.digest or
+            cell.family is not scenario.family or cell.seed not in SEEDS):
+        raise ValueError("matrix cell does not match the frozen scenario")
+    expected_run_id = f"eac511:{scenario.scenario_id}:{cell.seed}:{cell.condition.value}"
+    expected_pre_gate = semantic_digest({
+        "pre_gate_contract": scenario.document["pre_gate_contract"],
+        "scenario_digest": scenario.digest,
+        "seed": cell.seed,
+    })
+    expected_enforcement = {
+        "condition": cell.condition.value,
+        "execution_authorized": False,
+        "materialized_inputs_verified": False,
+        "planned_contract_only": True,
+    }
+    if (cell.run_id != expected_run_id or cell.pre_gate_input_digest != expected_pre_gate or
+            dict(cell.enforcement) != expected_enforcement):
+        raise ValueError("matrix cell identity or planned inputs are not canonical")
+
+
 def paired_cell_equal(left: MatrixCell, right: MatrixCell) -> bool:
     """Return whether two cells are the same paired unit apart from condition."""
     return (left.scenario_id, left.scenario_digest, left.family, left.seed,

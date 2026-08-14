@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib, math
 from typing import Any, Mapping, Sequence
 
+from .equivalence import compare_paired_pre_gate, pre_gate_snapshot_digest
+from .model import MatrixCell, Scenario
+
 PREREGISTERED_SEED = 51120260814
 
 def _finite(x: float) -> float:
@@ -81,7 +84,31 @@ def paired_latency_median_difference(left: Sequence[float], right: Sequence[floa
     pairs = validate_numeric_pairs(left, right, nonnegative=True)
     return paired_count_difference([a for a, _ in pairs], [b for _, b in pairs])
 
-def compare_conditions(observations: Mapping[str, Sequence[Mapping[str, Any]]], metric: str, resamples: int = 10000, seed: int = PREREGISTERED_SEED) -> dict[str, Any]:
+def compare_conditions(
+    observations: Mapping[str, Sequence[Mapping[str, Any]]], metric: str,
+    resamples: int = 10000, seed: int = PREREGISTERED_SEED,
+    *, paired_pre_gate: Sequence[tuple[MatrixCell, MatrixCell, Scenario,
+                                       Mapping[str, Any], Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    if paired_pre_gate is None:
+        raise ValueError("paired analysis requires canonical pre-gate snapshots")
+    expected_pairs = validate_paired_keys(observations["advisory"], observations["authority"])
+    expected_keys = {(left["scenario_id"], left["seed"]) for left, unused in expected_pairs}
+    observed_keys: set[tuple[str, int]] = set()
+    for advisory_cell, authority_cell, scenario, advisory_snapshot, authority_snapshot in paired_pre_gate:
+        compare_paired_pre_gate(advisory_cell, authority_cell, scenario,
+                                advisory_snapshot, authority_snapshot)
+        key = (scenario.scenario_id, advisory_cell.seed)
+        if key in observed_keys:
+            raise ValueError("paired pre-gate contexts must be unique")
+        observed_keys.add(key)
+        pair = next((pair for pair in expected_pairs
+                     if (pair[0]["scenario_id"], pair[0]["seed"]) == key), None)
+        if pair is None or pair[0].get("pre_gate_snapshot_digest") != pre_gate_snapshot_digest(advisory_snapshot) or \
+                pair[1].get("pre_gate_snapshot_digest") != pre_gate_snapshot_digest(authority_snapshot):
+            raise ValueError("analysis observations do not bind the supplied pre-gate snapshots")
+    if observed_keys != expected_keys:
+        raise ValueError("paired pre-gate contexts must cover every Advisory/Authority unit")
     out = {}
     for name, a, b in (("baseline-vs-advisory", "baseline", "advisory"), ("advisory-vs-authority", "advisory", "authority"), ("baseline-vs-authority", "baseline", "authority")):
         pairs = validate_paired_keys(observations[a], observations[b])
