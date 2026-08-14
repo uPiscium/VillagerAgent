@@ -651,10 +651,9 @@ async def talk_to(request: Request):
     return JSONResponse({'message': f"I talk to {entity_name} {message}", 'status': True})
 
 
-from eac_preflight import register_eac_preflight_route
-eac_preflight = register_eac_preflight_route(
-    app, bot_provider=lambda: bot, vec3_provider=lambda: Vec3,
-    timeout_decorator=timeout,
+from minecraft_eac_bridge import install_minecraft_server_eac_route
+eac_preflight = install_minecraft_server_eac_route(
+    app, native_bot=bot, Vec3=Vec3, timeout_decorator=timeout,
 )
 
 

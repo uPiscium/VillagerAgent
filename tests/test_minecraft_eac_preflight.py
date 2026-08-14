@@ -4,7 +4,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from env.eac_preflight import evaluate_eac_preflight, register_eac_preflight_route
+from env.eac_preflight import evaluate_eac_preflight
+from env.minecraft_eac_bridge import install_minecraft_server_eac_route
 
 
 class Bot:
@@ -77,8 +78,12 @@ def test_fastapi_preflight_route_accepts_every_classified_action_without_effect(
         bot.blockAt = lambda pos: SimpleNamespace(
             name="air" if tuple(pos) == (1, 2, 3) else "stone")
     app = FastAPI()
-    register_eac_preflight_route(
-        app, bot_provider=lambda: bot, vec3_provider=lambda: (lambda *values: values))
+    timeout_seconds = []
+    install_minecraft_server_eac_route(
+        app, native_bot=bot, Vec3=lambda *values: values,
+        timeout_decorator=lambda seconds: (
+            timeout_seconds.append(seconds) or (lambda function: function)),
+    )
 
     response = TestClient(app).post(
         "/post_eac_preflight", json={"action": action, "arguments": arguments})
@@ -86,6 +91,7 @@ def test_fastapi_preflight_route_accepts_every_classified_action_without_effect(
     assert response.status_code == 200
     assert response.json() == {"status": True, "action": action}
     assert bot.effect_calls == []
+    assert timeout_seconds == [10]
 
 
 def test_fastapi_preflight_route_rejects_invalid_request_without_effect():
@@ -93,8 +99,10 @@ def test_fastapi_preflight_route_rejects_invalid_request_without_effect():
     bot.effect_calls = []
     bot.chat = lambda *unused: bot.effect_calls.append("chat")
     app = FastAPI()
-    register_eac_preflight_route(
-        app, bot_provider=lambda: bot, vec3_provider=lambda: (lambda *values: values))
+    install_minecraft_server_eac_route(
+        app, native_bot=bot, Vec3=lambda *values: values,
+        timeout_decorator=lambda unused: (lambda function: function),
+    )
 
     response = TestClient(app).post(
         "/post_eac_preflight",

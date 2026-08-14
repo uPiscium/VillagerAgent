@@ -803,6 +803,15 @@ def test_minecraft_agent_step_recommendations_cannot_widen_explicit_subset(monke
     assert selected == [registered_mine]
 
 
+def test_minecraft_agent_step_invalid_recommendations_fail_closed(monkeypatch):
+    registered = SimpleNamespace(name="MineBlock")
+
+    selected = _capture_step_tools(
+        monkeypatch, [registered], [], recommended_actions=("unregisteredTool",))
+
+    assert selected == []
+
+
 @pytest.mark.parametrize("timeout_error", [requests.ConnectTimeout, requests.ReadTimeout])
 def test_minecraft_request_converts_transport_timeout(tmp_path, monkeypatch, timeout_error):
     paths = RuntimePaths.isolated(tmp_path / "attempt")

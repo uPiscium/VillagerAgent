@@ -1315,12 +1315,11 @@ class Agent():
                 registered_tool for registered_tool in self.tools
                 if registered_tool.name in requested_names
             ]
-        recommended_tools = [
-            registered_tool for registered_tool in selected_tools
-            if registered_tool.name in recommended_actions
-        ]
-        if recommended_tools == []:
-            recommended_tools = selected_tools
+        recommended_tools = (
+            [registered_tool for registered_tool in selected_tools
+             if registered_tool.name in recommended_actions]
+            if recommended_actions else selected_tools
+        )
         llmhandler = LLMHandler()
 
         while max_try_turn > 0:
