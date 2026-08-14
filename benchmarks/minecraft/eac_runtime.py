@@ -331,6 +331,8 @@ class MinecraftEACRuntime:
                                    "visible_action_outcome", "peer_report"}:
                 raise MinecraftEACError("unknown Minecraft evidence record type")
             visible = tuple(visible_to or (actor_id,))
+            if record_type in {"direct_observation", "visible_action_outcome"} and visible != (actor_id,):
+                raise MinecraftEACError("current-fluent evidence must be private to its observing actor")
             self._sequence += 1
             rid = root_id or f"minecraft-root:{self.run_id}:{self._sequence}"
             provenance_id = "minecraft-prov:" + rid
@@ -393,7 +395,9 @@ class MinecraftEACRuntime:
         with self._lock:
             if actor_id in self._initial_state_ingested:
                 return ()
-            if not isinstance(state, Mapping) or state.get("status") is not True or not isinstance(state.get("message"), Mapping):
+            if (not isinstance(state, Mapping) or state.get("status") is not True
+                    or not isinstance(state.get("message"), Mapping)
+                    or not isinstance(state["message"].get("blocks"), list)):
                 return ()
             roots = []
             for block_name, coordinates in sanitized_visible_blocks(state):

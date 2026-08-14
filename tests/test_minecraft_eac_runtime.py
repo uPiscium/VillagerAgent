@@ -112,6 +112,7 @@ def test_initial_state_ingestion_is_actor_bound_and_one_shot():
 def test_failed_initial_snapshot_does_not_consume_later_valid_snapshot():
     subject = runtime()
     assert subject.ingest_initial_actor_state("Alice", {"status": False}) == ()
+    assert subject.ingest_initial_actor_state("Alice", {"status": True, "message": {"blocks": {}}}) == ()
     valid = {"status": True, "message": {"blocks": [
         {"name": "oak_stairs", "position": [1, 2, 3]},
     ]}}
@@ -139,6 +140,10 @@ def test_cross_actor_supersession_is_rejected():
         subject.ingest_actor_record(actor_id="Alice", proposition=replace(proposition, polarity=False),
                                     record_type="direct_observation", source="alice-visible",
                                     revision=2, supersedes=(bob.root_id,))
+    with pytest.raises(MinecraftEACError, match="private to its observing actor"):
+        subject.ingest_actor_record(actor_id="Alice", proposition=replace(proposition, polarity=False),
+                                    record_type="direct_observation", source="alice-forged-bob",
+                                    visible_to=("Bob",), revision=2, supersedes=(bob.root_id,))
 
 
 def test_villagerbench_real_initial_state_is_same_source_for_model_and_authority():
