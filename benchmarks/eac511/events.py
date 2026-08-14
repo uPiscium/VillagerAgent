@@ -9,7 +9,7 @@ from .matrix import matrix_cell_digest, validate_matrix_cell
 from .identity import FROZEN_510, semantic_digest
 from .equivalence import (baseline_snapshot_digest, pre_gate_snapshot_digest,
                           validate_baseline_snapshot, validate_pre_gate_snapshot)
-from .oracle import validate_evaluator_record
+from .oracle import validate_evaluator_record, validate_evaluator_registry
 from .protocol import (EVENT_APPLICABILITY, EVENT_PAYLOAD_REQUIRED, EVENT_REQUIRED_FIELDS,
                        EVENT_TYPES, PROTOCOL_ID, RUN_STATUSES)
 
@@ -86,7 +86,13 @@ def _validate_applicability(result: Mapping[str, Any]) -> None:
         raise ValueError("Baseline does not emit EAC opportunity/permit events")
     if kind.startswith("permit_") and result["condition"] != "authority":
         raise ValueError("execution-permit events are Authority-only")
-    requires_authority = (kind in _AUTHORITY_EVENTS and
+    bypass_attempt = (kind == "effect_attempted" and result["condition"] == "authority" and
+                      result["payload"].get("attempt_class") == "BYPASS")
+    # Effect outcomes inherit bypass/non-bypass applicability from the preceding
+    # attempt and are checked with that lifecycle below.
+    deferred_effect_outcome = kind in {"effect_allowed", "effect_rejected"}
+    requires_authority = (kind in _AUTHORITY_EVENTS and not bypass_attempt and
+                          not deferred_effect_outcome and
                           (kind in {"eadm_evaluated", "permit_issued", "permit_staled", "permit_rejected"}
                            or result["condition"] != "baseline"))
     if requires_authority and result["authority_reference"] is None:
@@ -161,6 +167,8 @@ def _validate_payload(kind: str, payload: Mapping[str, Any]) -> None:
             "OBSERVE", "CLARIFY", "COMMUNICATE", "WAIT", "ALTERNATE_ACTION",
             "REPLAN", "RESOLVE_CONFLICT", "ABANDON", "NO_RECOVERY", "UNKNOWN"}:
         raise ValueError("invalid recovery class")
+    if kind == "recovery_action" and payload["recovery_class"] in {"NO_RECOVERY", "UNKNOWN"}:
+        raise ValueError("recovery_action must identify an actual recovery attempt")
     if kind == "run_terminal" and payload["run_status"] not in RUN_STATUSES:
         raise ValueError("invalid terminal run status")
     if kind == "run_terminal":
@@ -234,7 +242,7 @@ def normalize_event(event: Mapping[str, Any]) -> dict[str, Any]:
     if event["sequence"] != event["monotonic_index"]:
         raise ValueError("sequence must equal monotonic_index")
     for field in ("scenario_digest", "matrix_cell_digest", "pre_gate_snapshot_digest",
-                  "runtime_premanifest_identity"):
+                  "runtime_premanifest_identity", "evaluator_registry_digest"):
         _digest(event[field], field)
     for field in ("action_digest", "dependency_manifest_fingerprint"):
         if event[field] is not None:
@@ -280,8 +288,13 @@ def normalize_event(event: Mapping[str, Any]) -> dict[str, Any]:
 def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
                           *, cell: MatrixCell, scenario: Scenario,
                           pre_gate_snapshots: Mapping[str, Mapping[str, Any]],
-                          reference_records: Mapping[str, Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
+                          reference_records: Mapping[str, Mapping[str, Any]],
+                          evaluator_registry: Mapping[str, Any],
+                          approved_evaluator_registry_digest: str) -> tuple[dict[str, Any], ...]:
     normalized = tuple(normalize_event(event) for event in events)
+    registry = validate_evaluator_registry(
+        evaluator_registry,
+        approved_manifest_digest=approved_evaluator_registry_digest)
     validate_matrix_cell(cell, scenario)
     if not pre_gate_snapshots:
         raise ValueError("event stream requires authenticated pre-gate snapshots")
@@ -336,7 +349,8 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
                 event["matrix_cell_digest"] != expected_cell_digest or
                 event["condition"] != cell.condition.value or event["seed"] != cell.seed or
                 event["phase"] != scenario.document["injection_phase"] or
-                event["runtime_premanifest_identity"] != FROZEN_510.premanifest_identity):
+                event["runtime_premanifest_identity"] != FROZEN_510.premanifest_identity or
+                event["evaluator_registry_digest"] != approved_evaluator_registry_digest):
             raise ValueError("event does not bind the planned matrix cell and frozen scenario")
         if event["support_policy"] is not None and event["support_policy"] != scenario.document["support_policy"]:
             raise ValueError("event SupportPolicy differs from the frozen scenario")
@@ -375,9 +389,11 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
                 if reference_type == "evaluator":
                     validate_evaluator_record(record, cell=cell, scenario=scenario,
                                               opportunity_id=event["opportunity_id"],
-                                              logical_step=event["logical_step"],
-                                              materialized_fixture_digest=snapshot[
-                                                  "materialized_fixture_digest"])
+                                               logical_step=event["logical_step"],
+                                               materialized_fixture_digest=snapshot[
+                                                   "materialized_fixture_digest"],
+                                               evaluator_registry=registry,
+                                               approved_registry_digest=approved_evaluator_registry_digest)
                     if (record["record_digest"] != reference or
                             event["payload"]["oracle_record_digest"] != reference or
                             event["payload"]["oracle_commitment_id"] != record["commitment_id"]):
@@ -477,8 +493,9 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
                 if attempt_class != derived_class:
                     raise ValueError("effect attempt class contradicts permit lifecycle")
                 if derived_class == "BYPASS":
-                    if permit_id is not None or validation_reference is not None:
-                        raise ValueError("bypass attempt must not claim permit validation")
+                    if (permit_id is not None or validation_reference is not None or
+                            event["authority_reference"] is not None):
+                        raise ValueError("bypass attempt must not claim Authority or permit validation")
                 else:
                     if (permit_binding is None or permit_binding[:5] !=
                             (event["candidate_identity"], payload["attempt_id"],
@@ -524,8 +541,13 @@ def validate_event_stream(events: list[Mapping[str, Any]] | tuple[Mapping[str, A
                         event["pre_gate_snapshot_digest"], event["dependency_manifest_fingerprint"])
             if expected is None or (expected[:3] + expected[4:]) != observed:
                 raise ValueError("effect result must uniquely match an earlier effect attempt")
-            attempted_effects.pop(attempt_key)
             permit_id = payload["permit_id"]
+            if expected[3] == "BYPASS":
+                if event["authority_reference"] is not None or permit_id is not None:
+                    raise ValueError("bypass effect outcome must not fabricate Authority validation")
+            elif event["condition"] == "authority" and event["authority_reference"] is None:
+                raise ValueError("non-bypass Authority effect outcome requires authority_reference")
+            attempted_effects.pop(attempt_key)
             if permit_id is not None and permit_id in issued_permits and expected[3] == "NORMAL":
                 binding = issued_permits[permit_id]
                 issued_permits[permit_id] = (*binding[:5], "consumed")

@@ -19,6 +19,12 @@ binds protocol, scenario digest, condition, seed, opportunity, logical instant,
 scenario commitment, label-rule identity, source-fixture digest, and independent
 labels before subject outcome. Missing labels fail closed; subject outcomes are
 never used as oracle fallback.
+Those records are additionally committed by a canonical
+`eac-evaluator-label-registry/1` manifest. Its externally approved digest must
+be admission-checked before the subject starts and is bound into every event
+and `AnalysisBundle`. A fresh post-outcome manifest or label record cannot
+match that pre-launch digest. The concrete digest remains
+`REQUIRES_PREREGISTRATION_APPROVAL` until materialized fixtures are approved.
 
 ## Frozen inputs
 
@@ -143,9 +149,14 @@ detached runtime premanifest, and content-addressed authority/evaluator
 references. Permit and effect result events must link to earlier issue/attempt
 events. Reference records are canonical content-addressed objects bound to the
 same run, scenario, condition, seed, MatrixCell, runtime premanifest, and event
-sequence. Permit lifecycle validation rejects duplicate issuance and prevents
-stale/rejected permits from producing allowed effects. Every complete stream
-has exactly one final terminal event.
+sequence. Permit lifecycle validation rejects duplicate issuance and derives
+normal, stale, replay, and bypass attempts from the observed lifecycle. The
+runtime contract is expected to reject stale/replayed/bypassed effects, but the
+benchmark schema intentionally permits a bound violation outcome to be
+recorded and measured. A true Authority `BYPASS` carries no permit,
+permit-validation reference, or fabricated Authority reference; its subsequent
+effect outcome remains linked through the ExactRequest attempt. Every complete
+stream has exactly one final terminal event.
 
 Three layers are reported independently. Runtime integrity includes exact BAER,
 SPER, replay, supported-path bypass, dependency-scoped invalidation correctness,
@@ -167,7 +178,14 @@ overhead. In particular:
   rates;
 * independent adequacy and utility are never inferred from runtime integrity.
 
-Metrics consume only canonical `eac-analysis-run-summary/1` artifacts produced
+Condition-specific metric entry points require homogeneous-condition input and
+fail closed on mixed Baseline/Advisory/Authority bundles. The aggregate API
+returns only an explicit `stratified_by_condition` result; implicit pooling is
+forbidden. H1 uses Authority integrity only, H2 compares Advisory and Authority,
+and H7 compares recovery success across all three conditions on paired
+P1/P2/P3/P5/P6 units.
+
+Metrics consume only canonical `eac-analysis-run-summary/2` artifacts produced
 by the deterministic reducer from a validated stream and its bound evaluator
 and reference registries. Metric ingestion accepts only the original immutable
 `AnalysisBundle`, revalidates it, and reruns the reducer; caller-supplied or
@@ -176,11 +194,20 @@ and adequacy denominators are opportunity-level; utility success is exactly one
 observation per non-infrastructure run, with goal completion separately derived
 from the terminal event.
 
-A zero denominator is `NA`. Recovery classes are `OBSERVE`, `CLARIFY`,
+A zero denominator is `NA`. Recovery attempt and recovery success are distinct.
+A recovery action is an attempt only. Success requires that action to be
+followed by task completion or by a later independently adequate executable
+effect path (and, for Advisory/Authority, a later admissible EAdm on that path).
+`CLARIFY` followed by a continuing block therefore scores as failure.
+Observation, clarification, and communication counts come from actual
+`recovery_action` identities `OBSERVE`, `CLARIFY`, and `COMMUNICATE`; evidence
+exposure is not counted as an observation action. Recovery classes are `OBSERVE`, `CLARIFY`,
 `COMMUNICATE`, `WAIT`, `ALTERNATE_ACTION`, `REPLAN`, `RESOLVE_CONFLICT`,
 `ABANDON`, `NO_RECOVERY`, and `UNKNOWN`. Terminal run statuses distinguish task
 failure, epistemic block, EnvPre rejection, infrastructure failure, timeout,
 protocol error, and completion.
+`NO_RECOVERY` and `UNKNOWN` are scenario/outcome labels, not executable action
+identities, and are therefore forbidden on a `recovery_action` event.
 
 ## Hypotheses and analysis
 
@@ -203,7 +230,8 @@ H8: Authority incurs measurable action, token, latency, and runtime overhead.
 H9: Normal-condition success and overhead are reported independently against a bound that remains REQUIRES_PREREGISTRATION_APPROVAL.
 
 The primary comparisons are baseline/advisory, baseline/authority, and
-advisory/authority. Binary proportions use Wilson intervals; paired binary
+advisory/authority. Recovery success is a registered paired binary comparison
+for H7. Binary proportions use Wilson intervals; paired binary
 comparisons use McNemar. Bootstrap uses exactly 10000 resamples and the fixed
 `SHA256_COUNTER` seed `51120260814`. Multiple testing uses
 Benjamini-Hochberg at `q = 0.05`. JSON contains no floating-point numbers;
@@ -224,7 +252,9 @@ Registry URI, approval record, operator, execution commit, and execution time
 remain explicit placeholders. Approval state is
 `REQUIRES_PREREGISTRATION_APPROVAL`; no execution may begin until it is
 replaced by an approved record and the no-execution flags are changed through
-the authorized preregistration process.
+the authorized preregistration process. This approval must include the concrete
+evaluator-label registry digest; a manifest without the independently approved
+pre-launch digest is rejected.
 
 ## Canonical JSON and detached digests
 

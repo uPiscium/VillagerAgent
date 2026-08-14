@@ -10,6 +10,7 @@ import tarfile
 import pytest
 
 from benchmarks.eac511 import cli as eac_cli
+from benchmarks.eac511 import oracle as eac_oracle
 from benchmarks.eac511.equivalence import (baseline_snapshot_digest,
                                            compare_paired_pre_gate, compare_pre_gate,
                                            pre_gate_snapshot_digest)
@@ -20,10 +21,12 @@ from benchmarks.eac511.fixtures import _authority
 from benchmarks.eac511.identity import (FROZEN_510, detached_digest, semantic_digest, verify_detached,
                                         verify_frozen_runtime_inputs)
 from benchmarks.eac511.matrix import expand_matrix, matrix_cell_digest, paired_cell_equal
-from benchmarks.eac511.metrics import analysis_bundle, calculate_metrics, reduce_run
+from benchmarks.eac511.metrics import (analysis_bundle, calculate_metrics, reduce_run,
+                                       runtime_integrity_metrics, task_utility_metrics)
 from benchmarks.eac511.model import Condition, PerturbationFamily, SEEDS, Tier
 from benchmarks.eac511.oracle import (EvaluatorOracle, evaluator_record_digest,
-                                      label_rule_identity, sanitize_publication)
+                                      evaluator_registry_manifest, label_rule_identity,
+                                      sanitize_publication, validate_evaluator_registry)
 from benchmarks.eac511.perturbations import apply_operator, perturbation_plan
 from benchmarks.eac511.protocol import (
     EVENT_PAYLOAD_REQUIRED, EVENT_SCHEMA_PATH, EVENT_TYPES, HYPOTHESES,
@@ -246,6 +249,37 @@ def _stream_reference_records(last_sequence: int,
             for digest, record in _reference_records(sequence, condition).items()}
 
 
+def _evaluator_registry(sequence: int = 0,
+                        condition: Condition = Condition.AUTHORITY) -> dict[str, object]:
+    conditions = tuple(Condition) if sequence == 0 else (condition,)
+    records = [next(record for record in _reference_records(sequence, item).values()
+                    if record.get("schema_version") == "eac-evaluator-record/1")
+               for item in conditions]
+    return evaluator_registry_manifest(records)
+
+
+def _registry_kwargs(sequence: int = 0,
+                     condition: Condition = Condition.AUTHORITY) -> dict[str, object]:
+    registry = _evaluator_registry(sequence, condition)
+    return {"evaluator_registry": registry,
+            "approved_evaluator_registry_digest": registry["manifest_digest"]}
+
+
+def _approve_registry(monkeypatch, registry: dict[str, object]) -> None:
+    protocol = protocol_document()
+    protocol["preregistration"] = {
+        **protocol["preregistration"],
+        "evaluator_label_registry_digest": registry["manifest_digest"],
+    }
+    protocol["detached_artifact_sha256"] = detached_digest(protocol)
+    monkeypatch.setattr(eac_oracle, "load_committed_protocol", lambda: protocol)
+
+
+@pytest.fixture(autouse=True)
+def _approve_default_test_registry(monkeypatch) -> None:
+    _approve_registry(monkeypatch, _evaluator_registry())
+
+
 def test_p2_expected_transitions_follow_frozen_support_policy() -> None:
     authority, request, proposition, _, _ = _authority()
     negative = Proposition(proposition.key, False)
@@ -366,6 +400,7 @@ def _event(index: int, event_type: str,
         "dependency_manifest_fingerprint": "c" * 64 if semantic else None,
         "opportunity_id": ("opportunity-v1" if semantic or is_oracle or event_type in {
             "actor_visible_evidence_exposed", "recovery_action"} else None),
+        "evaluator_registry_digest": _evaluator_registry(0, condition)["manifest_digest"],
     }
     if condition is Condition.BASELINE and semantic:
         for field in ("epre_identity", "epre_version", "support_policy", "source_profile",
@@ -392,7 +427,7 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
          _event(2, "epre_opportunity"), _event(3, "eadm_evaluated"),
          _event(4, "run_terminal")],
         cell=cell, scenario=scenario, pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(4))
+        reference_records=_stream_reference_records(4), **_registry_kwargs())
     assert len(stream) == 5
     missing = _event(0, EVENT_TYPES[0])
     del missing["payload"]
@@ -400,8 +435,8 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
         normalize_event(missing)
     with pytest.raises(ValueError, match="contiguous"):
         validate_event_stream([_event(1, EVENT_TYPES[0])], cell=cell, scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=_stream_reference_records(1))
+                               pre_gate_snapshots=_snapshot_registry(scenario),
+                               reference_records=_stream_reference_records(1), **_registry_kwargs())
     leaked = _event(0, EVENT_TYPES[0])
     leaked["visibility"] = "PUBLIC_SANITIZED"
     leaked["payload"]["oracleLabel"] = "secret"
@@ -447,7 +482,8 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
     validated_baseline = validate_event_stream(
         baseline_stream, cell=baseline_cell, scenario=scenario,
         pre_gate_snapshots=_baseline_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(3, Condition.BASELINE))
+        reference_records=_stream_reference_records(3, Condition.BASELINE),
+        **_registry_kwargs(condition=Condition.BASELINE))
     assert len(validated_baseline) == 4
     baseline_snapshot = next(iter(_baseline_snapshot_registry(scenario).values()))
     assert not {"epre", "policy", "source_profile", "witness", "eadm",
@@ -459,12 +495,12 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
         event["pre_gate_snapshot_digest"] = "8" * 64
     with pytest.raises(ValueError, match="snapshot"):
         validate_event_stream(wrong_snapshot, cell=cell, scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=_stream_reference_records(4))
+                               pre_gate_snapshots=_snapshot_registry(scenario),
+                               reference_records=_stream_reference_records(4), **_registry_kwargs())
     with pytest.raises(ValueError, match="canonical"):
         validate_event_stream(stream, cell=replace(cell, run_id="forged"), scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=_stream_reference_records(4))
+                               pre_gate_snapshots=_snapshot_registry(scenario),
+                               reference_records=_stream_reference_records(4), **_registry_kwargs())
 
     authority_lifecycle = [_event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
                            _event(2, "permit_issued"), _event(3, "effect_attempted"),
@@ -472,20 +508,20 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
     assert len(validate_event_stream(
         authority_lifecycle, cell=cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(5))) == 6
+        reference_records=_stream_reference_records(5), **_registry_kwargs())) == 6
     unresolved = authority_lifecycle[:4] + [_event(4, "run_terminal")]
     with pytest.raises(ValueError, match="unresolved effect attempts"):
         validate_event_stream(unresolved, cell=cell, scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=_stream_reference_records(4))
+                               pre_gate_snapshots=_snapshot_registry(scenario),
+                               reference_records=_stream_reference_records(4), **_registry_kwargs())
     contradictory = [_event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
                      _event(2, "permit_issued"), _event(3, "effect_attempted"),
                      _event(4, "effect_allowed"), _event(5, "effect_rejected"),
                      _event(6, "run_terminal")]
     with pytest.raises(ValueError, match="uniquely match"):
         validate_event_stream(contradictory, cell=cell, scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=_stream_reference_records(6))
+                               pre_gate_snapshots=_snapshot_registry(scenario),
+                               reference_records=_stream_reference_records(6), **_registry_kwargs())
     unhashable = _event(0, "permit_issued")
     unhashable["payload"]["permit_id"] = []
     with pytest.raises(ValueError, match="string or null"):
@@ -495,8 +531,8 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
                         _event(4, "run_terminal")]
     with pytest.raises(ValueError, match="issued twice"):
         validate_event_stream(duplicate_permit, cell=cell, scenario=scenario,
-                              pre_gate_snapshots=_snapshot_registry(scenario),
-                              reference_records=_stream_reference_records(4))
+                               pre_gate_snapshots=_snapshot_registry(scenario),
+                               reference_records=_stream_reference_records(4), **_registry_kwargs())
     issuance_rejection = [_event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
                           _event(2, "permit_rejected"), _event(3, "run_terminal")]
     issuance_rejection[1]["payload"]["admissible"] = False
@@ -515,7 +551,7 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
     assert len(validate_event_stream(
         issuance_rejection, cell=cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=issuance_references)) == 4
+        reference_records=issuance_references, **_registry_kwargs())) == 4
 
     stale_lifecycle = [_event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
                        _event(2, "permit_issued"), _event(3, "permit_staled"),
@@ -532,13 +568,49 @@ def test_event_contract_requires_identity_visibility_and_order() -> None:
     assert len(validate_event_stream(
         stale_lifecycle, cell=cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=stale_references)) == 7
+        reference_records=stale_references, **_registry_kwargs())) == 7
     stale_allowed = list(stale_lifecycle)
     stale_allowed[5] = _event(5, "effect_allowed")
     assert len(validate_event_stream(
         stale_allowed, cell=cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=stale_references)) == 7
+        reference_records=stale_references, **_registry_kwargs())) == 7
+
+    bypass_lifecycle = [_event(0, "oracle_state_changed"),
+                        _event(1, "epre_opportunity"),
+                        _event(2, "eadm_evaluated"),
+                        _event(3, "effect_attempted"),
+                        _event(4, "effect_allowed"),
+                        _event(5, "run_terminal")]
+    bypass_lifecycle[3]["payload"].update({
+        "attempt_class": "BYPASS", "permit_id": None,
+        "permit_validation_reference": None})
+    bypass_lifecycle[3]["authority_reference"] = None
+    bypass_lifecycle[4]["payload"]["permit_id"] = None
+    bypass_lifecycle[4]["authority_reference"] = None
+    assert len(validate_event_stream(
+        bypass_lifecycle, cell=cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(5), **_registry_kwargs())) == 6
+    bypass_bundle = analysis_bundle(
+        bypass_lifecycle, cell=cell, scenario=scenario,
+        pre_gate_snapshots=_snapshot_registry(scenario),
+        reference_records=_stream_reference_records(5), **_registry_kwargs())
+    assert runtime_integrity_metrics([bypass_bundle])["bypass"] == {
+        "numerator": 1, "denominator": 1, "rate": 1.0}
+    fabricated = [dict(event) for event in bypass_lifecycle]
+    fabricated[3] = {**fabricated[3], "authority_reference": next(
+        digest for digest, record in _reference_records(3).items()
+        if record.get("decision") == "allowed")}
+    with pytest.raises(ValueError, match="must not claim Authority"):
+        validate_event_stream(
+            fabricated, cell=cell, scenario=scenario,
+            pre_gate_snapshots=_snapshot_registry(scenario),
+            reference_records=_stream_reference_records(5), **_registry_kwargs())
+    no_recovery = _event(0, "recovery_action")
+    no_recovery["payload"]["recovery_class"] = "NO_RECOVERY"
+    with pytest.raises(ValueError, match="actual recovery attempt"):
+        normalize_event(no_recovery)
 
 
 def test_advisory_authority_equivalence_stops_at_gate() -> None:
@@ -569,7 +641,7 @@ def test_advisory_authority_equivalence_stops_at_gate() -> None:
                                 advisory, changed_manifest)
 
 
-def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
+def test_metrics_keep_integrity_adequacy_and_utility_independent(monkeypatch) -> None:
     scenario = load_committed_scenarios()[0]
     cells = expand_matrix(load_committed_scenarios())
     authority_cell = next(cell for cell in cells if cell.scenario_id == scenario.scenario_id and
@@ -585,7 +657,7 @@ def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
     authority_summary = reduce_run(
         authority_events, cell=authority_cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(6))
+        reference_records=_stream_reference_records(6), **_registry_kwargs())
     baseline_events = [
         _event(0, "oracle_state_changed", Condition.BASELINE),
         _event(1, "effect_attempted", Condition.BASELINE),
@@ -595,29 +667,34 @@ def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
     baseline_summary = reduce_run(
         baseline_events, cell=baseline_cell, scenario=scenario,
         pre_gate_snapshots=_baseline_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(3, Condition.BASELINE))
+        reference_records=_stream_reference_records(3, Condition.BASELINE),
+        **_registry_kwargs(condition=Condition.BASELINE))
     assert authority_summary == reduce_run(
         authority_events, cell=authority_cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(6))
+        reference_records=_stream_reference_records(6), **_registry_kwargs())
     authority_bundle = analysis_bundle(
         authority_events, cell=authority_cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(6))
+        reference_records=_stream_reference_records(6), **_registry_kwargs())
     baseline_bundle = analysis_bundle(
         baseline_events, cell=baseline_cell, scenario=scenario,
         pre_gate_snapshots=_baseline_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(3, Condition.BASELINE))
+        reference_records=_stream_reference_records(3, Condition.BASELINE),
+        **_registry_kwargs(condition=Condition.BASELINE))
     metrics = calculate_metrics([authority_bundle, baseline_bundle])
-    assert metrics["epistemic_adequacy"]["false_positive_admissibility_rate"] == {
+    assert metrics["implicit_pooling"] is False
+    assert metrics["stratified_by_condition"]["authority"]["epistemic_adequacy"][
+        "false_positive_admissibility_rate"] == {
         "numerator": 1, "denominator": 1, "rate": 1.0}
-    assert metrics["epistemic_adequacy"]["eadm_denominator"] == 1
-    assert metrics["oracle_unsupported"]["attempt"] == {
+    assert metrics["stratified_by_condition"]["authority"]["epistemic_adequacy"][
+        "eadm_denominator"] == 1
+    assert metrics["stratified_by_condition"]["baseline"]["oracle_unsupported"]["attempt"] == {
         "numerator": 1, "denominator": 1, "rate": 1.0}
-    assert metrics["oracle_unsupported"]["effect"] == {
+    assert metrics["stratified_by_condition"]["baseline"]["oracle_unsupported"]["effect"] == {
         "numerator": 1, "denominator": 1, "rate": 1.0}
-    assert metrics["task_utility"]["success"] == {
-        "numerator": 2, "denominator": 2, "rate": 1.0}
+    assert metrics["stratified_by_condition"]["authority"]["task_utility"]["success"] == {
+        "numerator": 1, "denominator": 1, "rate": 1.0}
     mutated = {**authority_summary.as_mapping(), "effect_executed": True}
     with pytest.raises(TypeError, match="AnalysisBundle"):
         calculate_metrics([mutated])
@@ -643,7 +720,7 @@ def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
     replay_summary = reduce_run(
         replay_events, cell=authority_cell, scenario=scenario,
         pre_gate_snapshots=_snapshot_registry(scenario),
-        reference_records=_stream_reference_records(8))
+        reference_records=_stream_reference_records(8), **_registry_kwargs())
     assert replay_summary.as_mapping()["opportunities"][0]["replay_attempt"] is True
     assert replay_summary.as_mapping()["opportunities"][0]["replay_escape"] is False
     tampered_references = _stream_reference_records(6)
@@ -653,17 +730,23 @@ def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
     with pytest.raises(ValueError, match="digest mismatch"):
         reduce_run(authority_events, cell=authority_cell, scenario=scenario,
                    pre_gate_snapshots=_snapshot_registry(scenario),
-                   reference_records=tampered_references)
+                   reference_records=tampered_references, **_registry_kwargs())
     late_oracle_events = [
         _event(0, "epre_opportunity"), _event(1, "eadm_evaluated"),
         _event(2, "permit_issued"), _event(3, "effect_attempted"),
         _event(4, "effect_allowed"), _event(5, "oracle_state_changed"),
         _event(6, "run_terminal"),
     ]
+    late_registry = _evaluator_registry(5)
+    _approve_registry(monkeypatch, late_registry)
+    for event in late_oracle_events:
+        event["evaluator_registry_digest"] = late_registry["manifest_digest"]
     with pytest.raises(ValueError, match="precede"):
         reduce_run(late_oracle_events, cell=authority_cell, scenario=scenario,
                    pre_gate_snapshots=_snapshot_registry(scenario),
-                   reference_records=_stream_reference_records(6))
+                   reference_records=_stream_reference_records(6),
+                   evaluator_registry=late_registry,
+                   approved_evaluator_registry_digest=late_registry["manifest_digest"])
     fixture_mismatch_events = [dict(event) for event in authority_events]
     fixture_mismatch_events[0] = {**fixture_mismatch_events[0],
                                   "payload": dict(fixture_mismatch_events[0]["payload"])}
@@ -675,10 +758,60 @@ def test_metrics_keep_integrity_adequacy_and_utility_independent() -> None:
     mismatch_references[mismatch_oracle["record_digest"]] = mismatch_oracle
     fixture_mismatch_events[0]["evaluator_reference"] = mismatch_oracle["record_digest"]
     fixture_mismatch_events[0]["payload"]["oracle_record_digest"] = mismatch_oracle["record_digest"]
+    mismatch_registry = evaluator_registry_manifest([mismatch_oracle])
+    _approve_registry(monkeypatch, mismatch_registry)
+    for event in fixture_mismatch_events:
+        event["evaluator_registry_digest"] = mismatch_registry["manifest_digest"]
     with pytest.raises(ValueError, match="different materialized fixture"):
         reduce_run(fixture_mismatch_events, cell=authority_cell, scenario=scenario,
                    pre_gate_snapshots=_snapshot_registry(scenario),
-                   reference_records=mismatch_references)
+                   reference_records=mismatch_references,
+                   evaluator_registry=mismatch_registry,
+                   approved_evaluator_registry_digest=mismatch_registry["manifest_digest"])
+
+
+def test_recovery_requires_success_after_an_attempt_and_actions_use_frozen_taxonomy() -> None:
+    scenario = load_committed_scenarios()[0]
+    cell = next(cell for cell in expand_matrix(load_committed_scenarios())
+                if cell.scenario_id == scenario.scenario_id and cell.seed == 11 and
+                cell.condition is Condition.AUTHORITY)
+
+    def bundle(*, success: bool, recovery_class: str):
+        events = [_event(0, "oracle_state_changed"), _event(1, "epre_opportunity"),
+                  _event(2, "eadm_evaluated"), _event(3, "recovery_action"),
+                  _event(4, "run_terminal")]
+        events[3]["payload"]["recovery_class"] = recovery_class
+        events[4]["payload"]["task_success"] = success
+        events[4]["payload"]["completed_task_goals"] = int(success)
+        events[4]["payload"]["run_status"] = "COMPLETED" if success else "EPISTEMIC_BLOCK"
+        return analysis_bundle(
+            events, cell=cell, scenario=scenario,
+            pre_gate_snapshots=_snapshot_registry(scenario),
+            reference_records=_stream_reference_records(4), **_registry_kwargs())
+
+    failed = task_utility_metrics([bundle(success=False, recovery_class="CLARIFY")])
+    assert failed["recovery"] == {"numerator": 0, "denominator": 1, "rate": 0.0}
+    assert failed["clarification_actions"] == 1
+    assert failed["observation_actions"] == 0
+    succeeded = task_utility_metrics([bundle(success=True, recovery_class="OBSERVE")])
+    assert succeeded["recovery"] == {"numerator": 1, "denominator": 1, "rate": 1.0}
+    assert succeeded["observation_actions"] == 1
+
+
+def test_evaluator_registry_is_an_external_prelaunch_commitment() -> None:
+    approved = _evaluator_registry()
+    assert validate_evaluator_registry(
+        approved, approved_manifest_digest=approved["manifest_digest"])["approval_status"] == \
+        "PRELAUNCH_APPROVED"
+    record = next(record for record in _reference_records().values()
+                  if record.get("schema_version") == "eac-evaluator-record/1")
+    relabeled = {**record, "justification_adequate": True, "record_digest": "0" * 64}
+    relabeled["record_digest"] = evaluator_record_digest(relabeled)
+    post_outcome_manifest = evaluator_registry_manifest([relabeled])
+    with pytest.raises(ValueError, match="pre-launch approved digest"):
+        validate_evaluator_registry(
+            post_outcome_manifest,
+            approved_manifest_digest=approved["manifest_digest"])
 
 
 def test_statistics_are_deterministic_and_preregistered() -> None:
@@ -714,13 +847,19 @@ def test_statistics_are_deterministic_and_preregistered() -> None:
     for condition, value in (("baseline", 0), ("advisory", 1), ("authority", 2)):
         events = event_sets[condition]
         events[-1]["payload"]["llm_calls"] = value
+        events[-1]["payload"].update({
+            "run_status": "EPISTEMIC_BLOCK", "task_success": False,
+            "completed_task_goals": 0})
         cell = selected[condition]
         bundles.append(analysis_bundle(
             events, cell=cell, scenario=scenario,
             pre_gate_snapshots=(_baseline_snapshot_registry(scenario)
                                 if condition == "baseline" else _snapshot_registry(scenario)),
             reference_records=_stream_reference_records(
-                len(events) - 1, Condition(condition))))
+                len(events) - 1, Condition(condition)),
+            **_registry_kwargs(condition=Condition(condition))))
+    with pytest.raises(ValueError, match="homogeneous-condition"):
+        runtime_integrity_metrics(bundles[1:])
     with pytest.raises(ValueError, match="pre-gate snapshots"):
         compare_conditions(bundles, "llm_calls")
     comparisons = compare_conditions(
@@ -729,6 +868,12 @@ def test_statistics_are_deterministic_and_preregistered() -> None:
                           selected["authority"], scenario, _baseline_snapshot(scenario),
                           _pre_gate_snapshot(scenario), _pre_gate_snapshot(scenario))])
     assert comparisons["advisory-vs-authority"]["estimate"] == 1.0
+    recovery_comparisons = compare_conditions(
+        bundles, "recovery_success",
+        paired_pre_gate=[(selected["baseline"], selected["advisory"],
+                          selected["authority"], scenario, _baseline_snapshot(scenario),
+                          _pre_gate_snapshot(scenario), _pre_gate_snapshot(scenario))])
+    assert recovery_comparisons["baseline-vs-authority"]["risk_difference"] == 0.0
     changed_baseline = {**_baseline_snapshot(scenario), "initial_state_digest": "9" * 64}
     with pytest.raises(ValueError, match="Baseline control snapshot differs"):
         compare_conditions(

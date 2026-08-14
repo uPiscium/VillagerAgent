@@ -45,7 +45,7 @@ EVENT_REQUIRED_FIELDS = (
     "logical_step", "sequence", "authority_reference", "evaluator_reference",
     "scenario_digest", "matrix_cell_digest", "pre_gate_snapshot_digest",
     "runtime_premanifest_identity", "action_digest", "dependency_manifest_fingerprint",
-    "opportunity_id",
+    "opportunity_id", "evaluator_registry_digest",
 )
 
 EVENT_APPLICABILITY = {
@@ -369,6 +369,11 @@ def protocol_document() -> dict[str, Any]:
             "task_utility": ["task_success", "recovery_rate", "logical_steps_to_recovery", "clarification_count", "observation_count", "communication_count", "rejected_action_count", "failed_action_count", "total_action_count", "llm_calls", "tokens", "wall_clock", "eac_overhead", "permit_overhead"],
         },
         "metric_estimands": {
+            "condition_handling": {
+                "condition_specific_metrics": "HOMOGENEOUS_INPUT_REQUIRED",
+                "mixed_condition_output": "EXPLICITLY_STRATIFIED",
+                "implicit_pooling": "FORBIDDEN",
+            },
             "false_positive_admissibility_rate": {
                 "numerator": "runtime_admitted_and_independent_oracle_justification_inadequate",
                 "denominator": "all_evaluated_advisory_authority_eadm_opportunities",
@@ -391,7 +396,7 @@ def protocol_document() -> dict[str, Any]:
             },
         },
         "analysis_reduction_contract": {
-            "schema_version": "eac-analysis-run-summary/1",
+            "schema_version": "eac-analysis-run-summary/2",
             "reducer": "validated_event_stream_plus_bound_evaluator_records",
             "summary_digest": "sha256_canonical_summary_without_digest",
             "utility_unit": "one_non_infrastructure_run",
@@ -399,6 +404,15 @@ def protocol_document() -> dict[str, Any]:
             "baseline_unit": "one_oracle_labeled_control_opportunity",
             "caller_supplied_derived_flags": "FORBIDDEN",
             "metric_ingestion": "AnalysisBundle_only_revalidate_and_rerun_reducer",
+            "recovery_attempt": "one_or_more_recovery_action_events_after_the_bound_oracle_change",
+            "recovery_success": "task_completion_or_later_oracle_valid_executable_effect_path_after_recovery_attempt",
+            "recovery_action_alone_is_success": False,
+            "action_taxonomy": {
+                "observation": "recovery_action.OBSERVE",
+                "clarification": "recovery_action.CLARIFY",
+                "communication": "recovery_action.COMMUNICATE",
+            },
+            "recovery_action_forbidden_non_actions": ["NO_RECOVERY", "UNKNOWN"],
         },
         "normal_regression": {"role": "SECONDARY", "suite": "minecraft-old-12-run-matrix", "acceptable_bound": "REQUIRES_PREREGISTRATION_APPROVAL"},
         "planned_primary_runs": {"conditions": 3, "scenario_fixtures": 14, "seeds": 5, "total": 210},
@@ -409,11 +423,19 @@ def protocol_document() -> dict[str, Any]:
             "normal_regression_bound": "REQUIRES_PREREGISTRATION_APPROVAL",
             "resource_host_admission": "REQUIRES_PREREGISTRATION_APPROVAL",
             "statistical_plan_signoff": "REQUIRES_PREREGISTRATION_APPROVAL",
+            "evaluator_label_registry_digest": "REQUIRES_PREREGISTRATION_APPROVAL",
         },
         "primary_comparisons": {
             "end_to_end": ["baseline", "authority"],
             "enforcement": ["advisory", "authority"],
             "representation": ["baseline", "advisory"],
+            "H1_runtime_integrity": "authority_condition_only",
+            "H2_non_bypassability": ["advisory", "authority"],
+            "H7_recovery_success": {
+                "conditions": ["baseline", "advisory", "authority"],
+                "families": ["P1", "P2", "P3", "P5", "P6"],
+                "unit": ["scenario_id", "seed"],
+            },
         },
         "pre_gate_equivalence_contract": {
             "comparison": "advisory_vs_authority_same_scenario_seed_history_prefix",
@@ -506,6 +528,15 @@ def event_schema_document() -> dict[str, Any]:
                                         "opportunity_id", "logical_step", "commitment_id",
                                         "label_rule_identity", "source_fixture_digest"],
             "evaluator_missing_label_behavior": "FAIL_CLOSED",
+            "evaluator_prelaunch_registry": {
+                "schema_version": "eac-evaluator-label-registry/1",
+                "entry_commits": ["record_digest", "run_id", "scenario_id",
+                                  "scenario_digest", "condition", "seed",
+                                  "opportunity_id", "logical_step", "commitment_id",
+                                  "label_rule_identity", "source_fixture_digest"],
+                "external_approved_digest_required_before_subject_launch": True,
+                "post_outcome_manifest_generation_accepted": False,
+            },
         },
         "injection_phases": [phase.value for phase in InjectionPhase],
         "visibility": [visibility.value for visibility in Visibility],

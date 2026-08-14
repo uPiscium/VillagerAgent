@@ -9,7 +9,7 @@ from .model import MatrixCell, Scenario
 from .metrics import AnalysisBundle, reduce_analysis_bundles
 
 PREREGISTERED_SEED = 51120260814
-_BINARY_COMPARISON_METRICS = frozenset({"task_success"})
+_BINARY_COMPARISON_METRICS = frozenset({"task_success", "recovery_success"})
 _COUNT_LATENCY_COMPARISON_METRICS = frozenset({
     "task_goals", "completed_task_goals", "llm_calls", "tokens", "wall_clock_ms",
     "eac_overhead_us", "permit_overhead_us", "total_actions", "rejected_actions",
@@ -104,12 +104,22 @@ def compare_conditions(
     if paired_pre_gate is None:
         raise ValueError("paired analysis requires canonical pre-gate snapshots")
     summaries = [summary.as_mapping() for summary in reduce_analysis_bundles(bundles)]
-    if any(summary["infrastructure_failure"] or summary["run_status"] != "COMPLETED"
-           for summary in summaries):
-        raise ValueError("paired analysis requires completed non-infrastructure runs")
+    if any(summary["infrastructure_failure"] for summary in summaries):
+        raise ValueError("paired analysis excludes only classified infrastructure failures")
     observations = {condition: [summary for summary in summaries
                                 if summary["condition"] == condition]
                     for condition in ("baseline", "advisory", "authority")}
+    if metric == "recovery_success":
+        allowed_families = {"P1", "P2", "P3", "P5", "P6"}
+        allowed_keys = {(bundle.cell.scenario_id, bundle.cell.seed)
+                        for bundle in bundles
+                        if bundle.scenario.family.value in allowed_families}
+        observations = {condition: [summary for summary in rows
+                                    if (summary["scenario_id"], summary["seed"]) in allowed_keys]
+                        for condition, rows in observations.items()}
+        if any(not summary["recovery_required"] for rows in observations.values()
+               for summary in rows):
+            raise ValueError("H7 families require a recovery-labeled opportunity")
     if any(not rows for rows in observations.values()):
         raise ValueError("paired analysis requires all three conditions")
     bundle_index = {(bundle.cell.scenario_id, bundle.cell.seed,
