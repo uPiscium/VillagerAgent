@@ -1,0 +1,47 @@
+{
+  "artifact_id": "minecraft-k6-cell-trace-schema",
+  "artifact_version": 1,
+  "detached_artifact_sha256": "a25b0ef9762be219b3d0f6b6086106985e38e27e172de4e941bb695bc4222cb3",
+  "schema_version": "minecraft-k6-cell-trace/1",
+  "required_sections": [
+    "cell",
+    "semantic_bindings",
+    "r_p",
+    "r_d",
+    "r_e",
+    "actor_scope",
+    "mutation",
+    "exact_action",
+    "no_reconsideration",
+    "s3",
+    "mechanism_analysis"
+  ],
+  "exact_action_fields": [
+    "candidate_id",
+    "attempt_id",
+    "exact_request_digest",
+    "action",
+    "arguments",
+    "target"
+  ],
+  "phase_fields": {
+    "r_p": ["candidate_id", "attempt_id", "exact_request_digest", "action", "arguments", "target", "EAdm", "authority_epoch", "witness_root_ids", "dependency_ids"],
+    "r_d": ["current_EAdm", "authority_epoch", "reasons", "mutation_type", "mutation_dependency_ids", "intersecting_dependency_ids", "relevant_action_dependency_changed", "permit_or_shadow_fresh"],
+    "r_e": ["candidate_id", "attempt_id", "exact_request_digest", "action", "arguments", "target", "current_EAdm", "authority_epoch_before_execution", "exact_action_submitted", "permit_or_shadow_fresh", "EnvPre_oracle", "SecPre_oracle", "execution_allowed", "rejection_reason", "native_callable_reached"]
+  },
+  "s3_fields": [
+    "affected_actor",
+    "unaffected_actor",
+    "unaffected_current_EAdm",
+    "unaffected_r_p",
+    "unaffected_r_d",
+    "unaffected_r_e",
+    "unaffected_same_prepared_object",
+    "unaffected_exact_action_preserved",
+    "unaffected_mechanism_analysis",
+    "cross_actor_dependency_leak",
+    "cross_actor_state_change_leak"
+  ],
+  "ratio_encoding": {"numerator": "integer", "denominator": "integer"},
+  "statistical_fields_forbidden": ["confidence_interval", "p_value", "iid_standard_error"]
+}
