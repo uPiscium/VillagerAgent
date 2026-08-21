@@ -1,0 +1,94 @@
+{
+  "artifact_id": "minecraft-k6-action-inventory",
+  "artifact_version": 1,
+  "detached_artifact_sha256": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+  "classification_binding": {
+    "artifact_id": "minecraft-preconditions",
+    "artifact_version": 1,
+    "detached_artifact_sha256": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001"
+  },
+  "iid_samples": false,
+  "inventory_census": true,
+  "items": [
+    {
+      "inventory_id": "I1",
+      "action_identity": "MineBlock",
+      "action_version": 1,
+      "request_arguments": {"x": 1, "y": 2, "z": 3},
+      "proposition": {
+        "namespace": "minecraft",
+        "predicate": "target_block_present",
+        "argument_fields": ["x", "y", "z"],
+        "arguments": {"x": 1, "y": 2, "z": 3},
+        "temporal_scope": "current"
+      },
+      "declared_env_pre": true,
+      "declared_sec_pre": false,
+      "actor_scope_rule": "acting-player-visible"
+    },
+    {
+      "inventory_id": "I2",
+      "action_identity": "placeBlock",
+      "action_version": 1,
+      "request_arguments": {"item_name": "stone", "x": 1, "y": 2, "z": 3, "facing": "north"},
+      "proposition": {
+        "namespace": "minecraft",
+        "predicate": "placement_target_observed",
+        "argument_fields": ["x", "y", "z"],
+        "arguments": {"x": 1, "y": 2, "z": 3},
+        "temporal_scope": "current"
+      },
+      "declared_env_pre": true,
+      "declared_sec_pre": false,
+      "actor_scope_rule": "acting-player-visible"
+    },
+    {
+      "inventory_id": "I3",
+      "action_identity": "navigateTo",
+      "action_version": 1,
+      "request_arguments": {"x": 1, "y": 2, "z": 3},
+      "proposition": {
+        "namespace": "minecraft",
+        "predicate": "destination_observed",
+        "argument_fields": ["x", "y", "z"],
+        "arguments": {"x": 1, "y": 2, "z": 3},
+        "temporal_scope": "current"
+      },
+      "declared_env_pre": true,
+      "declared_sec_pre": false,
+      "actor_scope_rule": "acting-player-visible"
+    },
+    {
+      "inventory_id": "I4",
+      "action_identity": "attackTarget",
+      "action_version": 1,
+      "request_arguments": {"target_name": "cow"},
+      "proposition": {
+        "namespace": "minecraft",
+        "predicate": "entity_target_observed",
+        "argument_fields": ["target_name"],
+        "arguments": {"target_name": "cow"},
+        "temporal_scope": "current"
+      },
+      "declared_env_pre": true,
+      "declared_sec_pre": false,
+      "actor_scope_rule": "acting-player-visible"
+    },
+    {
+      "inventory_id": "I5",
+      "action_identity": "handoverBlock",
+      "action_version": 1,
+      "request_arguments": {"target_player_name": "Charlie", "item_name": "stone", "item_count": 2},
+      "proposition": {
+        "namespace": "minecraft",
+        "predicate": "recipient_observed",
+        "argument_fields": ["target_player_name"],
+        "arguments": {"target_player_name": "Charlie"},
+        "temporal_scope": "current"
+      },
+      "declared_env_pre": true,
+      "declared_sec_pre": false,
+      "actor_scope_rule": "acting-player-visible"
+    }
+  ]
+}

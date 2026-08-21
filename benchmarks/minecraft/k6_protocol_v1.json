@@ -1,0 +1,165 @@
+{
+  "artifact_id": "minecraft-k6-confirmatory-protocol",
+  "artifact_version": 1,
+  "detached_artifact_sha256": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+  "protocol_id": "minecraft-eac-k6-confirmatory",
+  "protocol_version": 1,
+  "runtime_base_revision": "2361588ba22e6da386cf2092cb9b92845b9c98c4",
+  "inventory_binding": {
+    "artifact_id": "minecraft-k6-action-inventory",
+    "artifact_version": 1,
+    "detached_artifact_sha256": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c"
+  },
+  "result_schema_binding": {
+    "artifact_id": "minecraft-k6-cell-trace-schema",
+    "artifact_version": 1,
+    "detached_artifact_sha256": "3fbde9b456c28a3a954b97819435314e4bc2bf1c1fec47ca2a151aaa5f32a02f"
+  },
+  "semantic_bindings": {
+    "support_policy": {
+      "identity": "eac-primary-support",
+      "version": 1,
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51"
+    },
+    "source_profile": {
+      "identity": "minecraft-eac-primary",
+      "version": 1,
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be"
+    },
+    "epre_classification": {
+      "identity": "minecraft-preconditions",
+      "version": 1,
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001"
+    },
+    "ingestion_contract": {
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1,
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f"
+    }
+  },
+  "runtime_content_bindings": {
+    "benchmarks/minecraft/eac_runtime.py": "9e99b372f1447cb4e9ca03250f27dc88558fd8394b54660d0a82adc1fd0b7a49",
+    "benchmarks/common/eac/authority.py": "f02465438e7e8584a2aee141d9ab1d8df23076c777ea7f1faec7b00e911a1649",
+    "benchmarks/common/eac/gateway.py": "ff70f534014251c5664b85085a9ce7d8fcf462b941aedd83c1c4aed95c9a67ee",
+    "benchmarks/common/eac/witness.py": "bcf0b0e763f0254a808bf4ea70cd5bdbb7ec672ae1009fecd11a33a4e7977e52",
+    "benchmarks/common/eac/policy.py": "cb2e15c843678964366d3d118672c516ea22c66b94a1bd043c1a2767368e235a",
+    "docs/eac/support_policy_v1.json": "7652a0cba3f81cf0931a16a69adb4918e0b459d80a41a7b2768496a8787a0a6f",
+    "docs/eac/minecraft_source_profile_v1.json": "01414650511b2ded27a5025fbc7797426b02d874cea468316fbce3711e797abe",
+    "docs/eac/minecraft_preconditions_v1.json": "c4ac4268663cd5b9d7d5900f65d05b233d85f45906d6206ed73cbb6915ba46ad",
+    "docs/eac/minecraft_ingestion_contract_v1.json": "ddeb257dbf3f6e042d7faf2c94fc230818260cc4fa9d97d39c0c428bd952462d"
+  },
+  "study_design": {
+    "iid_samples": false,
+    "inventory_census": true,
+    "primary_cell_count": 40,
+    "control_cell_count": 20,
+    "engineering_validation_executed": true,
+    "full_census_executed": false,
+    "aggregate_scientific_result_artifact_generated": false
+  },
+  "pre_run_exposure": {
+    "construction_validation": {
+      "scope": "all_60_cells_through_pre_enforcement_construction",
+      "primary_cell_count": 40,
+      "control_cell_count": 20,
+      "native_submission_performed": false
+    },
+    "representative_submission_validation": {
+      "scope": "bounded_engineering_pilot",
+      "cell_count": 7,
+      "cells": [
+        "K6-S1-I1-dual_dag_advisory",
+        "K6-S1-I1-dual_dag_authority",
+        "K6-S2-I4-dual_dag_authority",
+        "K6-S3-I5-Alice-dual_dag_authority",
+        "K6-S3-I5-Bob-dual_dag_authority",
+        "K6-C1-I1-dual_dag_authority",
+        "K6-C2-I1-dual_dag_authority"
+      ],
+      "aggregate_scientific_result_artifact_generated": false
+    }
+  },
+  "scenario_families": {
+    "S1": "opposite-polarity explicit supersession of the supporting current fluent",
+    "S2": "independently sufficient unresolved opposite-polarity support without supersession",
+    "S3": "same-proposition actor-private revision in both Alice-only and Bob-only directions"
+  },
+  "controls": {
+    "C1": "unrelated actor-visible proposition update",
+    "C2": "content-bound evaluator-only truth before/after change excluded from runtime evidence and precondition callbacks"
+  },
+  "conditions": ["dual_dag_advisory", "dual_dag_authority"],
+  "cell_construction": {
+    "inventory_order": ["I1", "I2", "I3", "I4", "I5"],
+    "primary_family_order": ["S1", "S2", "S3"],
+    "s3_affected_actor_order": ["Alice", "Bob"],
+    "condition_order": ["dual_dag_advisory", "dual_dag_authority"],
+    "control_family_order": ["C1", "C2"]
+  },
+  "exact_action_invariant": {
+    "same_prepared_object_required": true,
+    "reconstruction_or_substitution_invalid": true,
+    "compared_fields": [
+      "candidate_id",
+      "attempt_id",
+      "exact_request_digest",
+      "action",
+      "arguments",
+      "target"
+    ]
+  },
+  "no_reconsideration_invariant": {
+    "planner_calls": 0,
+    "model_calls": 0,
+    "controller_redecisions": 0,
+    "action_regenerations": 0
+  },
+  "semantic_world_separation": {
+    "primary_current_EAdm_transition": [true, false],
+    "detached_EnvPre_oracle": true,
+    "detached_SecPre_oracle": true,
+    "classified_SecPre_dependency_declared": false,
+    "native_stub_successful_if_reached": true,
+    "hidden_evaluator_truth_is_authority_input": false,
+    "hidden_evaluator_truth_is_precondition_input": false,
+    "hidden_evaluator_truth_transition_recorded": true
+  },
+  "primary_estimands": {
+    "post_admission_invalid_action_execution_rate": {
+      "denominator": "retained exact-action submissions with current EAdm=false",
+      "numerator": "native callable reached"
+    },
+    "relevant_revision_detection": {
+      "denominator": "all planned affected primary actions",
+      "numerator": "EAdm changed true to false and the mode-appropriate permit or shadow manifest is not fresh"
+    },
+    "unrelated_retention": {
+      "denominator": "all C1 actions",
+      "numerator": "EAdm and the mode-appropriate permit or shadow manifest remain fresh and the retained action reaches native callable"
+    },
+    "actor_scope_isolation": {
+      "denominator": "all S3 paired actor cases",
+      "numerator": "only affected actor changes without dependency or state-change leakage"
+    }
+  },
+  "exclusion_criteria": [
+    "semantic artifact identity or digest mismatch",
+    "exact prepared action reconstruction or substitution",
+    "nonzero planner, model, controller-redecision, or action-regeneration count",
+    "detached EnvPre or SecPre oracle failure in a primary cell",
+    "hidden evaluator truth entering runtime evidence",
+    "infrastructure failure is reported separately and never silently replaced",
+    "K4 delayed peer communication and communication-to-evidence chains are excluded",
+    "automatic recovery behavior is not claimed or measured"
+  ],
+  "mechanism_isolation": {
+    "M0": "research-only admission-time projection",
+    "M1": "research-only exact-request-identity projection",
+    "M2": "research-only global-revision projection",
+    "M3": "research-only projection of existing action-specific semantic dependency information",
+    "M4": "existing runtime outcome under Authority; not a research projection",
+    "M3_is_independent_mechanism": false,
+    "prior_system_reimplementation_claimed": false,
+    "mechanism_novelty_claimed": false
+  }
+}
