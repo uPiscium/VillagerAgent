@@ -303,7 +303,7 @@ def load_k6_protocol(path: str | Path = PROTOCOL_PATH) -> dict[str, Any]:
     expected_keys = {
         "artifact_id", "artifact_version", "detached_artifact_sha256", "protocol_id",
         "protocol_version", "runtime_base_revision", "inventory_binding", "result_schema_binding",
-        "semantic_bindings", "runtime_content_bindings", "study_design",
+        "semantic_bindings", "runtime_content_bindings", "study_design", "pre_run_exposure",
         "scenario_families", "controls", "conditions",
         "cell_construction",
         "exact_action_invariant", "no_reconsideration_invariant", "semantic_world_separation",
@@ -343,9 +343,34 @@ def load_k6_protocol(path: str | Path = PROTOCOL_PATH) -> dict[str, Any]:
     if protocol["study_design"] != {
         "iid_samples": False, "inventory_census": True,
         "primary_cell_count": 40, "control_cell_count": 20,
-        "scientific_results_collected_by_this_artifact": False,
+        "engineering_validation_executed": True,
+        "full_census_executed": False,
+        "aggregate_scientific_result_artifact_generated": False,
     }:
         raise K6ContractError("K6 study-design declaration mismatch")
+    if protocol["pre_run_exposure"] != {
+        "construction_validation": {
+            "scope": "all_60_cells_through_pre_enforcement_construction",
+            "primary_cell_count": 40,
+            "control_cell_count": 20,
+            "native_submission_performed": False,
+        },
+        "representative_submission_validation": {
+            "scope": "bounded_engineering_pilot",
+            "cell_count": 7,
+            "cells": [
+                "K6-S1-I1-dual_dag_advisory",
+                "K6-S1-I1-dual_dag_authority",
+                "K6-S2-I4-dual_dag_authority",
+                "K6-S3-I5-Alice-dual_dag_authority",
+                "K6-S3-I5-Bob-dual_dag_authority",
+                "K6-C1-I1-dual_dag_authority",
+                "K6-C2-I1-dual_dag_authority",
+            ],
+            "aggregate_scientific_result_artifact_generated": False,
+        },
+    }:
+        raise K6ContractError("K6 pre-run exposure declaration mismatch")
     if tuple(protocol["conditions"]) != CONDITIONS:
         raise K6ContractError("K6 condition order mismatch")
     if protocol["cell_construction"] != {

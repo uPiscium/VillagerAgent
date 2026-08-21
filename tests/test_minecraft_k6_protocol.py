@@ -266,7 +266,29 @@ def test_protocol_and_cell_census_are_frozen_and_non_iid():
     assert protocol["study_design"] == {
         "iid_samples": False, "inventory_census": True,
         "primary_cell_count": 40, "control_cell_count": 20,
-        "scientific_results_collected_by_this_artifact": False,
+        "engineering_validation_executed": True,
+        "full_census_executed": False,
+        "aggregate_scientific_result_artifact_generated": False,
+    }
+    assert protocol["pre_run_exposure"]["construction_validation"] == {
+        "scope": "all_60_cells_through_pre_enforcement_construction",
+        "primary_cell_count": 40,
+        "control_cell_count": 20,
+        "native_submission_performed": False,
+    }
+    assert protocol["pre_run_exposure"]["representative_submission_validation"] == {
+        "scope": "bounded_engineering_pilot",
+        "cell_count": 7,
+        "cells": [
+            "K6-S1-I1-dual_dag_advisory",
+            "K6-S1-I1-dual_dag_authority",
+            "K6-S2-I4-dual_dag_authority",
+            "K6-S3-I5-Alice-dual_dag_authority",
+            "K6-S3-I5-Bob-dual_dag_authority",
+            "K6-C1-I1-dual_dag_authority",
+            "K6-C2-I1-dual_dag_authority",
+        ],
+        "aggregate_scientific_result_artifact_generated": False,
     }
     assert len(primary) == 40 and len(controls) == 20 and len(build_k6_cells()) == 60
     assert len({cell.cell_id for cell in primary + controls}) == 60
