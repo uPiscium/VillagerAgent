@@ -1,7 +1,7 @@
 {
   "artifact_id": "minecraft-k6-confirmatory-protocol",
   "artifact_version": 1,
-  "detached_artifact_sha256": "f73dd8d28f8e45a012f6722a2fc782cb70330d199d47843cc0dd3a8b4ba420ca",
+  "detached_artifact_sha256": "1d181f6aee3e1d3a7ba930e6c4999c51c77eea447bd4d1f4f02a7d71a3e7d2d3",
   "protocol_id": "minecraft-eac-k6-confirmatory",
   "protocol_version": 1,
   "runtime_base_revision": "2361588ba22e6da386cf2092cb9b92845b9c98c4",
@@ -13,7 +13,7 @@
   "result_schema_binding": {
     "artifact_id": "minecraft-k6-cell-trace-schema",
     "artifact_version": 1,
-    "detached_artifact_sha256": "a25b0ef9762be219b3d0f6b6086106985e38e27e172de4e941bb695bc4222cb3"
+    "detached_artifact_sha256": "3fbde9b456c28a3a954b97819435314e4bc2bf1c1fec47ca2a151aaa5f32a02f"
   },
   "semantic_bindings": {
     "support_policy": {
@@ -62,7 +62,7 @@
   },
   "controls": {
     "C1": "unrelated actor-visible proposition update",
-    "C2": "evaluator-only hidden truth change excluded from runtime evidence"
+    "C2": "content-bound evaluator-only truth before/after change excluded from runtime evidence and precondition callbacks"
   },
   "conditions": ["dual_dag_advisory", "dual_dag_authority"],
   "cell_construction": {
@@ -96,7 +96,9 @@
     "detached_SecPre_oracle": true,
     "classified_SecPre_dependency_declared": false,
     "native_stub_successful_if_reached": true,
-    "hidden_evaluator_truth_is_authority_input": false
+    "hidden_evaluator_truth_is_authority_input": false,
+    "hidden_evaluator_truth_is_precondition_input": false,
+    "hidden_evaluator_truth_transition_recorded": true
   },
   "primary_estimands": {
     "post_admission_invalid_action_execution_rate": {

@@ -1,7 +1,7 @@
 {
   "artifact_id": "minecraft-k6-cell-trace-schema",
   "artifact_version": 1,
-  "detached_artifact_sha256": "a25b0ef9762be219b3d0f6b6086106985e38e27e172de4e941bb695bc4222cb3",
+  "detached_artifact_sha256": "3fbde9b456c28a3a954b97819435314e4bc2bf1c1fec47ca2a151aaa5f32a02f",
   "schema_version": "minecraft-k6-cell-trace/1",
   "required_sections": [
     "cell",
@@ -41,6 +41,15 @@
     "unaffected_mechanism_analysis",
     "cross_actor_dependency_leak",
     "cross_actor_state_change_leak"
+  ],
+  "c2_evaluator_truth_fields": [
+    "evaluator_truth_before",
+    "evaluator_truth_after",
+    "evaluator_truth_before_digest",
+    "evaluator_truth_after_digest",
+    "evaluator_truth_changed",
+    "evaluator_truth_authority_input",
+    "evaluator_truth_precondition_input"
   ],
   "ratio_encoding": {"numerator": "integer", "denominator": "integer"},
   "statistical_fields_forbidden": ["confidence_interval", "p_value", "iid_standard_error"]

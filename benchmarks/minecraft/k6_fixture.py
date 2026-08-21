@@ -73,6 +73,10 @@ def _intersection(left, right) -> tuple[str, ...]:
     return tuple(sorted(set(left).intersection(right)))
 
 
+def _content_digest(value: Any) -> str:
+    return hashlib.sha256(canonical_bytes(value)).hexdigest()
+
+
 @dataclass
 class K6Trial:
     cell: K6CellSpec
@@ -174,8 +178,17 @@ class K6Trial:
             != self.mutation_state["authority_epoch_after"]
             or self.mutation_state["evidence_total_before"]
             != self.mutation_state["evidence_total_after"]
+            or self.mutation_state["evaluator_truth_before"]
+            == self.mutation_state["evaluator_truth_after"]
+            or self.mutation_state["evaluator_truth_changed"] is not True
+            or self.mutation_state["evaluator_truth_before_digest"]
+            != _content_digest(self.mutation_state["evaluator_truth_before"])
+            or self.mutation_state["evaluator_truth_after_digest"]
+            != _content_digest(self.mutation_state["evaluator_truth_after"])
+            or self.mutation_state["evaluator_truth_authority_input"] is not False
+            or self.mutation_state["evaluator_truth_precondition_input"] is not False
         ):
-            raise RuntimeError("K6 hidden evaluator truth entered semantic runtime state")
+            raise RuntimeError("K6 hidden evaluator truth transition is invalid")
 
     def submit(self) -> dict[str, Any]:
         # Fail closed on protocol/inventory/schema drift before crossing the
@@ -357,6 +370,9 @@ def construct_k6_trial(cell: K6CellSpec) -> K6Trial:
     actor_current = {actor: True for actor in actors}
     superseded = None
     replacement = None
+    evaluator_truth_before = None
+    evaluator_truth_after = None
+    evaluator_truth_changed = False
     if cell.scenario_family == "S1":
         replacement = runtime.ingest_actor_record(actor_id=cell.affected_actor,
             proposition=replace(roots[cell.affected_actor].proposition, polarity=False),
@@ -383,8 +399,9 @@ def construct_k6_trial(cell: K6CellSpec) -> K6Trial:
             record_type="direct_observation", source="minecraft-visible-weather", revision=2)
         mutation_type = "unrelated_weather_visible_update"
     elif cell.scenario_family == "C2":
-        hidden_truth = {"target": True}
-        hidden_truth["target"] = False
+        evaluator_truth_before = {"hidden_target_available": True}
+        evaluator_truth_after = {"hidden_target_available": False}
+        evaluator_truth_changed = evaluator_truth_before != evaluator_truth_after
         mutation_type = "evaluator_only_hidden_truth_mutation"
     else:
         raise ValueError(f"unknown K6 scenario family: {cell.scenario_family}")
@@ -471,6 +488,17 @@ def construct_k6_trial(cell: K6CellSpec) -> K6Trial:
                  "actor_current_EAdm": actor_current,
                  "cross_actor_dependency_leak": cross_actor_dependency_leak,
                  "cross_actor_state_change_leak": cross_actor_state_change_leak,
+                 "evaluator_truth_before": evaluator_truth_before,
+                 "evaluator_truth_after": evaluator_truth_after,
+                 "evaluator_truth_before_digest": (
+                     _content_digest(evaluator_truth_before)
+                     if evaluator_truth_before is not None else None),
+                 "evaluator_truth_after_digest": (
+                     _content_digest(evaluator_truth_after)
+                     if evaluator_truth_after is not None else None),
+                 "evaluator_truth_changed": evaluator_truth_changed,
+                 "evaluator_truth_authority_input": False,
+                 "evaluator_truth_precondition_input": False,
                  "gateway_calls": gateway_calls}
     counters = {"planner_instantiated": False, "model_instantiated": False,
                 "controller_instantiated": False, "planner_calls": 0, "model_calls": 0,
@@ -487,6 +515,10 @@ def construct_k6_trial(cell: K6CellSpec) -> K6Trial:
                 "mutation_type", "superseded_root_id", "replacement_root_id",
                 "contradiction", "supersession", "actor_current_EAdm", "cross_actor_dependency_leak",
                 "cross_actor_state_change_leak", "hidden_truth_ingested",
+                "evaluator_truth_before", "evaluator_truth_after",
+                "evaluator_truth_before_digest", "evaluator_truth_after_digest",
+                "evaluator_truth_changed", "evaluator_truth_authority_input",
+                "evaluator_truth_precondition_input",
             )
         },
     }
@@ -520,6 +552,14 @@ def validate_paired_construction(advisory: K6Trial, authority: K6Trial) -> None:
             raise ValueError(f"K6 paired construction mutation differs: {actor}")
     if advisory.pairing_digest != authority.pairing_digest:
         raise ValueError("K6 paired construction digest differs")
+    for field in (
+        "evaluator_truth_before", "evaluator_truth_after",
+        "evaluator_truth_before_digest", "evaluator_truth_after_digest",
+        "evaluator_truth_changed", "evaluator_truth_authority_input",
+        "evaluator_truth_precondition_input",
+    ):
+        if advisory.mutation_state[field] != authority.mutation_state[field]:
+            raise ValueError(f"K6 paired evaluator truth differs: {field}")
     if (advisory._runtime.classification_identity != authority._runtime.classification_identity
             or advisory._runtime.authority.policy != authority._runtime.authority.policy
             or advisory._runtime.authority.profile != authority._runtime.authority.profile):

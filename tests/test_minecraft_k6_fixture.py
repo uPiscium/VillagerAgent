@@ -1,5 +1,6 @@
 import pytest
 
+from benchmarks.common.eac.canonical import canonical_sha256
 from benchmarks.minecraft.k6_fixture import construct_k6_trial, validate_paired_construction
 from benchmarks.minecraft.k6_protocol import (
     build_control_cells,
@@ -18,6 +19,14 @@ def _control(family, inventory="I1", condition="dual_dag_authority"):
     return next(cell for cell in build_control_cells()
                 if cell.scenario_family == family and cell.inventory_id == inventory
                 and cell.condition == condition)
+
+
+INVENTORY_IDS = ("I1", "I2", "I3", "I4", "I5")
+PAIR_CASES = (
+    [(family, inventory, "Alice") for family in ("S1", "S2") for inventory in INVENTORY_IDS]
+    + [("S3", inventory, actor) for inventory in INVENTORY_IDS for actor in ("Alice", "Bob")]
+    + [(family, inventory, "Alice") for family in ("C1", "C2") for inventory in INVENTORY_IDS]
+)
 
 
 @pytest.mark.parametrize("family", ("S1", "S2"))
@@ -61,6 +70,14 @@ def test_controls_are_constructible_and_hidden_truth_is_not_ingested(inventory):
     assert c2.r_d["authority_epoch"] == c2.r_p["authority_epoch"]
     assert c2.mutation_state["evidence_total_after"] == c2.mutation_state["evidence_total_before"]
     assert c2.mutation_state["hidden_truth_ingested"] is False
+    assert c2.mutation_state["evaluator_truth_before"] != c2.mutation_state["evaluator_truth_after"]
+    assert c2.mutation_state["evaluator_truth_changed"] is True
+    assert c2.mutation_state["evaluator_truth_before_digest"] == canonical_sha256(
+        c2.mutation_state["evaluator_truth_before"]).removeprefix("sha256:")
+    assert c2.mutation_state["evaluator_truth_after_digest"] == canonical_sha256(
+        c2.mutation_state["evaluator_truth_after"]).removeprefix("sha256:")
+    assert c2.mutation_state["evaluator_truth_authority_input"] is False
+    assert c2.mutation_state["evaluator_truth_precondition_input"] is False
     assert not any(c1.native_calls.values()) and not any(c2.native_calls.values())
 
 
@@ -79,17 +96,35 @@ def test_bounded_representative_s1_submission_validates(condition, expected_nati
     assert trace["semantic_bindings"]["epre_classification"]["digest"]
 
 
-@pytest.mark.parametrize("family,inventory,actor", (
-    ("S1", "I1", "Alice"),
-    ("S2", "I4", "Alice"),
-    ("S3", "I5", "Bob"),
-))
-def test_paired_construction_is_identical_before_enforcement(family, inventory, actor):
-    advisory = construct_k6_trial(_primary(
-        family, inventory, condition="dual_dag_advisory", actor=actor))
-    authority = construct_k6_trial(_primary(
-        family, inventory, condition="dual_dag_authority", actor=actor))
+@pytest.mark.parametrize("family,inventory,actor", PAIR_CASES)
+def test_full_census_paired_construction_is_identical_before_enforcement(
+    family, inventory, actor,
+):
+    if family in {"C1", "C2"}:
+        advisory_cell = _control(family, inventory, condition="dual_dag_advisory")
+        authority_cell = _control(family, inventory, condition="dual_dag_authority")
+    else:
+        advisory_cell = _primary(
+            family, inventory, condition="dual_dag_advisory", actor=actor)
+        authority_cell = _primary(
+            family, inventory, condition="dual_dag_authority", actor=actor)
+    advisory = construct_k6_trial(advisory_cell)
+    authority = construct_k6_trial(authority_cell)
+    assert not any(advisory.native_calls.values()) and not any(authority.native_calls.values())
     validate_paired_construction(advisory, authority)
+
+
+def test_c2_pairing_rejects_different_hidden_evaluator_transition():
+    advisory = construct_k6_trial(_control(
+        "C2", "I1", condition="dual_dag_advisory"))
+    authority = construct_k6_trial(_control(
+        "C2", "I1", condition="dual_dag_authority"))
+    advisory.mutation_state["evaluator_truth_after"] = {
+        "hidden_target_available": "different",
+    }
+    with pytest.raises(ValueError, match="paired evaluator truth differs"):
+        validate_paired_construction(advisory, authority)
+    assert not any(advisory.native_calls.values()) and not any(authority.native_calls.values())
 
 
 def test_bounded_representative_s2_and_s3_submissions_validate():

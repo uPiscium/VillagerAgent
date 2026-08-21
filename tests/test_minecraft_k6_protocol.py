@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.common.eac import ActionRef, ExactRequest
+from benchmarks.common.eac.canonical import canonical_bytes
 from benchmarks.minecraft.k6_protocol import (
     CONDITIONS,
     EXACT_FIELDS,
@@ -64,6 +65,10 @@ def synthetic_trace(cell):
     import hashlib
     identity["exact_request_digest"] = "sha256:" + hashlib.sha256(request.identity_bytes()).hexdigest()
     relevant = cell.scenario_family in {"S1", "S2", "S3"}
+    evaluator_before = ({"hidden_target_available": True}
+                        if cell.scenario_family == "C2" else None)
+    evaluator_after = ({"hidden_target_available": False}
+                       if cell.scenario_family == "C2" else None)
     rp = {**identity, "EAdm": True, "authority_epoch": 1,
           "witness_root_ids": ["root-1"], "dependency_ids": ["evidence:root-1"]}
     rd = {"current_EAdm": not relevant,
@@ -184,12 +189,25 @@ def synthetic_trace(cell):
             } if cell.scenario_family in {"S1", "S3"} else None),
             "evidence_total_before": 1,
             "evidence_total_after": 1 if cell.scenario_family == "C2" else 2,
+            "authority_epoch_before": 1,
+            "authority_epoch_after": 1 if cell.scenario_family == "C2" else 2,
             "actor_current_EAdm": ({
                 cell.affected_actor: False,
                 ("Bob" if cell.affected_actor == "Alice" else "Alice"): True,
             } if cell.scenario_family == "S3" else {cell.affected_actor: not relevant}),
             "cross_actor_dependency_leak": False,
             "cross_actor_state_change_leak": False,
+            "evaluator_truth_before": evaluator_before,
+            "evaluator_truth_after": evaluator_after,
+            "evaluator_truth_before_digest": (
+                hashlib.sha256(canonical_bytes(evaluator_before)).hexdigest()
+                if evaluator_before is not None else None),
+            "evaluator_truth_after_digest": (
+                hashlib.sha256(canonical_bytes(evaluator_after)).hexdigest()
+                if evaluator_after is not None else None),
+            "evaluator_truth_changed": evaluator_before != evaluator_after,
+            "evaluator_truth_authority_input": False,
+            "evaluator_truth_precondition_input": False,
         },
         "exact_action": {"same_prepared_object": True, "exact_action_preserved": True},
         "no_reconsideration": {
@@ -274,6 +292,47 @@ def test_trace_validator_rejects_exact_action_and_reconsideration_drift():
     changed["pairing_digest"] = trace_pairing_digest(changed)
     with pytest.raises(K6ContractError, match="S1 supersession"):
         validate_k6_trace(changed, cell=cell)
+
+
+def test_c2_validator_rejects_noop_or_unbound_evaluator_truth_transition():
+    cell = next(cell for cell in build_control_cells()
+                if cell.scenario_family == "C2" and cell.inventory_id == "I1"
+                and cell.condition == "dual_dag_authority")
+    trace = synthetic_trace(cell)
+    assert validate_k6_trace(trace, cell=cell) == trace
+
+    noop = copy.deepcopy(trace)
+    noop["mutation"]["evaluator_truth_after"] = copy.deepcopy(
+        noop["mutation"]["evaluator_truth_before"])
+    noop["mutation"]["evaluator_truth_after_digest"] = (
+        noop["mutation"]["evaluator_truth_before_digest"])
+    noop["pairing_digest"] = trace_pairing_digest(noop)
+    with pytest.raises(K6ContractError, match="C2 hidden-truth"):
+        validate_k6_trace(noop, cell=cell)
+
+    unchanged_flag = copy.deepcopy(trace)
+    unchanged_flag["mutation"]["evaluator_truth_changed"] = False
+    unchanged_flag["pairing_digest"] = trace_pairing_digest(unchanged_flag)
+    with pytest.raises(K6ContractError, match="C2 hidden-truth"):
+        validate_k6_trace(unchanged_flag, cell=cell)
+
+    missing_evidence_count = copy.deepcopy(trace)
+    del missing_evidence_count["mutation"]["evidence_total_after"]
+    missing_evidence_count["pairing_digest"] = trace_pairing_digest(missing_evidence_count)
+    with pytest.raises(K6ContractError, match="C2 hidden-truth"):
+        validate_k6_trace(missing_evidence_count, cell=cell)
+
+    changed_effect_epoch = copy.deepcopy(trace)
+    changed_effect_epoch["r_e"]["authority_epoch_before_execution"] = 2
+    changed_effect_epoch["mechanism_analysis"]["M2"] = {
+        "decision": "reject",
+        "reason": "global_authority_revision_changed",
+        "inputs_used": ["r_p.authority_epoch", "r_e.authority_epoch_before_execution"],
+        "relevant_action_dependency_changed": None,
+    }
+    changed_effect_epoch["pairing_digest"] = trace_pairing_digest(changed_effect_epoch)
+    with pytest.raises(K6ContractError, match="C2 hidden-truth"):
+        validate_k6_trace(changed_effect_epoch, cell=cell)
 
 
 def test_exact_fraction_aggregator_is_incomplete_and_has_no_inference_fields():

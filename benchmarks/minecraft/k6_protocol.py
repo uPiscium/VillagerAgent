@@ -58,6 +58,12 @@ ACTORS = ("Alice", "Bob")
 EXACT_FIELDS = (
     "candidate_id", "attempt_id", "exact_request_digest", "action", "arguments", "target",
 )
+C2_EVALUATOR_FIELDS = (
+    "evaluator_truth_before", "evaluator_truth_after",
+    "evaluator_truth_before_digest", "evaluator_truth_after_digest",
+    "evaluator_truth_changed", "evaluator_truth_authority_input",
+    "evaluator_truth_precondition_input",
+)
 EXPECTED_INVENTORY = (
     ("I1", "MineBlock", "target_block_present"),
     ("I2", "placeBlock", "placement_target_observed"),
@@ -288,7 +294,7 @@ def load_k6_protocol(path: str | Path = PROTOCOL_PATH) -> dict[str, Any]:
     if set(schema_document) != {
         "artifact_id", "artifact_version", "detached_artifact_sha256", "schema_version",
         "required_sections", "exact_action_fields", "phase_fields", "s3_fields",
-        "ratio_encoding", "statistical_fields_forbidden",
+        "c2_evaluator_truth_fields", "ratio_encoding", "statistical_fields_forbidden",
     } or (schema_document["artifact_id"], schema_document["artifact_version"],
           schema_document["schema_version"]) != (
         "minecraft-k6-cell-trace-schema", 1, "minecraft-k6-cell-trace/1",
@@ -371,6 +377,8 @@ def load_k6_protocol(path: str | Path = PROTOCOL_PATH) -> dict[str, Any]:
         "cross_actor_state_change_leak",
     }:
         raise K6ContractError("K6 result schema S3 contract mismatch")
+    if tuple(schema_document["c2_evaluator_truth_fields"]) != C2_EVALUATOR_FIELDS:
+        raise K6ContractError("K6 result schema C2 evaluator-truth contract mismatch")
     if schema_document["ratio_encoding"] != {
         "numerator": "integer", "denominator": "integer",
     } or schema_document["statistical_fields_forbidden"] != [
@@ -526,6 +534,10 @@ def trace_pairing_digest(trace: Mapping[str, Any]) -> str:
                 "mutation_type", "superseded_root_id", "replacement_root_id",
                 "contradiction", "supersession", "actor_current_EAdm", "cross_actor_dependency_leak",
                 "cross_actor_state_change_leak", "hidden_truth_ingested",
+                "evaluator_truth_before", "evaluator_truth_after",
+                "evaluator_truth_before_digest", "evaluator_truth_after_digest",
+                "evaluator_truth_changed", "evaluator_truth_authority_input",
+                "evaluator_truth_precondition_input",
             )
         },
     }
@@ -666,10 +678,45 @@ def validate_k6_trace(trace: Mapping[str, Any], *, cell: K6CellSpec | None = Non
                 or trace["r_d"]["authority_epoch"] <= trace["r_p"]["authority_epoch"]):
             raise K6ContractError("K6 C1 unrelated-revision contract mismatch")
     elif family == "C2":
+        before = mutation.get("evaluator_truth_before")
+        after = mutation.get("evaluator_truth_after")
+        evidence_before = mutation.get("evidence_total_before")
+        evidence_after = mutation.get("evidence_total_after")
+        epochs = (
+            mutation.get("authority_epoch_before"),
+            mutation.get("authority_epoch_after"),
+            trace["r_p"]["authority_epoch"],
+            trace["r_d"]["authority_epoch"],
+            trace["r_e"]["authority_epoch_before_execution"],
+        )
         if (mutation.get("mutation_type") != "evaluator_only_hidden_truth_mutation"
-                or trace["r_d"]["authority_epoch"] != trace["r_p"]["authority_epoch"]
-                or mutation.get("evidence_total_before") != mutation.get("evidence_total_after")):
+                or not isinstance(before, Mapping)
+                or not isinstance(after, Mapping)
+                or canonical_bytes(before) == canonical_bytes(after)
+                or mutation.get("evaluator_truth_changed") is not True
+                or mutation.get("evaluator_truth_before_digest")
+                != hashlib.sha256(canonical_bytes(before)).hexdigest()
+                or mutation.get("evaluator_truth_after_digest")
+                != hashlib.sha256(canonical_bytes(after)).hexdigest()
+                or mutation.get("evaluator_truth_authority_input") is not False
+                or mutation.get("evaluator_truth_precondition_input") is not False
+                or any(isinstance(epoch, bool) or not isinstance(epoch, int) for epoch in epochs)
+                or len(set(epochs)) != 1
+                or isinstance(evidence_before, bool) or not isinstance(evidence_before, int)
+                or isinstance(evidence_after, bool) or not isinstance(evidence_after, int)
+                or evidence_before != evidence_after
+                or trace["r_d"]["current_EAdm"] is not trace["r_p"]["EAdm"]
+                or trace["r_d"]["permit_or_shadow_fresh"] is not True
+                or trace["r_e"]["permit_or_shadow_fresh"] is not True):
             raise K6ContractError("K6 C2 hidden-truth contract mismatch")
+
+    if family != "C2" and (
+        any(mutation.get(field) is not None for field in C2_EVALUATOR_FIELDS[:4])
+        or mutation.get("evaluator_truth_changed") is not False
+        or mutation.get("evaluator_truth_authority_input") is not False
+        or mutation.get("evaluator_truth_precondition_input") is not False
+    ):
+        raise K6ContractError("K6 non-C2 trace contains evaluator-only truth state")
 
     s3 = trace["s3"]
     if expected_cell.scenario_family == "S3":
