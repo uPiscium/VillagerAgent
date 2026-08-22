@@ -1,0 +1,216 @@
+{
+  "actor_scope": {
+    "actor_id": "Alice",
+    "private_actor_scope": true,
+    "visible_to": [
+      "Alice"
+    ]
+  },
+  "candidate_pool_digest": "5e95279edfbd45ee258932ebfaa33ef2c1dc563273afa0b4878eb86eaf7bb2ff",
+  "cell": {
+    "affected_actor": "Alice",
+    "cell_id": "K10-C2-K10-I4-H1-dual_dag_advisory",
+    "condition": "dual_dag_advisory",
+    "inventory_id": "K10-I4-H1",
+    "matrix": "control",
+    "scenario_family": "C2"
+  },
+  "exact_action": {
+    "exact_action_preserved": true,
+    "same_prepared_object": true
+  },
+  "inventory_digest": "51ba4d0e8e387fd06450367f48d3049c07fc01665be888519acec556d5e3e58a",
+  "mechanism_analysis": {
+    "M0": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.EAdm"
+      ],
+      "reason": "admission_epistemically_admissible",
+      "relevant_action_dependency_changed": null
+    },
+    "M1": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p/r_e.candidate_id",
+        "r_p/r_e.attempt_id",
+        "r_p/r_e.exact_request_digest",
+        "r_p/r_e.action",
+        "r_p/r_e.arguments",
+        "r_p/r_e.target"
+      ],
+      "reason": "exact_request_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M2": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.authority_epoch",
+        "r_e.authority_epoch_before_execution"
+      ],
+      "reason": "global_authority_revision_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M3": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_d.relevant_action_dependency_changed"
+      ],
+      "reason": "relevant_action_dependencies_unchanged",
+      "relevant_action_dependency_changed": false
+    },
+    "M4": {
+      "decision": "not_applicable",
+      "inputs_used": [],
+      "reason": "existing_authority_not_run_in_advisory_mode",
+      "relevant_action_dependency_changed": null
+    }
+  },
+  "mutation": {
+    "actor_current_EAdm": {
+      "Alice": true
+    },
+    "authority_epoch_after": 2,
+    "authority_epoch_before": 2,
+    "contradiction": null,
+    "cross_actor_dependency_leak": false,
+    "cross_actor_state_change_leak": false,
+    "declared_sec_pre": false,
+    "evaluator_truth_after": {
+      "hidden_target_available": false
+    },
+    "evaluator_truth_after_digest": "4a3221ecb12c29d4a08fca2109ec295e1e65dc38d1ec55a82ae4b82c4cf60f13",
+    "evaluator_truth_authority_input": false,
+    "evaluator_truth_before": {
+      "hidden_target_available": true
+    },
+    "evaluator_truth_before_digest": "d1bb14f98d5730f8090e480e51d8517377e3a9219fc5048cfe726d8d9686f2c5",
+    "evaluator_truth_changed": true,
+    "evaluator_truth_precondition_input": false,
+    "evidence_total_after": 1,
+    "evidence_total_before": 1,
+    "fixture_synthetic_semantic_mutation": false,
+    "gateway_calls": {
+      "env": 1,
+      "sec": 1
+    },
+    "hidden_truth_ingested": false,
+    "mutation_type": "evaluator_only_hidden_truth_mutation",
+    "replacement_root_id": null,
+    "superseded_root_id": null,
+    "supersession": null
+  },
+  "no_reconsideration": {
+    "action_regenerations": 0,
+    "controller_instantiated": false,
+    "controller_redecisions": 0,
+    "model_calls": 0,
+    "model_instantiated": false,
+    "planner_calls": 0,
+    "planner_instantiated": false
+  },
+  "pairing_digest": "a7ad1ea1820403176965d4d228a20593576d0122982fc3e428e1789a98968e3e",
+  "previously_unsubmitted": {
+    "attested": true,
+    "definition": "previously effect-boundary-unsubmitted",
+    "historical_audit_digest": "d17a37df879a71c0227e8c263202da2d716b98093a8c2a4c584e14f1d57af796",
+    "selected_request_digest": "sha256:c3cb689517f43d304ad4daafac3d9c9d8ce8226244cd303f0639e0a47f77cfb9"
+  },
+  "protocol_digest": "94b70d7d746863f7febb5d79169cf91b37bb78b79e73c7733fe58490ec81424e",
+  "r_d": {
+    "authority_epoch": 2,
+    "current_EAdm": true,
+    "intersecting_dependency_ids": [],
+    "mutation_dependency_ids": [],
+    "mutation_type": "evaluator_only_hidden_truth_mutation",
+    "permit_or_shadow_fresh": true,
+    "reasons": [],
+    "relevant_action_dependency_changed": false
+  },
+  "r_e": {
+    "EnvPre_oracle": true,
+    "SecPre_oracle": true,
+    "action": {
+      "digest": "88a5e9bf16c247a3184b4f75e4dbebe5c1a2198e508d4a267de14eb6639f68f4",
+      "identity": "attackTarget",
+      "version": 1
+    },
+    "arguments": {
+      "target_name": "skeleton"
+    },
+    "attempt_id": "k10-c2-k10-i4-h1-alice:2:attackTarget:attempt",
+    "authority_epoch_before_execution": 2,
+    "candidate_id": "k10-c2-k10-i4-h1-alice:2:attackTarget",
+    "current_EAdm": true,
+    "exact_action_submitted": true,
+    "exact_request_digest": "sha256:02aeeda1add7581cf07c53631370688592beef55d84632c3e49d05401cd54157",
+    "execution_allowed": true,
+    "native_callable_reached": true,
+    "permit_or_shadow_fresh": true,
+    "rejection_reason": null,
+    "target": {
+      "target_name": "skeleton"
+    }
+  },
+  "r_p": {
+    "EAdm": true,
+    "action": {
+      "digest": "88a5e9bf16c247a3184b4f75e4dbebe5c1a2198e508d4a267de14eb6639f68f4",
+      "identity": "attackTarget",
+      "version": 1
+    },
+    "arguments": {
+      "target_name": "skeleton"
+    },
+    "attempt_id": "k10-c2-k10-i4-h1-alice:2:attackTarget:attempt",
+    "authority_epoch": 2,
+    "candidate_id": "k10-c2-k10-i4-h1-alice:2:attackTarget",
+    "dependency_ids": [
+      "action-binding:6e52a0bd8d657c7979811723e475485aa853b53be9eb469cb37979df097f1ca2",
+      "actor-scope-binding:f45e358af43db7df73f7e91cd0b950f2bb46d4ef2874744c90e6f56333ddc4c8",
+      "capability:minecraft:post_attack",
+      "conflict:sha256:0d71ef6ff507b383c983ef181559dbe7b7bd1da1db79167d309f89845bca6ba2",
+      "conflict:sha256:d7922dab560ef9c86808be76fa1f31b57ea56031f4084fc45a2c6a98b3be84f8",
+      "epre-binding:1a3e2bc1892be5ffeeb9220b1fc5789485098aa3c035ec5070c60574e0d6cbe3",
+      "evidence:minecraft-root:k10-c2-k10-i4-h1-alice:1",
+      "policy-binding:8b1629ae71c08f61adb0f315b10009e9a14f402f9cf85007ef899f70e3d94a5a",
+      "profile-binding:022109a06dc2dd2639b91e6d47d2a07849affe46f422e8553d34714b1e603e75",
+      "provenance:minecraft-prov:minecraft-root:k10-c2-k10-i4-h1-alice:1",
+      "scope:Alice"
+    ],
+    "exact_request_digest": "sha256:02aeeda1add7581cf07c53631370688592beef55d84632c3e49d05401cd54157",
+    "target": {
+      "target_name": "skeleton"
+    },
+    "witness_root_ids": [
+      "minecraft-root:k10-c2-k10-i4-h1-alice:1"
+    ]
+  },
+  "result_schema_digest": "6cd3a1919a3278aca80646a82233c54834c408f91bdb5a43aaf4f7587aa9c9b1",
+  "s3": null,
+  "schema_version": "minecraft-k10-cell-trace/1",
+  "selected_request_digest": "sha256:c3cb689517f43d304ad4daafac3d9c9d8ce8226244cd303f0639e0a47f77cfb9",
+  "selection_manifest_digest": "ce92e9426a10486b17dd0551a4dfce5a46cfcb4524fb67f3c2404b50df7f8480",
+  "semantic_bindings": {
+    "epre_classification": {
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
+      "identity": "minecraft-preconditions",
+      "version": 1
+    },
+    "ingestion_contract": {
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f",
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1
+    },
+    "source_profile": {
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
+      "identity": "minecraft-eac-primary",
+      "version": 1
+    },
+    "support_policy": {
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+      "identity": "eac-primary-support",
+      "version": 1
+    }
+  }
+}

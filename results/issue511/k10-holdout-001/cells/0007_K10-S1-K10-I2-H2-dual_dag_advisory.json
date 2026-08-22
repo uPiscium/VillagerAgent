@@ -1,0 +1,256 @@
+{
+  "actor_scope": {
+    "actor_id": "Alice",
+    "private_actor_scope": true,
+    "visible_to": [
+      "Alice"
+    ]
+  },
+  "candidate_pool_digest": "5e95279edfbd45ee258932ebfaa33ef2c1dc563273afa0b4878eb86eaf7bb2ff",
+  "cell": {
+    "affected_actor": "Alice",
+    "cell_id": "K10-S1-K10-I2-H2-dual_dag_advisory",
+    "condition": "dual_dag_advisory",
+    "inventory_id": "K10-I2-H2",
+    "matrix": "primary",
+    "scenario_family": "S1"
+  },
+  "exact_action": {
+    "exact_action_preserved": true,
+    "same_prepared_object": true
+  },
+  "inventory_digest": "51ba4d0e8e387fd06450367f48d3049c07fc01665be888519acec556d5e3e58a",
+  "mechanism_analysis": {
+    "M0": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.EAdm"
+      ],
+      "reason": "admission_epistemically_admissible",
+      "relevant_action_dependency_changed": null
+    },
+    "M1": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p/r_e.candidate_id",
+        "r_p/r_e.attempt_id",
+        "r_p/r_e.exact_request_digest",
+        "r_p/r_e.action",
+        "r_p/r_e.arguments",
+        "r_p/r_e.target"
+      ],
+      "reason": "exact_request_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M2": {
+      "decision": "reject",
+      "inputs_used": [
+        "r_p.authority_epoch",
+        "r_e.authority_epoch_before_execution"
+      ],
+      "reason": "global_authority_revision_changed",
+      "relevant_action_dependency_changed": null
+    },
+    "M3": {
+      "decision": "reject",
+      "inputs_used": [
+        "r_d.relevant_action_dependency_changed"
+      ],
+      "reason": "relevant_action_dependency_changed",
+      "relevant_action_dependency_changed": true
+    },
+    "M4": {
+      "decision": "not_applicable",
+      "inputs_used": [],
+      "reason": "existing_authority_not_run_in_advisory_mode",
+      "relevant_action_dependency_changed": null
+    }
+  },
+  "mutation": {
+    "actor_current_EAdm": {
+      "Alice": false
+    },
+    "authority_epoch_after": 4,
+    "authority_epoch_before": 2,
+    "contradiction": null,
+    "cross_actor_dependency_leak": false,
+    "cross_actor_state_change_leak": false,
+    "declared_sec_pre": false,
+    "evaluator_truth_after": null,
+    "evaluator_truth_after_digest": null,
+    "evaluator_truth_authority_input": false,
+    "evaluator_truth_before": null,
+    "evaluator_truth_before_digest": null,
+    "evaluator_truth_changed": false,
+    "evaluator_truth_precondition_input": false,
+    "evidence_total_after": 2,
+    "evidence_total_before": 1,
+    "fixture_synthetic_semantic_mutation": true,
+    "gateway_calls": {
+      "env": 1,
+      "sec": 1
+    },
+    "hidden_truth_ingested": false,
+    "mutation_type": "opposite_polarity_explicit_supersession",
+    "replacement_root_id": "minecraft-root:k10-s1-k10-i2-h2-alice:3",
+    "superseded_root_id": "minecraft-root:k10-s1-k10-i2-h2-alice:1",
+    "supersession": {
+      "actor_id": "Alice",
+      "new_polarity": false,
+      "new_revision": 2,
+      "new_root_current": true,
+      "new_root_id": "minecraft-root:k10-s1-k10-i2-h2-alice:3",
+      "old_polarity": true,
+      "old_revision": 1,
+      "old_root_current_after": false,
+      "old_root_id": "minecraft-root:k10-s1-k10-i2-h2-alice:1",
+      "same_tracked_proposition": true,
+      "supersedes": [
+        "minecraft-root:k10-s1-k10-i2-h2-alice:1"
+      ],
+      "visibility": [
+        "Alice"
+      ]
+    }
+  },
+  "no_reconsideration": {
+    "action_regenerations": 0,
+    "controller_instantiated": false,
+    "controller_redecisions": 0,
+    "model_calls": 0,
+    "model_instantiated": false,
+    "planner_calls": 0,
+    "planner_instantiated": false
+  },
+  "pairing_digest": "aa06e36350e83723c6d0498f0ffc390b2d05b3d7714dbfb992620affa350bebf",
+  "previously_unsubmitted": {
+    "attested": true,
+    "definition": "previously effect-boundary-unsubmitted",
+    "historical_audit_digest": "d17a37df879a71c0227e8c263202da2d716b98093a8c2a4c584e14f1d57af796",
+    "selected_request_digest": "sha256:f6f42acdf052e5b47bca3d6601fe2eb5fe9a8c602417de452b39c7b45e451118"
+  },
+  "protocol_digest": "94b70d7d746863f7febb5d79169cf91b37bb78b79e73c7733fe58490ec81424e",
+  "r_d": {
+    "authority_epoch": 4,
+    "current_EAdm": false,
+    "intersecting_dependency_ids": [
+      "conflict:sha256:12910130e135ee4b2b7647f822739d0bd9182673e2b723cb5d328e4a352ebfc4",
+      "evidence:minecraft-root:k10-s1-k10-i2-h2-alice:1"
+    ],
+    "mutation_dependency_ids": [
+      "conflict:sha256:12910130e135ee4b2b7647f822739d0bd9182673e2b723cb5d328e4a352ebfc4",
+      "evidence:minecraft-root:k10-s1-k10-i2-h2-alice:1",
+      "evidence:minecraft-root:k10-s1-k10-i2-h2-alice:3"
+    ],
+    "mutation_type": "opposite_polarity_explicit_supersession",
+    "permit_or_shadow_fresh": false,
+    "reasons": [
+      "fresh.stale_or_superseded",
+      "non_defeated.conflict",
+      "supports.no_allowed_path"
+    ],
+    "relevant_action_dependency_changed": true
+  },
+  "r_e": {
+    "EnvPre_oracle": true,
+    "SecPre_oracle": true,
+    "action": {
+      "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+      "identity": "placeBlock",
+      "version": 1
+    },
+    "arguments": {
+      "facing": "E",
+      "item_name": "cobblestone",
+      "x": 32,
+      "y": 64,
+      "z": 32
+    },
+    "attempt_id": "k10-s1-k10-i2-h2-alice:2:placeBlock:attempt",
+    "authority_epoch_before_execution": 4,
+    "candidate_id": "k10-s1-k10-i2-h2-alice:2:placeBlock",
+    "current_EAdm": false,
+    "exact_action_submitted": true,
+    "exact_request_digest": "sha256:10a53e85619cb92a6b65d636c87981dbfb616aa7b0ba2f3ebb95f1fc9fd5a6de",
+    "execution_allowed": true,
+    "native_callable_reached": true,
+    "permit_or_shadow_fresh": false,
+    "rejection_reason": null,
+    "target": {
+      "facing": "E",
+      "item_name": "cobblestone",
+      "x": 32,
+      "y": 64,
+      "z": 32
+    }
+  },
+  "r_p": {
+    "EAdm": true,
+    "action": {
+      "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+      "identity": "placeBlock",
+      "version": 1
+    },
+    "arguments": {
+      "facing": "E",
+      "item_name": "cobblestone",
+      "x": 32,
+      "y": 64,
+      "z": 32
+    },
+    "attempt_id": "k10-s1-k10-i2-h2-alice:2:placeBlock:attempt",
+    "authority_epoch": 2,
+    "candidate_id": "k10-s1-k10-i2-h2-alice:2:placeBlock",
+    "dependency_ids": [
+      "action-binding:f627b038f9b66264ea50d72c52f4f51e81c78b94261b73f80c407f2481213832",
+      "actor-scope-binding:bb06e1b906fb8c5aea0a534dbc5e245c2ffba3f1a5cf70fb2ae1da39593a571e",
+      "capability:minecraft:post_place",
+      "conflict:sha256:12910130e135ee4b2b7647f822739d0bd9182673e2b723cb5d328e4a352ebfc4",
+      "conflict:sha256:6c2fd9a078bcfea5a8ed0af87fe42445364e81393d0264b7b9f6c75121cf41b0",
+      "epre-binding:7548127c0022f199a8450d4ca766127a2cd80fd5b9439c83e1a70408141623e3",
+      "evidence:minecraft-root:k10-s1-k10-i2-h2-alice:1",
+      "policy-binding:8b1629ae71c08f61adb0f315b10009e9a14f402f9cf85007ef899f70e3d94a5a",
+      "profile-binding:022109a06dc2dd2639b91e6d47d2a07849affe46f422e8553d34714b1e603e75",
+      "provenance:minecraft-prov:minecraft-root:k10-s1-k10-i2-h2-alice:1",
+      "scope:Alice"
+    ],
+    "exact_request_digest": "sha256:10a53e85619cb92a6b65d636c87981dbfb616aa7b0ba2f3ebb95f1fc9fd5a6de",
+    "target": {
+      "facing": "E",
+      "item_name": "cobblestone",
+      "x": 32,
+      "y": 64,
+      "z": 32
+    },
+    "witness_root_ids": [
+      "minecraft-root:k10-s1-k10-i2-h2-alice:1"
+    ]
+  },
+  "result_schema_digest": "6cd3a1919a3278aca80646a82233c54834c408f91bdb5a43aaf4f7587aa9c9b1",
+  "s3": null,
+  "schema_version": "minecraft-k10-cell-trace/1",
+  "selected_request_digest": "sha256:f6f42acdf052e5b47bca3d6601fe2eb5fe9a8c602417de452b39c7b45e451118",
+  "selection_manifest_digest": "ce92e9426a10486b17dd0551a4dfce5a46cfcb4524fb67f3c2404b50df7f8480",
+  "semantic_bindings": {
+    "epre_classification": {
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
+      "identity": "minecraft-preconditions",
+      "version": 1
+    },
+    "ingestion_contract": {
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f",
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1
+    },
+    "source_profile": {
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
+      "identity": "minecraft-eac-primary",
+      "version": 1
+    },
+    "support_policy": {
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+      "identity": "eac-primary-support",
+      "version": 1
+    }
+  }
+}
