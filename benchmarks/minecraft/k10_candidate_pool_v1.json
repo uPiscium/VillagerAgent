@@ -1,0 +1,993 @@
+{
+  "artifact_id": "minecraft-k10-candidate-pool",
+  "artifact_version": 1,
+  "candidates": [
+    {
+      "canonical_request_digest": "sha256:91de0d95de8a227c8b4810bd29e1b699f7eb300841ecb97e18e01b70ad6a5e16",
+      "descriptor": {
+        "action": {
+          "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+          "identity": "MineBlock",
+          "version": 1
+        },
+        "arguments": {
+          "x": 11,
+          "y": 64,
+          "z": 11
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "target_block_present",
+          "target_block_diggable_with_held_tool"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 11,
+            "y": 64,
+            "z": 11
+          },
+          "namespace": "minecraft",
+          "predicate": "target_block_present",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I1",
+        "target": {
+          "x": 11,
+          "y": 64,
+          "z": 11
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I1-01",
+      "selection_digest": "5f872dd4b228008037e0a2ed7cb02fce128eef538df602d12636d549cb64b37f"
+    },
+    {
+      "canonical_request_digest": "sha256:a75df23ed8d01bd134043fde9bcea85da43e3b6498e00f1241479b5ecac722b4",
+      "descriptor": {
+        "action": {
+          "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+          "identity": "MineBlock",
+          "version": 1
+        },
+        "arguments": {
+          "x": 12,
+          "y": 64,
+          "z": 12
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "target_block_present",
+          "target_block_diggable_with_held_tool"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 12,
+            "y": 64,
+            "z": 12
+          },
+          "namespace": "minecraft",
+          "predicate": "target_block_present",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I1",
+        "target": {
+          "x": 12,
+          "y": 64,
+          "z": 12
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I1-02",
+      "selection_digest": "bc847ccd10a57509c7b2cc7260c0f14a38fd1071b055a4475fda38fdb24a341b"
+    },
+    {
+      "canonical_request_digest": "sha256:9d4973f3ad46870688f8a220dacac968975a3202307ffba58e260f0fd282b4a4",
+      "descriptor": {
+        "action": {
+          "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+          "identity": "MineBlock",
+          "version": 1
+        },
+        "arguments": {
+          "x": 13,
+          "y": 64,
+          "z": 13
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "target_block_present",
+          "target_block_diggable_with_held_tool"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 13,
+            "y": 64,
+            "z": 13
+          },
+          "namespace": "minecraft",
+          "predicate": "target_block_present",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I1",
+        "target": {
+          "x": 13,
+          "y": 64,
+          "z": 13
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I1-03",
+      "selection_digest": "b314e4daacbad91e0f61d43250add7c65d52f35dc2365cdc472c6cf9189370f4"
+    },
+    {
+      "canonical_request_digest": "sha256:25621faadb7d12c82afc8ae7c745e374f76e22e2c6602955ac880d5d12e2e711",
+      "descriptor": {
+        "action": {
+          "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+          "identity": "MineBlock",
+          "version": 1
+        },
+        "arguments": {
+          "x": 14,
+          "y": 64,
+          "z": 14
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "target_block_present",
+          "target_block_diggable_with_held_tool"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 14,
+            "y": 64,
+            "z": 14
+          },
+          "namespace": "minecraft",
+          "predicate": "target_block_present",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I1",
+        "target": {
+          "x": 14,
+          "y": 64,
+          "z": 14
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I1-04",
+      "selection_digest": "27a83327b5cf321103a65bc5204fc7b428c72bc07e1020b987b84f8ca4070b0a"
+    },
+    {
+      "canonical_request_digest": "sha256:43e1d1ed92514eee80bceed3491648bf61ab79e912eef89ec877d49dca8fd64d",
+      "descriptor": {
+        "action": {
+          "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+          "identity": "placeBlock",
+          "version": 1
+        },
+        "arguments": {
+          "facing": "N",
+          "item_name": "dirt",
+          "x": 31,
+          "y": 64,
+          "z": 31
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "placement_target_replaceable",
+          "placement_item_available",
+          "placement_facing_valid"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 31,
+            "y": 64,
+            "z": 31
+          },
+          "namespace": "minecraft",
+          "predicate": "placement_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I2",
+        "target": {
+          "facing": "N",
+          "item_name": "dirt",
+          "x": 31,
+          "y": 64,
+          "z": 31
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I2-01",
+      "selection_digest": "fec327ddfd07c22bdf34f21bc99c352759ccf304083e70a28bda18e6a6307c4d"
+    },
+    {
+      "canonical_request_digest": "sha256:f6f42acdf052e5b47bca3d6601fe2eb5fe9a8c602417de452b39c7b45e451118",
+      "descriptor": {
+        "action": {
+          "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+          "identity": "placeBlock",
+          "version": 1
+        },
+        "arguments": {
+          "facing": "E",
+          "item_name": "cobblestone",
+          "x": 32,
+          "y": 64,
+          "z": 32
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "placement_target_replaceable",
+          "placement_item_available",
+          "placement_facing_valid"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 32,
+            "y": 64,
+            "z": 32
+          },
+          "namespace": "minecraft",
+          "predicate": "placement_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I2",
+        "target": {
+          "facing": "E",
+          "item_name": "cobblestone",
+          "x": 32,
+          "y": 64,
+          "z": 32
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I2-02",
+      "selection_digest": "3bf22a0df2fd6bf847253d35a5f5aa27d668f1071b7b388c7429ef94a4d79298"
+    },
+    {
+      "canonical_request_digest": "sha256:1302c5612ed578f9aa21f4fdec849981d4f20dcd0a8d4ca63a7ba7db871d28bd",
+      "descriptor": {
+        "action": {
+          "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+          "identity": "placeBlock",
+          "version": 1
+        },
+        "arguments": {
+          "facing": "S",
+          "item_name": "oak_planks",
+          "x": 33,
+          "y": 64,
+          "z": 33
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "placement_target_replaceable",
+          "placement_item_available",
+          "placement_facing_valid"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 33,
+            "y": 64,
+            "z": 33
+          },
+          "namespace": "minecraft",
+          "predicate": "placement_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I2",
+        "target": {
+          "facing": "S",
+          "item_name": "oak_planks",
+          "x": 33,
+          "y": 64,
+          "z": 33
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I2-03",
+      "selection_digest": "1323e9c7d6b62d7c4b954162f22e81efda584c2bbd3256d1b36fe26a0119dce1"
+    },
+    {
+      "canonical_request_digest": "sha256:c5eccbe16a96c5972b3dd2df71a1eae9fe75d238ddc07b7437d49990a4812862",
+      "descriptor": {
+        "action": {
+          "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+          "identity": "placeBlock",
+          "version": 1
+        },
+        "arguments": {
+          "facing": "W",
+          "item_name": "sand",
+          "x": 34,
+          "y": 64,
+          "z": 34
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "placement_target_replaceable",
+          "placement_item_available",
+          "placement_facing_valid"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 34,
+            "y": 64,
+            "z": 34
+          },
+          "namespace": "minecraft",
+          "predicate": "placement_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I2",
+        "target": {
+          "facing": "W",
+          "item_name": "sand",
+          "x": 34,
+          "y": 64,
+          "z": 34
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I2-04",
+      "selection_digest": "88ac86764060d67886b7be4d1ddc940ae3f5f876a9f2e84527f79cb139f2b1aa"
+    },
+    {
+      "canonical_request_digest": "sha256:3d840fb0ee66f13a15507b90aa2e46612626341c6d64db068fec4946ad7122f5",
+      "descriptor": {
+        "action": {
+          "digest": "eecfdbaf2fbe3577bc96645bd4836f495e9afc977818f661fd56290de4ab3a8b",
+          "identity": "navigateTo",
+          "version": 1
+        },
+        "arguments": {
+          "x": 41,
+          "y": 64,
+          "z": 41
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "destination_resolvable"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 41,
+            "y": 64,
+            "z": 41
+          },
+          "namespace": "minecraft",
+          "predicate": "destination_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I3",
+        "target": {
+          "x": 41,
+          "y": 64,
+          "z": 41
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I3-01",
+      "selection_digest": "d0e3a9a4df5f23d2c247f01729ac8436e754ae4e7a94253b8251cfa4ad01e438"
+    },
+    {
+      "canonical_request_digest": "sha256:763f7508361c95c7c0a2b3d5a1a0f665ec43948790cb83e37c51045455f544ff",
+      "descriptor": {
+        "action": {
+          "digest": "eecfdbaf2fbe3577bc96645bd4836f495e9afc977818f661fd56290de4ab3a8b",
+          "identity": "navigateTo",
+          "version": 1
+        },
+        "arguments": {
+          "x": 42,
+          "y": 64,
+          "z": 42
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "destination_resolvable"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 42,
+            "y": 64,
+            "z": 42
+          },
+          "namespace": "minecraft",
+          "predicate": "destination_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I3",
+        "target": {
+          "x": 42,
+          "y": 64,
+          "z": 42
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I3-02",
+      "selection_digest": "2f47b0f3d32fe399937becdad30a8e1f5d918bfa0893acb24c25c3a12762c782"
+    },
+    {
+      "canonical_request_digest": "sha256:a0e23803d782b5d78973c009de6a49c28bc960684aac081680ec78b6d00e4165",
+      "descriptor": {
+        "action": {
+          "digest": "eecfdbaf2fbe3577bc96645bd4836f495e9afc977818f661fd56290de4ab3a8b",
+          "identity": "navigateTo",
+          "version": 1
+        },
+        "arguments": {
+          "x": 43,
+          "y": 64,
+          "z": 43
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "destination_resolvable"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 43,
+            "y": 64,
+            "z": 43
+          },
+          "namespace": "minecraft",
+          "predicate": "destination_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I3",
+        "target": {
+          "x": 43,
+          "y": 64,
+          "z": 43
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I3-03",
+      "selection_digest": "3e2a2c4a5273c79ce34911f60be6bb46e0d1f8c52fadf0e3f66138323efd756a"
+    },
+    {
+      "canonical_request_digest": "sha256:59a43e2e8342becca5504f2fee9207ec7687fd37dfbcb772aa6b8a57fee0ab93",
+      "descriptor": {
+        "action": {
+          "digest": "eecfdbaf2fbe3577bc96645bd4836f495e9afc977818f661fd56290de4ab3a8b",
+          "identity": "navigateTo",
+          "version": 1
+        },
+        "arguments": {
+          "x": 44,
+          "y": 64,
+          "z": 44
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "destination_resolvable"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "x",
+            "y",
+            "z"
+          ],
+          "arguments": {
+            "x": 44,
+            "y": 64,
+            "z": 44
+          },
+          "namespace": "minecraft",
+          "predicate": "destination_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I3",
+        "target": {
+          "x": 44,
+          "y": 64,
+          "z": 44
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I3-04",
+      "selection_digest": "e4d951153b59766a2e3670fc81acc829e818dc0fc53ea2e6f5cb849c5611c014"
+    },
+    {
+      "canonical_request_digest": "sha256:0f97a06eaba90cee86995338236beb1b5a347209e9013296ff30278687cea4be",
+      "descriptor": {
+        "action": {
+          "digest": "88a5e9bf16c247a3184b4f75e4dbebe5c1a2198e508d4a267de14eb6639f68f4",
+          "identity": "attackTarget",
+          "version": 1
+        },
+        "arguments": {
+          "target_name": "sheep"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "entity_target_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_name"
+          ],
+          "arguments": {
+            "target_name": "sheep"
+          },
+          "namespace": "minecraft",
+          "predicate": "entity_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I4",
+        "target": {
+          "target_name": "sheep"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I4-01",
+      "selection_digest": "bc1735d275241d84872a003690db8575a30a40a107ded9bf75bf220d0e19c8e7"
+    },
+    {
+      "canonical_request_digest": "sha256:d87706fcae1447d0622c5dc511597b88dc6666ef8323bc06d7f750315c0616f0",
+      "descriptor": {
+        "action": {
+          "digest": "88a5e9bf16c247a3184b4f75e4dbebe5c1a2198e508d4a267de14eb6639f68f4",
+          "identity": "attackTarget",
+          "version": 1
+        },
+        "arguments": {
+          "target_name": "pig"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "entity_target_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_name"
+          ],
+          "arguments": {
+            "target_name": "pig"
+          },
+          "namespace": "minecraft",
+          "predicate": "entity_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I4",
+        "target": {
+          "target_name": "pig"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I4-02",
+      "selection_digest": "ded368c1e597ee99b0652164bc52c02cf4b6def4189a529542abf74278cb4b91"
+    },
+    {
+      "canonical_request_digest": "sha256:73423e9e7cd633599018ec11a76dcbe73420f8322cc69b80ff1b99c8b9798333",
+      "descriptor": {
+        "action": {
+          "digest": "88a5e9bf16c247a3184b4f75e4dbebe5c1a2198e508d4a267de14eb6639f68f4",
+          "identity": "attackTarget",
+          "version": 1
+        },
+        "arguments": {
+          "target_name": "zombie"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "entity_target_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_name"
+          ],
+          "arguments": {
+            "target_name": "zombie"
+          },
+          "namespace": "minecraft",
+          "predicate": "entity_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I4",
+        "target": {
+          "target_name": "zombie"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I4-03",
+      "selection_digest": "b0db80c354470c0d2fa6f64e01f80d921962151529ebe28fa737436e03b8fdf0"
+    },
+    {
+      "canonical_request_digest": "sha256:c3cb689517f43d304ad4daafac3d9c9d8ce8226244cd303f0639e0a47f77cfb9",
+      "descriptor": {
+        "action": {
+          "digest": "88a5e9bf16c247a3184b4f75e4dbebe5c1a2198e508d4a267de14eb6639f68f4",
+          "identity": "attackTarget",
+          "version": 1
+        },
+        "arguments": {
+          "target_name": "skeleton"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "entity_target_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_name"
+          ],
+          "arguments": {
+            "target_name": "skeleton"
+          },
+          "namespace": "minecraft",
+          "predicate": "entity_target_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I4",
+        "target": {
+          "target_name": "skeleton"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I4-04",
+      "selection_digest": "aa7fda962b862623b02f37d34f760b186f880bbed66c557ab2791ef781af15dc"
+    },
+    {
+      "canonical_request_digest": "sha256:77506ce5e25042b26241507e5d4ea714211f9d3d764ef3435eaac596e09850ab",
+      "descriptor": {
+        "action": {
+          "digest": "2f273f5f6f9c61e3661f53aea31992d811945c873959768bf2391f790faab51a",
+          "identity": "handoverBlock",
+          "version": 1
+        },
+        "arguments": {
+          "item_count": 1,
+          "item_name": "dirt",
+          "target_player_name": "diana"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "recipient_available",
+          "handover_inventory_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_player_name"
+          ],
+          "arguments": {
+            "target_player_name": "diana"
+          },
+          "namespace": "minecraft",
+          "predicate": "recipient_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I5",
+        "target": {
+          "item_count": 1,
+          "item_name": "dirt",
+          "target_player_name": "diana"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I5-01",
+      "selection_digest": "9c414699556ca254bd31778bc7c9772d9b75982f47a64100abbde30bec2123c1"
+    },
+    {
+      "canonical_request_digest": "sha256:fa78c48016858ab9c2676c2c5296940429d270bcad4272b37b61116297e39e2a",
+      "descriptor": {
+        "action": {
+          "digest": "2f273f5f6f9c61e3661f53aea31992d811945c873959768bf2391f790faab51a",
+          "identity": "handoverBlock",
+          "version": 1
+        },
+        "arguments": {
+          "item_count": 2,
+          "item_name": "cobblestone",
+          "target_player_name": "eve"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "recipient_available",
+          "handover_inventory_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_player_name"
+          ],
+          "arguments": {
+            "target_player_name": "eve"
+          },
+          "namespace": "minecraft",
+          "predicate": "recipient_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I5",
+        "target": {
+          "item_count": 2,
+          "item_name": "cobblestone",
+          "target_player_name": "eve"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I5-02",
+      "selection_digest": "68dbdc9d672e8d9d4f95a53c5069b078b5215ceebd55353adfe17dbb697d7a16"
+    },
+    {
+      "canonical_request_digest": "sha256:c398b2cbf1f51447c52be4036e711f84ceffbd5b955c84886c9db87a53d8b555",
+      "descriptor": {
+        "action": {
+          "digest": "2f273f5f6f9c61e3661f53aea31992d811945c873959768bf2391f790faab51a",
+          "identity": "handoverBlock",
+          "version": 1
+        },
+        "arguments": {
+          "item_count": 3,
+          "item_name": "oak_planks",
+          "target_player_name": "frank"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "recipient_available",
+          "handover_inventory_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_player_name"
+          ],
+          "arguments": {
+            "target_player_name": "frank"
+          },
+          "namespace": "minecraft",
+          "predicate": "recipient_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I5",
+        "target": {
+          "item_count": 3,
+          "item_name": "oak_planks",
+          "target_player_name": "frank"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I5-03",
+      "selection_digest": "3bedf98a7244a9d1af050c2612b087927b1eee2533857b20dba350481c209930"
+    },
+    {
+      "canonical_request_digest": "sha256:e5a0fa9006494abd90693ccc68715a693e7fb3b921ad2eb51f0a3fb72d8f2230",
+      "descriptor": {
+        "action": {
+          "digest": "2f273f5f6f9c61e3661f53aea31992d811945c873959768bf2391f790faab51a",
+          "identity": "handoverBlock",
+          "version": 1
+        },
+        "arguments": {
+          "item_count": 4,
+          "item_name": "sand",
+          "target_player_name": "grace"
+        },
+        "descriptor_version": "minecraft-k10-candidate/1",
+        "env_pre_diagnostic_assumptions": [
+          "recipient_available",
+          "handover_inventory_available"
+        ],
+        "expected_epre": {
+          "argument_fields": [
+            "target_player_name"
+          ],
+          "arguments": {
+            "target_player_name": "grace"
+          },
+          "namespace": "minecraft",
+          "predicate": "recipient_observed",
+          "temporal_scope": "current"
+        },
+        "production_runtime_change_required": false,
+        "required_actor_scope": "acting-player-visible",
+        "sec_pre_diagnostic_assumptions": {
+          "declared": false,
+          "oracle_expected": true
+        },
+        "source_profile_route": "minecraft-direct-observation",
+        "stratum": "I5",
+        "target": {
+          "item_count": 4,
+          "item_name": "sand",
+          "target_player_name": "grace"
+        }
+      },
+      "eligible": true,
+      "pool_id": "K10-P-I5-04",
+      "selection_digest": "76fc6d9d6f66fd43b65bf2dd54daa3b902bd12a8250090bd39c234f4369d996d"
+    }
+  ],
+  "canonicalization": "benchmarks.common.eac.canonical.canonical_bytes constrained RFC8785 domain",
+  "detached_artifact_sha256": "5e95279edfbd45ee258932ebfaa33ef2c1dc563273afa0b4878eb86eaf7bb2ff",
+  "selection_salt": "issue511-k10-holdout-v1"
+}

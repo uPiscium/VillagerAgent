@@ -1,0 +1,52 @@
+{
+  "artifact_id": "minecraft-k10-atomic-runner",
+  "artifact_version": 1,
+  "canonical_order_source": "benchmarks.minecraft.k10_protocol.build_k10_cells",
+  "census": {
+    "control": 40,
+    "primary": 80,
+    "total": 120
+  },
+  "completeness_requirement": {
+    "aggregate_complete": true,
+    "control_cells": 40,
+    "exact_cells": 120,
+    "pairs": 60,
+    "primary_cells": 80
+  },
+  "detached_artifact_sha256": "c03ce1e55dbb9ff2f1afb5e8ce6b6aa7e30508f9fc1ef9b63a45d03b552f0a03",
+  "failure_policy": {
+    "cell_retry": false,
+    "global_exposure_marker": ".issue511-k10-effect-boundary-started.json",
+    "post_submission_action": "abort_without_authoritative_aggregate",
+    "resume": false,
+    "zero_pilot": true
+  },
+  "finalization": {
+    "atomic_namespace_marker": "final/",
+    "authoritative_aggregate": "final/aggregate.json",
+    "authoritative_manifest": "final/final_manifest.json",
+    "model": "atomic-final-directory",
+    "no_consumable_aggregate_before_commit": true,
+    "overwrite": false,
+    "publication": "fsync staged files and directory, atomic Linux no-replace rename, fsync run directory",
+    "published_directory": "final",
+    "root_aggregate": "never",
+    "staging_directory": ".final.tmp"
+  },
+  "implementation": "benchmarks/minecraft/k10_runner.py",
+  "implementation_sha256": "2ede1bd6d6d0068d5c8960ee0fdcd15fef24ea9751cb573bb0f514b355bedab2",
+  "persistence_layout_version": "minecraft-k10-run/1",
+  "protocol_binding": {
+    "candidate_pool_digest": "5e95279edfbd45ee258932ebfaa33ef2c1dc563273afa0b4878eb86eaf7bb2ff",
+    "historical_audit_digest": "d17a37df879a71c0227e8c263202da2d716b98093a8c2a4c584e14f1d57af796",
+    "inventory_digest": "51ba4d0e8e387fd06450367f48d3049c07fc01665be888519acec556d5e3e58a",
+    "protocol_digest": "94b70d7d746863f7febb5d79169cf91b37bb78b79e73c7733fe58490ec81424e",
+    "result_schema_digest": "6cd3a1919a3278aca80646a82233c54834c408f91bdb5a43aaf4f7587aa9c9b1",
+    "selection_manifest_digest": "ce92e9426a10486b17dd0551a4dfce5a46cfcb4524fb67f3c2404b50df7f8480"
+  },
+  "resume": false,
+  "retry": false,
+  "runner_id": "minecraft-k10-atomic-census-runner",
+  "runner_version": 1
+}
