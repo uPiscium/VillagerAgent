@@ -1,0 +1,373 @@
+{
+  "actor_scope": {
+    "actor_id": "Bob",
+    "private_actor_scope": true,
+    "visible_to": [
+      "Bob"
+    ]
+  },
+  "cell": {
+    "affected_actor": "Bob",
+    "cell_id": "K6-S3-I1-Bob-dual_dag_advisory",
+    "condition": "dual_dag_advisory",
+    "inventory_id": "I1",
+    "matrix": "primary",
+    "scenario_family": "S3"
+  },
+  "exact_action": {
+    "exact_action_preserved": true,
+    "same_prepared_object": true
+  },
+  "inventory_digest": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+  "mechanism_analysis": {
+    "M0": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.EAdm"
+      ],
+      "reason": "admission_epistemically_admissible",
+      "relevant_action_dependency_changed": null
+    },
+    "M1": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p/r_e.candidate_id",
+        "r_p/r_e.attempt_id",
+        "r_p/r_e.exact_request_digest",
+        "r_p/r_e.action",
+        "r_p/r_e.arguments",
+        "r_p/r_e.target"
+      ],
+      "reason": "exact_request_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M2": {
+      "decision": "reject",
+      "inputs_used": [
+        "r_p.authority_epoch",
+        "r_e.authority_epoch_before_execution"
+      ],
+      "reason": "global_authority_revision_changed",
+      "relevant_action_dependency_changed": null
+    },
+    "M3": {
+      "decision": "reject",
+      "inputs_used": [
+        "r_d.relevant_action_dependency_changed"
+      ],
+      "reason": "relevant_action_dependency_changed",
+      "relevant_action_dependency_changed": true
+    },
+    "M4": {
+      "decision": "not_applicable",
+      "inputs_used": [],
+      "reason": "existing_authority_not_run_in_advisory_mode",
+      "relevant_action_dependency_changed": null
+    }
+  },
+  "mutation": {
+    "actor_current_EAdm": {
+      "Alice": true,
+      "Bob": false
+    },
+    "authority_epoch_after": 6,
+    "authority_epoch_before": 4,
+    "contradiction": null,
+    "cross_actor_dependency_leak": false,
+    "cross_actor_state_change_leak": false,
+    "declared_sec_pre": false,
+    "evaluator_truth_after": null,
+    "evaluator_truth_after_digest": null,
+    "evaluator_truth_authority_input": false,
+    "evaluator_truth_before": null,
+    "evaluator_truth_before_digest": null,
+    "evaluator_truth_changed": false,
+    "evaluator_truth_precondition_input": false,
+    "evidence_total_after": 3,
+    "evidence_total_before": 2,
+    "fixture_synthetic_semantic_mutation": true,
+    "gateway_calls": {
+      "env": 2,
+      "sec": 2
+    },
+    "hidden_truth_ingested": false,
+    "mutation_type": "affected_actor_explicit_supersession",
+    "replacement_root_id": "minecraft-root:k6-s3-i1-bob:5",
+    "superseded_root_id": "minecraft-root:k6-s3-i1-bob:2",
+    "supersession": {
+      "actor_id": "Bob",
+      "new_polarity": false,
+      "new_revision": 3,
+      "new_root_current": true,
+      "new_root_id": "minecraft-root:k6-s3-i1-bob:5",
+      "old_polarity": true,
+      "old_revision": 2,
+      "old_root_current_after": false,
+      "old_root_id": "minecraft-root:k6-s3-i1-bob:2",
+      "same_tracked_proposition": true,
+      "supersedes": [
+        "minecraft-root:k6-s3-i1-bob:2"
+      ],
+      "visibility": [
+        "Bob"
+      ]
+    }
+  },
+  "no_reconsideration": {
+    "action_regenerations": 0,
+    "controller_instantiated": false,
+    "controller_redecisions": 0,
+    "model_calls": 0,
+    "model_instantiated": false,
+    "planner_calls": 0,
+    "planner_instantiated": false
+  },
+  "pairing_digest": "5bb55ac49a0f52b22c8a0df640ade1d036b895626692a261301874b970a4d342",
+  "protocol_digest": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+  "r_d": {
+    "authority_epoch": 6,
+    "current_EAdm": false,
+    "intersecting_dependency_ids": [
+      "conflict:sha256:6214f86179011b8e99c3f1485624bf2678f3134e74e3e88e06fe90b45ed32841",
+      "evidence:minecraft-root:k6-s3-i1-bob:2"
+    ],
+    "mutation_dependency_ids": [
+      "conflict:sha256:6214f86179011b8e99c3f1485624bf2678f3134e74e3e88e06fe90b45ed32841",
+      "evidence:minecraft-root:k6-s3-i1-bob:2",
+      "evidence:minecraft-root:k6-s3-i1-bob:5"
+    ],
+    "mutation_type": "affected_actor_explicit_supersession",
+    "permit_or_shadow_fresh": false,
+    "reasons": [
+      "non_defeated.conflict",
+      "supports.no_allowed_path"
+    ],
+    "relevant_action_dependency_changed": true
+  },
+  "r_e": {
+    "EnvPre_oracle": true,
+    "SecPre_oracle": true,
+    "action": {
+      "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+      "identity": "MineBlock",
+      "version": 1
+    },
+    "arguments": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "attempt_id": "k6-s3-i1-bob:4:MineBlock:attempt",
+    "authority_epoch_before_execution": 6,
+    "candidate_id": "k6-s3-i1-bob:4:MineBlock",
+    "current_EAdm": false,
+    "exact_action_submitted": true,
+    "exact_request_digest": "sha256:43be4458d0859f41867aa6813f269cad910edcbffb5321b8216a2c4c1febeb71",
+    "execution_allowed": true,
+    "native_callable_reached": true,
+    "permit_or_shadow_fresh": false,
+    "rejection_reason": null,
+    "target": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    }
+  },
+  "r_p": {
+    "EAdm": true,
+    "action": {
+      "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+      "identity": "MineBlock",
+      "version": 1
+    },
+    "arguments": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "attempt_id": "k6-s3-i1-bob:4:MineBlock:attempt",
+    "authority_epoch": 4,
+    "candidate_id": "k6-s3-i1-bob:4:MineBlock",
+    "dependency_ids": [
+      "action-binding:e804ebd0855e41e3c9daf5aa8d7a3b18d7084f258331ead6c8a0c6ec8fafac3c",
+      "actor-scope-binding:24fa5e965a22af437d3305791824e57054c220a4c9f63ed538b93386633f2a88",
+      "capability:minecraft:post_dig",
+      "conflict:sha256:40855bec28ff3f810db1265eef0f93f4b215a5a4f0ba570bfa093b852de9c660",
+      "conflict:sha256:6214f86179011b8e99c3f1485624bf2678f3134e74e3e88e06fe90b45ed32841",
+      "epre-binding:2499ca84afef60702993af9a8d532c1b059726a8a199c1e05d2de75ff0c97565",
+      "evidence:minecraft-root:k6-s3-i1-bob:2",
+      "policy-binding:8b1629ae71c08f61adb0f315b10009e9a14f402f9cf85007ef899f70e3d94a5a",
+      "profile-binding:022109a06dc2dd2639b91e6d47d2a07849affe46f422e8553d34714b1e603e75",
+      "provenance:minecraft-prov:minecraft-root:k6-s3-i1-bob:2",
+      "scope:Bob"
+    ],
+    "exact_request_digest": "sha256:43be4458d0859f41867aa6813f269cad910edcbffb5321b8216a2c4c1febeb71",
+    "target": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "witness_root_ids": [
+      "minecraft-root:k6-s3-i1-bob:2"
+    ]
+  },
+  "s3": {
+    "affected_actor": "Bob",
+    "cross_actor_dependency_leak": false,
+    "cross_actor_state_change_leak": false,
+    "unaffected_actor": "Alice",
+    "unaffected_current_EAdm": true,
+    "unaffected_exact_action_preserved": true,
+    "unaffected_mechanism_analysis": {
+      "M0": {
+        "decision": "allow",
+        "inputs_used": [
+          "r_p.EAdm"
+        ],
+        "reason": "admission_epistemically_admissible",
+        "relevant_action_dependency_changed": null
+      },
+      "M1": {
+        "decision": "allow",
+        "inputs_used": [
+          "r_p/r_e.candidate_id",
+          "r_p/r_e.attempt_id",
+          "r_p/r_e.exact_request_digest",
+          "r_p/r_e.action",
+          "r_p/r_e.arguments",
+          "r_p/r_e.target"
+        ],
+        "reason": "exact_request_unchanged",
+        "relevant_action_dependency_changed": null
+      },
+      "M2": {
+        "decision": "reject",
+        "inputs_used": [
+          "r_p.authority_epoch",
+          "r_e.authority_epoch_before_execution"
+        ],
+        "reason": "global_authority_revision_changed",
+        "relevant_action_dependency_changed": null
+      },
+      "M3": {
+        "decision": "allow",
+        "inputs_used": [
+          "r_d.relevant_action_dependency_changed"
+        ],
+        "reason": "relevant_action_dependencies_unchanged",
+        "relevant_action_dependency_changed": false
+      },
+      "M4": {
+        "decision": "not_applicable",
+        "inputs_used": [],
+        "reason": "existing_authority_not_run_in_advisory_mode",
+        "relevant_action_dependency_changed": null
+      }
+    },
+    "unaffected_r_d": {
+      "authority_epoch": 6,
+      "current_EAdm": true,
+      "intersecting_dependency_ids": [],
+      "mutation_dependency_ids": [
+        "conflict:sha256:6214f86179011b8e99c3f1485624bf2678f3134e74e3e88e06fe90b45ed32841",
+        "evidence:minecraft-root:k6-s3-i1-bob:2",
+        "evidence:minecraft-root:k6-s3-i1-bob:5"
+      ],
+      "mutation_type": "affected_actor_explicit_supersession",
+      "permit_or_shadow_fresh": true,
+      "reasons": [],
+      "relevant_action_dependency_changed": false
+    },
+    "unaffected_r_e": {
+      "EnvPre_oracle": true,
+      "SecPre_oracle": true,
+      "action": {
+        "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+        "identity": "MineBlock",
+        "version": 1
+      },
+      "arguments": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+      },
+      "attempt_id": "k6-s3-i1-bob:3:MineBlock:attempt",
+      "authority_epoch_before_execution": 10,
+      "candidate_id": "k6-s3-i1-bob:3:MineBlock",
+      "current_EAdm": true,
+      "exact_action_submitted": true,
+      "exact_request_digest": "sha256:6a3a9889889dc891a00c44adcb59b8f26d69aa927ee28da6b24cd8ea3bcb428a",
+      "execution_allowed": true,
+      "native_callable_reached": true,
+      "permit_or_shadow_fresh": true,
+      "rejection_reason": null,
+      "target": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+      }
+    },
+    "unaffected_r_p": {
+      "EAdm": true,
+      "action": {
+        "digest": "f21619931b543f80e769e954ba66e9e401d22966db93f55d42de5cff9aabe315",
+        "identity": "MineBlock",
+        "version": 1
+      },
+      "arguments": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+      },
+      "attempt_id": "k6-s3-i1-bob:3:MineBlock:attempt",
+      "authority_epoch": 4,
+      "candidate_id": "k6-s3-i1-bob:3:MineBlock",
+      "dependency_ids": [
+        "action-binding:e804ebd0855e41e3c9daf5aa8d7a3b18d7084f258331ead6c8a0c6ec8fafac3c",
+        "actor-scope-binding:924d214d39dc7348b6a6494a9636373be67b4ee3d14830ce927e63d97411dbc3",
+        "capability:minecraft:post_dig",
+        "conflict:sha256:40855bec28ff3f810db1265eef0f93f4b215a5a4f0ba570bfa093b852de9c660",
+        "conflict:sha256:c2437c149608aa11a60e0b332f59e7557cf3015124a962f1f3dc2a5f69fde59b",
+        "epre-binding:2499ca84afef60702993af9a8d532c1b059726a8a199c1e05d2de75ff0c97565",
+        "evidence:minecraft-root:k6-s3-i1-bob:1",
+        "policy-binding:8b1629ae71c08f61adb0f315b10009e9a14f402f9cf85007ef899f70e3d94a5a",
+        "profile-binding:022109a06dc2dd2639b91e6d47d2a07849affe46f422e8553d34714b1e603e75",
+        "provenance:minecraft-prov:minecraft-root:k6-s3-i1-bob:1",
+        "scope:Alice"
+      ],
+      "exact_request_digest": "sha256:6a3a9889889dc891a00c44adcb59b8f26d69aa927ee28da6b24cd8ea3bcb428a",
+      "target": {
+        "x": 1,
+        "y": 2,
+        "z": 3
+      },
+      "witness_root_ids": [
+        "minecraft-root:k6-s3-i1-bob:1"
+      ]
+    },
+    "unaffected_same_prepared_object": true
+  },
+  "schema_version": "minecraft-k6-cell-trace/1",
+  "semantic_bindings": {
+    "epre_classification": {
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
+      "identity": "minecraft-preconditions",
+      "version": 1
+    },
+    "ingestion_contract": {
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f",
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1
+    },
+    "source_profile": {
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
+      "identity": "minecraft-eac-primary",
+      "version": 1
+    },
+    "support_policy": {
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+      "identity": "eac-primary-support",
+      "version": 1
+    }
+  }
+}

@@ -1,0 +1,446 @@
+{
+  "aggregate_generated": true,
+  "aggregate_path": "final/aggregate.json",
+  "canonical_order_source": "benchmarks.minecraft.k6_protocol.build_k6_cells",
+  "cells": [
+    {
+      "cell_id": "K6-S1-I1-dual_dag_advisory",
+      "ordinal": 1,
+      "path": "cells/0001_K6-S1-I1-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I1-dual_dag_authority",
+      "ordinal": 2,
+      "path": "cells/0002_K6-S1-I1-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I2-dual_dag_advisory",
+      "ordinal": 3,
+      "path": "cells/0003_K6-S1-I2-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I2-dual_dag_authority",
+      "ordinal": 4,
+      "path": "cells/0004_K6-S1-I2-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I3-dual_dag_advisory",
+      "ordinal": 5,
+      "path": "cells/0005_K6-S1-I3-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I3-dual_dag_authority",
+      "ordinal": 6,
+      "path": "cells/0006_K6-S1-I3-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I4-dual_dag_advisory",
+      "ordinal": 7,
+      "path": "cells/0007_K6-S1-I4-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I4-dual_dag_authority",
+      "ordinal": 8,
+      "path": "cells/0008_K6-S1-I4-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I5-dual_dag_advisory",
+      "ordinal": 9,
+      "path": "cells/0009_K6-S1-I5-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S1-I5-dual_dag_authority",
+      "ordinal": 10,
+      "path": "cells/0010_K6-S1-I5-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I1-dual_dag_advisory",
+      "ordinal": 11,
+      "path": "cells/0011_K6-S2-I1-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I1-dual_dag_authority",
+      "ordinal": 12,
+      "path": "cells/0012_K6-S2-I1-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I2-dual_dag_advisory",
+      "ordinal": 13,
+      "path": "cells/0013_K6-S2-I2-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I2-dual_dag_authority",
+      "ordinal": 14,
+      "path": "cells/0014_K6-S2-I2-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I3-dual_dag_advisory",
+      "ordinal": 15,
+      "path": "cells/0015_K6-S2-I3-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I3-dual_dag_authority",
+      "ordinal": 16,
+      "path": "cells/0016_K6-S2-I3-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I4-dual_dag_advisory",
+      "ordinal": 17,
+      "path": "cells/0017_K6-S2-I4-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I4-dual_dag_authority",
+      "ordinal": 18,
+      "path": "cells/0018_K6-S2-I4-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I5-dual_dag_advisory",
+      "ordinal": 19,
+      "path": "cells/0019_K6-S2-I5-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S2-I5-dual_dag_authority",
+      "ordinal": 20,
+      "path": "cells/0020_K6-S2-I5-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I1-Alice-dual_dag_advisory",
+      "ordinal": 21,
+      "path": "cells/0021_K6-S3-I1-Alice-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I1-Alice-dual_dag_authority",
+      "ordinal": 22,
+      "path": "cells/0022_K6-S3-I1-Alice-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I1-Bob-dual_dag_advisory",
+      "ordinal": 23,
+      "path": "cells/0023_K6-S3-I1-Bob-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I1-Bob-dual_dag_authority",
+      "ordinal": 24,
+      "path": "cells/0024_K6-S3-I1-Bob-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I2-Alice-dual_dag_advisory",
+      "ordinal": 25,
+      "path": "cells/0025_K6-S3-I2-Alice-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I2-Alice-dual_dag_authority",
+      "ordinal": 26,
+      "path": "cells/0026_K6-S3-I2-Alice-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I2-Bob-dual_dag_advisory",
+      "ordinal": 27,
+      "path": "cells/0027_K6-S3-I2-Bob-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I2-Bob-dual_dag_authority",
+      "ordinal": 28,
+      "path": "cells/0028_K6-S3-I2-Bob-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I3-Alice-dual_dag_advisory",
+      "ordinal": 29,
+      "path": "cells/0029_K6-S3-I3-Alice-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I3-Alice-dual_dag_authority",
+      "ordinal": 30,
+      "path": "cells/0030_K6-S3-I3-Alice-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I3-Bob-dual_dag_advisory",
+      "ordinal": 31,
+      "path": "cells/0031_K6-S3-I3-Bob-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I3-Bob-dual_dag_authority",
+      "ordinal": 32,
+      "path": "cells/0032_K6-S3-I3-Bob-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I4-Alice-dual_dag_advisory",
+      "ordinal": 33,
+      "path": "cells/0033_K6-S3-I4-Alice-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I4-Alice-dual_dag_authority",
+      "ordinal": 34,
+      "path": "cells/0034_K6-S3-I4-Alice-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I4-Bob-dual_dag_advisory",
+      "ordinal": 35,
+      "path": "cells/0035_K6-S3-I4-Bob-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I4-Bob-dual_dag_authority",
+      "ordinal": 36,
+      "path": "cells/0036_K6-S3-I4-Bob-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I5-Alice-dual_dag_advisory",
+      "ordinal": 37,
+      "path": "cells/0037_K6-S3-I5-Alice-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I5-Alice-dual_dag_authority",
+      "ordinal": 38,
+      "path": "cells/0038_K6-S3-I5-Alice-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I5-Bob-dual_dag_advisory",
+      "ordinal": 39,
+      "path": "cells/0039_K6-S3-I5-Bob-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-S3-I5-Bob-dual_dag_authority",
+      "ordinal": 40,
+      "path": "cells/0040_K6-S3-I5-Bob-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I1-dual_dag_advisory",
+      "ordinal": 41,
+      "path": "cells/0041_K6-C1-I1-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I1-dual_dag_authority",
+      "ordinal": 42,
+      "path": "cells/0042_K6-C1-I1-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I2-dual_dag_advisory",
+      "ordinal": 43,
+      "path": "cells/0043_K6-C1-I2-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I2-dual_dag_authority",
+      "ordinal": 44,
+      "path": "cells/0044_K6-C1-I2-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I3-dual_dag_advisory",
+      "ordinal": 45,
+      "path": "cells/0045_K6-C1-I3-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I3-dual_dag_authority",
+      "ordinal": 46,
+      "path": "cells/0046_K6-C1-I3-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I4-dual_dag_advisory",
+      "ordinal": 47,
+      "path": "cells/0047_K6-C1-I4-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I4-dual_dag_authority",
+      "ordinal": 48,
+      "path": "cells/0048_K6-C1-I4-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I5-dual_dag_advisory",
+      "ordinal": 49,
+      "path": "cells/0049_K6-C1-I5-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C1-I5-dual_dag_authority",
+      "ordinal": 50,
+      "path": "cells/0050_K6-C1-I5-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I1-dual_dag_advisory",
+      "ordinal": 51,
+      "path": "cells/0051_K6-C2-I1-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I1-dual_dag_authority",
+      "ordinal": 52,
+      "path": "cells/0052_K6-C2-I1-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I2-dual_dag_advisory",
+      "ordinal": 53,
+      "path": "cells/0053_K6-C2-I2-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I2-dual_dag_authority",
+      "ordinal": 54,
+      "path": "cells/0054_K6-C2-I2-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I3-dual_dag_advisory",
+      "ordinal": 55,
+      "path": "cells/0055_K6-C2-I3-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I3-dual_dag_authority",
+      "ordinal": 56,
+      "path": "cells/0056_K6-C2-I3-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I4-dual_dag_advisory",
+      "ordinal": 57,
+      "path": "cells/0057_K6-C2-I4-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I4-dual_dag_authority",
+      "ordinal": 58,
+      "path": "cells/0058_K6-C2-I4-dual_dag_authority.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I5-dual_dag_advisory",
+      "ordinal": 59,
+      "path": "cells/0059_K6-C2-I5-dual_dag_advisory.json",
+      "status": "completed"
+    },
+    {
+      "cell_id": "K6-C2-I5-dual_dag_authority",
+      "ordinal": 60,
+      "path": "cells/0060_K6-C2-I5-dual_dag_authority.json",
+      "status": "completed"
+    }
+  ],
+  "completed": true,
+  "execution_revision": "ecb553323487bff69be2cfa375caea8dd02eada5",
+  "failure": null,
+  "inventory_digest": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+  "planned_cell_ids": [
+    "K6-S1-I1-dual_dag_advisory",
+    "K6-S1-I1-dual_dag_authority",
+    "K6-S1-I2-dual_dag_advisory",
+    "K6-S1-I2-dual_dag_authority",
+    "K6-S1-I3-dual_dag_advisory",
+    "K6-S1-I3-dual_dag_authority",
+    "K6-S1-I4-dual_dag_advisory",
+    "K6-S1-I4-dual_dag_authority",
+    "K6-S1-I5-dual_dag_advisory",
+    "K6-S1-I5-dual_dag_authority",
+    "K6-S2-I1-dual_dag_advisory",
+    "K6-S2-I1-dual_dag_authority",
+    "K6-S2-I2-dual_dag_advisory",
+    "K6-S2-I2-dual_dag_authority",
+    "K6-S2-I3-dual_dag_advisory",
+    "K6-S2-I3-dual_dag_authority",
+    "K6-S2-I4-dual_dag_advisory",
+    "K6-S2-I4-dual_dag_authority",
+    "K6-S2-I5-dual_dag_advisory",
+    "K6-S2-I5-dual_dag_authority",
+    "K6-S3-I1-Alice-dual_dag_advisory",
+    "K6-S3-I1-Alice-dual_dag_authority",
+    "K6-S3-I1-Bob-dual_dag_advisory",
+    "K6-S3-I1-Bob-dual_dag_authority",
+    "K6-S3-I2-Alice-dual_dag_advisory",
+    "K6-S3-I2-Alice-dual_dag_authority",
+    "K6-S3-I2-Bob-dual_dag_advisory",
+    "K6-S3-I2-Bob-dual_dag_authority",
+    "K6-S3-I3-Alice-dual_dag_advisory",
+    "K6-S3-I3-Alice-dual_dag_authority",
+    "K6-S3-I3-Bob-dual_dag_advisory",
+    "K6-S3-I3-Bob-dual_dag_authority",
+    "K6-S3-I4-Alice-dual_dag_advisory",
+    "K6-S3-I4-Alice-dual_dag_authority",
+    "K6-S3-I4-Bob-dual_dag_advisory",
+    "K6-S3-I4-Bob-dual_dag_authority",
+    "K6-S3-I5-Alice-dual_dag_advisory",
+    "K6-S3-I5-Alice-dual_dag_authority",
+    "K6-S3-I5-Bob-dual_dag_advisory",
+    "K6-S3-I5-Bob-dual_dag_authority",
+    "K6-C1-I1-dual_dag_advisory",
+    "K6-C1-I1-dual_dag_authority",
+    "K6-C1-I2-dual_dag_advisory",
+    "K6-C1-I2-dual_dag_authority",
+    "K6-C1-I3-dual_dag_advisory",
+    "K6-C1-I3-dual_dag_authority",
+    "K6-C1-I4-dual_dag_advisory",
+    "K6-C1-I4-dual_dag_authority",
+    "K6-C1-I5-dual_dag_advisory",
+    "K6-C1-I5-dual_dag_authority",
+    "K6-C2-I1-dual_dag_advisory",
+    "K6-C2-I1-dual_dag_authority",
+    "K6-C2-I2-dual_dag_advisory",
+    "K6-C2-I2-dual_dag_authority",
+    "K6-C2-I3-dual_dag_advisory",
+    "K6-C2-I3-dual_dag_authority",
+    "K6-C2-I4-dual_dag_advisory",
+    "K6-C2-I4-dual_dag_authority",
+    "K6-C2-I5-dual_dag_advisory",
+    "K6-C2-I5-dual_dag_authority"
+  ],
+  "protocol_digest": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+  "repository_clean": true,
+  "result_schema_digest": "3fbde9b456c28a3a954b97819435314e4bc2bf1c1fec47ca2a151aaa5f32a02f",
+  "run_id": "issue511-k6-census-001",
+  "run_status": "completed",
+  "runner": {
+    "contract_digest": "165cf4864079a73e0ba932b78fcc5f8ca8bc2bab7ec1e1ba94fa9be05e718f96",
+    "identity": "minecraft-k7d-atomic-census-runner",
+    "implementation_sha256": "e181c50c2e0a3925211e06b3a83580f1db420a87be472f6b4fc0ef8d50acfa6d",
+    "version": 2
+  },
+  "schema_version": "minecraft-k7d-run/2",
+  "started": true
+}

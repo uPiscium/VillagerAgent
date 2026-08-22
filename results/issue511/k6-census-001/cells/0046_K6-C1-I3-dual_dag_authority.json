@@ -1,0 +1,215 @@
+{
+  "actor_scope": {
+    "actor_id": "Alice",
+    "private_actor_scope": true,
+    "visible_to": [
+      "Alice"
+    ]
+  },
+  "cell": {
+    "affected_actor": "Alice",
+    "cell_id": "K6-C1-I3-dual_dag_authority",
+    "condition": "dual_dag_authority",
+    "inventory_id": "I3",
+    "matrix": "control",
+    "scenario_family": "C1"
+  },
+  "exact_action": {
+    "exact_action_preserved": true,
+    "same_prepared_object": true
+  },
+  "inventory_digest": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+  "mechanism_analysis": {
+    "M0": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.EAdm"
+      ],
+      "reason": "admission_epistemically_admissible",
+      "relevant_action_dependency_changed": null
+    },
+    "M1": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p/r_e.candidate_id",
+        "r_p/r_e.attempt_id",
+        "r_p/r_e.exact_request_digest",
+        "r_p/r_e.action",
+        "r_p/r_e.arguments",
+        "r_p/r_e.target"
+      ],
+      "reason": "exact_request_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M2": {
+      "decision": "reject",
+      "inputs_used": [
+        "r_p.authority_epoch",
+        "r_e.authority_epoch_before_execution"
+      ],
+      "reason": "global_authority_revision_changed",
+      "relevant_action_dependency_changed": null
+    },
+    "M3": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_d.relevant_action_dependency_changed"
+      ],
+      "reason": "relevant_action_dependencies_unchanged",
+      "relevant_action_dependency_changed": false
+    },
+    "M4": {
+      "decision": "allow",
+      "inputs_used": [
+        "existing_authority_gateway_outcome"
+      ],
+      "reason": "existing_authority_allowed",
+      "relevant_action_dependency_changed": null
+    }
+  },
+  "mutation": {
+    "actor_current_EAdm": {
+      "Alice": true
+    },
+    "authority_epoch_after": 4,
+    "authority_epoch_before": 2,
+    "contradiction": null,
+    "cross_actor_dependency_leak": false,
+    "cross_actor_state_change_leak": false,
+    "declared_sec_pre": false,
+    "evaluator_truth_after": null,
+    "evaluator_truth_after_digest": null,
+    "evaluator_truth_authority_input": false,
+    "evaluator_truth_before": null,
+    "evaluator_truth_before_digest": null,
+    "evaluator_truth_changed": false,
+    "evaluator_truth_precondition_input": false,
+    "evidence_total_after": 2,
+    "evidence_total_before": 1,
+    "fixture_synthetic_semantic_mutation": false,
+    "gateway_calls": {
+      "env": 1,
+      "sec": 1
+    },
+    "hidden_truth_ingested": false,
+    "mutation_type": "unrelated_weather_visible_update",
+    "replacement_root_id": "minecraft-root:k6-c1-i3-alice:3",
+    "superseded_root_id": null,
+    "supersession": null
+  },
+  "no_reconsideration": {
+    "action_regenerations": 0,
+    "controller_instantiated": false,
+    "controller_redecisions": 0,
+    "model_calls": 0,
+    "model_instantiated": false,
+    "planner_calls": 0,
+    "planner_instantiated": false
+  },
+  "pairing_digest": "4d87b64daaf3c9874351b5e65f9f2148d3077f0d48812294bc59eb1807c21318",
+  "protocol_digest": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+  "r_d": {
+    "authority_epoch": 4,
+    "current_EAdm": true,
+    "intersecting_dependency_ids": [],
+    "mutation_dependency_ids": [
+      "conflict:sha256:5d6457b4dd4615988e0ae55c76df1e7614264638b5ea016577944b9b1ee95818",
+      "evidence:minecraft-root:k6-c1-i3-alice:3"
+    ],
+    "mutation_type": "unrelated_weather_visible_update",
+    "permit_or_shadow_fresh": true,
+    "reasons": [],
+    "relevant_action_dependency_changed": false
+  },
+  "r_e": {
+    "EnvPre_oracle": true,
+    "SecPre_oracle": true,
+    "action": {
+      "digest": "eecfdbaf2fbe3577bc96645bd4836f495e9afc977818f661fd56290de4ab3a8b",
+      "identity": "navigateTo",
+      "version": 1
+    },
+    "arguments": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "attempt_id": "k6-c1-i3-alice:2:navigateTo:attempt",
+    "authority_epoch_before_execution": 4,
+    "candidate_id": "k6-c1-i3-alice:2:navigateTo",
+    "current_EAdm": true,
+    "exact_action_submitted": true,
+    "exact_request_digest": "sha256:906f896716dae6ceae4e585b24ceb08e143def45e4db82fa1501421518a01202",
+    "execution_allowed": true,
+    "native_callable_reached": true,
+    "permit_or_shadow_fresh": true,
+    "rejection_reason": null,
+    "target": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    }
+  },
+  "r_p": {
+    "EAdm": true,
+    "action": {
+      "digest": "eecfdbaf2fbe3577bc96645bd4836f495e9afc977818f661fd56290de4ab3a8b",
+      "identity": "navigateTo",
+      "version": 1
+    },
+    "arguments": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "attempt_id": "k6-c1-i3-alice:2:navigateTo:attempt",
+    "authority_epoch": 2,
+    "candidate_id": "k6-c1-i3-alice:2:navigateTo",
+    "dependency_ids": [
+      "action-binding:e6b0c1482123795e289f4084404978f5ac47d0643bb329239096b30d78098800",
+      "actor-scope-binding:c8b9871b8c7fb76a0d6687a400733542b6014731df666dfec2764aa2c89e3a79",
+      "capability:minecraft:post_move_to_pos",
+      "conflict:sha256:070e2deb6814b675f68dc44e20213785f6b812d1cc0fbcfa4e4b1f0e022e043d",
+      "conflict:sha256:1996a692c66bcbb47ffb4b40d1d494e187db41e66f0d39597a74b01d2bea92c7",
+      "epre-binding:92b8389794d23a3668a9f3fdd6fc637f8eb444e787910ca8779e2f0d19bbe4a2",
+      "evidence:minecraft-root:k6-c1-i3-alice:1",
+      "policy-binding:8b1629ae71c08f61adb0f315b10009e9a14f402f9cf85007ef899f70e3d94a5a",
+      "profile-binding:022109a06dc2dd2639b91e6d47d2a07849affe46f422e8553d34714b1e603e75",
+      "provenance:minecraft-prov:minecraft-root:k6-c1-i3-alice:1",
+      "scope:Alice"
+    ],
+    "exact_request_digest": "sha256:906f896716dae6ceae4e585b24ceb08e143def45e4db82fa1501421518a01202",
+    "target": {
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "witness_root_ids": [
+      "minecraft-root:k6-c1-i3-alice:1"
+    ]
+  },
+  "s3": null,
+  "schema_version": "minecraft-k6-cell-trace/1",
+  "semantic_bindings": {
+    "epre_classification": {
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
+      "identity": "minecraft-preconditions",
+      "version": 1
+    },
+    "ingestion_contract": {
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f",
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1
+    },
+    "source_profile": {
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
+      "identity": "minecraft-eac-primary",
+      "version": 1
+    },
+    "support_policy": {
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+      "identity": "eac-primary-support",
+      "version": 1
+    }
+  }
+}

@@ -1,0 +1,224 @@
+{
+  "actor_scope": {
+    "actor_id": "Alice",
+    "private_actor_scope": true,
+    "visible_to": [
+      "Alice"
+    ]
+  },
+  "cell": {
+    "affected_actor": "Alice",
+    "cell_id": "K6-C2-I2-dual_dag_authority",
+    "condition": "dual_dag_authority",
+    "inventory_id": "I2",
+    "matrix": "control",
+    "scenario_family": "C2"
+  },
+  "exact_action": {
+    "exact_action_preserved": true,
+    "same_prepared_object": true
+  },
+  "inventory_digest": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+  "mechanism_analysis": {
+    "M0": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.EAdm"
+      ],
+      "reason": "admission_epistemically_admissible",
+      "relevant_action_dependency_changed": null
+    },
+    "M1": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p/r_e.candidate_id",
+        "r_p/r_e.attempt_id",
+        "r_p/r_e.exact_request_digest",
+        "r_p/r_e.action",
+        "r_p/r_e.arguments",
+        "r_p/r_e.target"
+      ],
+      "reason": "exact_request_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M2": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_p.authority_epoch",
+        "r_e.authority_epoch_before_execution"
+      ],
+      "reason": "global_authority_revision_unchanged",
+      "relevant_action_dependency_changed": null
+    },
+    "M3": {
+      "decision": "allow",
+      "inputs_used": [
+        "r_d.relevant_action_dependency_changed"
+      ],
+      "reason": "relevant_action_dependencies_unchanged",
+      "relevant_action_dependency_changed": false
+    },
+    "M4": {
+      "decision": "allow",
+      "inputs_used": [
+        "existing_authority_gateway_outcome"
+      ],
+      "reason": "existing_authority_allowed",
+      "relevant_action_dependency_changed": null
+    }
+  },
+  "mutation": {
+    "actor_current_EAdm": {
+      "Alice": true
+    },
+    "authority_epoch_after": 2,
+    "authority_epoch_before": 2,
+    "contradiction": null,
+    "cross_actor_dependency_leak": false,
+    "cross_actor_state_change_leak": false,
+    "declared_sec_pre": false,
+    "evaluator_truth_after": {
+      "hidden_target_available": false
+    },
+    "evaluator_truth_after_digest": "4a3221ecb12c29d4a08fca2109ec295e1e65dc38d1ec55a82ae4b82c4cf60f13",
+    "evaluator_truth_authority_input": false,
+    "evaluator_truth_before": {
+      "hidden_target_available": true
+    },
+    "evaluator_truth_before_digest": "d1bb14f98d5730f8090e480e51d8517377e3a9219fc5048cfe726d8d9686f2c5",
+    "evaluator_truth_changed": true,
+    "evaluator_truth_precondition_input": false,
+    "evidence_total_after": 1,
+    "evidence_total_before": 1,
+    "fixture_synthetic_semantic_mutation": false,
+    "gateway_calls": {
+      "env": 1,
+      "sec": 1
+    },
+    "hidden_truth_ingested": false,
+    "mutation_type": "evaluator_only_hidden_truth_mutation",
+    "replacement_root_id": null,
+    "superseded_root_id": null,
+    "supersession": null
+  },
+  "no_reconsideration": {
+    "action_regenerations": 0,
+    "controller_instantiated": false,
+    "controller_redecisions": 0,
+    "model_calls": 0,
+    "model_instantiated": false,
+    "planner_calls": 0,
+    "planner_instantiated": false
+  },
+  "pairing_digest": "ef99ac2ad47855f311c5bf47d071188628e13ef21e1e846f2d3bd406cba42b34",
+  "protocol_digest": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+  "r_d": {
+    "authority_epoch": 2,
+    "current_EAdm": true,
+    "intersecting_dependency_ids": [],
+    "mutation_dependency_ids": [],
+    "mutation_type": "evaluator_only_hidden_truth_mutation",
+    "permit_or_shadow_fresh": true,
+    "reasons": [],
+    "relevant_action_dependency_changed": false
+  },
+  "r_e": {
+    "EnvPre_oracle": true,
+    "SecPre_oracle": true,
+    "action": {
+      "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+      "identity": "placeBlock",
+      "version": 1
+    },
+    "arguments": {
+      "facing": "north",
+      "item_name": "stone",
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "attempt_id": "k6-c2-i2-alice:2:placeBlock:attempt",
+    "authority_epoch_before_execution": 2,
+    "candidate_id": "k6-c2-i2-alice:2:placeBlock",
+    "current_EAdm": true,
+    "exact_action_submitted": true,
+    "exact_request_digest": "sha256:e2f13b12ef70eb677acb7ad5d5d1899715d4581038e92a1f90c0352bf5487a10",
+    "execution_allowed": true,
+    "native_callable_reached": true,
+    "permit_or_shadow_fresh": true,
+    "rejection_reason": null,
+    "target": {
+      "facing": "north",
+      "item_name": "stone",
+      "x": 1,
+      "y": 2,
+      "z": 3
+    }
+  },
+  "r_p": {
+    "EAdm": true,
+    "action": {
+      "digest": "f92a7ce9a8ab545e9cdabb4b68c85437a2304c40c2832cd3a379e8de59d0087b",
+      "identity": "placeBlock",
+      "version": 1
+    },
+    "arguments": {
+      "facing": "north",
+      "item_name": "stone",
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "attempt_id": "k6-c2-i2-alice:2:placeBlock:attempt",
+    "authority_epoch": 2,
+    "candidate_id": "k6-c2-i2-alice:2:placeBlock",
+    "dependency_ids": [
+      "action-binding:f627b038f9b66264ea50d72c52f4f51e81c78b94261b73f80c407f2481213832",
+      "actor-scope-binding:586ffd708ecc46fbdd267f7473ee1e89f19b46376aa0274ff901c222b853809e",
+      "capability:minecraft:post_place",
+      "conflict:sha256:6827076cbf1f7bd047a63f9ae7f33e2987f71b770f461c0de46e2af0f9d8be12",
+      "conflict:sha256:eb4984d201aade4af88e3b9fde3c6f1c6ec1094eeca398cabc10fd1dffe0c392",
+      "epre-binding:6b35046e658c1ad178a2011ad1fe316d37a22663953480f9774e67bcf75d83b5",
+      "evidence:minecraft-root:k6-c2-i2-alice:1",
+      "policy-binding:8b1629ae71c08f61adb0f315b10009e9a14f402f9cf85007ef899f70e3d94a5a",
+      "profile-binding:022109a06dc2dd2639b91e6d47d2a07849affe46f422e8553d34714b1e603e75",
+      "provenance:minecraft-prov:minecraft-root:k6-c2-i2-alice:1",
+      "scope:Alice"
+    ],
+    "exact_request_digest": "sha256:e2f13b12ef70eb677acb7ad5d5d1899715d4581038e92a1f90c0352bf5487a10",
+    "target": {
+      "facing": "north",
+      "item_name": "stone",
+      "x": 1,
+      "y": 2,
+      "z": 3
+    },
+    "witness_root_ids": [
+      "minecraft-root:k6-c2-i2-alice:1"
+    ]
+  },
+  "s3": null,
+  "schema_version": "minecraft-k6-cell-trace/1",
+  "semantic_bindings": {
+    "epre_classification": {
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
+      "identity": "minecraft-preconditions",
+      "version": 1
+    },
+    "ingestion_contract": {
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f",
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1
+    },
+    "source_profile": {
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
+      "identity": "minecraft-eac-primary",
+      "version": 1
+    },
+    "support_policy": {
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+      "identity": "eac-primary-support",
+      "version": 1
+    }
+  }
+}

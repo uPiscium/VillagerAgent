@@ -1,0 +1,4196 @@
+{
+  "aggregate": {
+    "by_condition": {
+      "dual_dag_advisory": {
+        "actor_scope_isolation": {
+          "denominator": 10,
+          "numerator": 10
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 10,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 10,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 20,
+          "numerator": 20
+        },
+        "relevant_revision_detection": {
+          "denominator": 20,
+          "numerator": 20
+        },
+        "unrelated_retention": {
+          "denominator": 5,
+          "numerator": 5
+        }
+      },
+      "dual_dag_authority": {
+        "actor_scope_isolation": {
+          "denominator": 10,
+          "numerator": 10
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 10,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 10,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 20,
+          "numerator": 0
+        },
+        "relevant_revision_detection": {
+          "denominator": 20,
+          "numerator": 20
+        },
+        "unrelated_retention": {
+          "denominator": 5,
+          "numerator": 5
+        }
+      }
+    },
+    "by_family": {
+      "C1": {
+        "actor_scope_isolation": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "relevant_revision_detection": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "unrelated_retention": {
+          "denominator": 10,
+          "numerator": 10
+        }
+      },
+      "C2": {
+        "actor_scope_isolation": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "relevant_revision_detection": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "unrelated_retention": {
+          "denominator": 0,
+          "numerator": 0
+        }
+      },
+      "S1": {
+        "actor_scope_isolation": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 10,
+          "numerator": 5
+        },
+        "relevant_revision_detection": {
+          "denominator": 10,
+          "numerator": 10
+        },
+        "unrelated_retention": {
+          "denominator": 0,
+          "numerator": 0
+        }
+      },
+      "S2": {
+        "actor_scope_isolation": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 0,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 10,
+          "numerator": 5
+        },
+        "relevant_revision_detection": {
+          "denominator": 10,
+          "numerator": 10
+        },
+        "unrelated_retention": {
+          "denominator": 0,
+          "numerator": 0
+        }
+      },
+      "S3": {
+        "actor_scope_isolation": {
+          "denominator": 20,
+          "numerator": 20
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 20,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 20,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 20,
+          "numerator": 10
+        },
+        "relevant_revision_detection": {
+          "denominator": 20,
+          "numerator": 20
+        },
+        "unrelated_retention": {
+          "denominator": 0,
+          "numerator": 0
+        }
+      }
+    },
+    "by_inventory": {
+      "I1": {
+        "actor_scope_isolation": {
+          "denominator": 4,
+          "numerator": 4
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 8,
+          "numerator": 4
+        },
+        "relevant_revision_detection": {
+          "denominator": 8,
+          "numerator": 8
+        },
+        "unrelated_retention": {
+          "denominator": 2,
+          "numerator": 2
+        }
+      },
+      "I2": {
+        "actor_scope_isolation": {
+          "denominator": 4,
+          "numerator": 4
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 8,
+          "numerator": 4
+        },
+        "relevant_revision_detection": {
+          "denominator": 8,
+          "numerator": 8
+        },
+        "unrelated_retention": {
+          "denominator": 2,
+          "numerator": 2
+        }
+      },
+      "I3": {
+        "actor_scope_isolation": {
+          "denominator": 4,
+          "numerator": 4
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 8,
+          "numerator": 4
+        },
+        "relevant_revision_detection": {
+          "denominator": 8,
+          "numerator": 8
+        },
+        "unrelated_retention": {
+          "denominator": 2,
+          "numerator": 2
+        }
+      },
+      "I4": {
+        "actor_scope_isolation": {
+          "denominator": 4,
+          "numerator": 4
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 8,
+          "numerator": 4
+        },
+        "relevant_revision_detection": {
+          "denominator": 8,
+          "numerator": 8
+        },
+        "unrelated_retention": {
+          "denominator": 2,
+          "numerator": 2
+        }
+      },
+      "I5": {
+        "actor_scope_isolation": {
+          "denominator": 4,
+          "numerator": 4
+        },
+        "cross_actor_dependency_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "cross_actor_state_change_leakage": {
+          "denominator": 4,
+          "numerator": 0
+        },
+        "post_admission_invalid_action_execution_rate": {
+          "denominator": 8,
+          "numerator": 4
+        },
+        "relevant_revision_detection": {
+          "denominator": 8,
+          "numerator": 8
+        },
+        "unrelated_retention": {
+          "denominator": 2,
+          "numerator": 2
+        }
+      }
+    },
+    "complete": true,
+    "confidence_intervals_added": false,
+    "expected_control_cells": 20,
+    "expected_primary_cells": 40,
+    "iid_samples": false,
+    "inventory_census": true,
+    "mechanism_isolation": {
+      "by_condition": {
+        "dual_dag_advisory": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 5
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "dual_dag_authority": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 5
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            }
+          }
+        }
+      },
+      "by_family": {
+        "C1": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 5,
+                "numerator": 5
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "C2": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "S1": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 5
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 5,
+                "numerator": 5
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "S2": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 10
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 10,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 10,
+                "numerator": 5
+              },
+              "reject": {
+                "denominator": 10,
+                "numerator": 5
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 5,
+                "numerator": 5
+              },
+              "s3_unaffected_retention": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "S3": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 20
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "s3_unaffected_retention": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 20
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 10
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 10
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 0,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "s3_unaffected_retention": {
+                "denominator": 10,
+                "numerator": 10
+              },
+              "unrelated_retention": {
+                "denominator": 0,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 20,
+                "numerator": 10
+              },
+              "not_applicable": {
+                "denominator": 20,
+                "numerator": 10
+              },
+              "reject": {
+                "denominator": 20,
+                "numerator": 0
+              }
+            }
+          }
+        }
+      },
+      "by_inventory": {
+        "I1": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 2
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 4
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 4
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "s3_unaffected_retention": {
+                "denominator": 2,
+                "numerator": 2
+              },
+              "unrelated_retention": {
+                "denominator": 1,
+                "numerator": 1
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "I2": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 2
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 4
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 4
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "s3_unaffected_retention": {
+                "denominator": 2,
+                "numerator": 2
+              },
+              "unrelated_retention": {
+                "denominator": 1,
+                "numerator": 1
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "I3": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 2
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 4
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 4
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "s3_unaffected_retention": {
+                "denominator": 2,
+                "numerator": 2
+              },
+              "unrelated_retention": {
+                "denominator": 1,
+                "numerator": 1
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "I4": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 2
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 4
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 4
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "s3_unaffected_retention": {
+                "denominator": 2,
+                "numerator": 2
+              },
+              "unrelated_retention": {
+                "denominator": 1,
+                "numerator": 1
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          }
+        },
+        "I5": {
+          "M0": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M1": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 0
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M2": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 2
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 0
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 4
+              }
+            }
+          },
+          "M3": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 8
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 8,
+                "numerator": 8
+              },
+              "s3_unaffected_retention": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "unrelated_retention": {
+                "denominator": 2,
+                "numerator": 2
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 0
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          },
+          "M4": {
+            "affected": {
+              "allow": {
+                "denominator": 8,
+                "numerator": 0
+              },
+              "not_applicable": {
+                "denominator": 8,
+                "numerator": 4
+              },
+              "reject": {
+                "denominator": 8,
+                "numerator": 4
+              }
+            },
+            "control": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            },
+            "estimands": {
+              "relevant_revision_detection": {
+                "denominator": 4,
+                "numerator": 4
+              },
+              "s3_unaffected_retention": {
+                "denominator": 2,
+                "numerator": 2
+              },
+              "unrelated_retention": {
+                "denominator": 1,
+                "numerator": 1
+              }
+            },
+            "unaffected": {
+              "allow": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "not_applicable": {
+                "denominator": 4,
+                "numerator": 2
+              },
+              "reject": {
+                "denominator": 4,
+                "numerator": 0
+              }
+            }
+          }
+        }
+      },
+      "overall": {
+        "M0": {
+          "affected": {
+            "allow": {
+              "denominator": 40,
+              "numerator": 40
+            },
+            "not_applicable": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 40,
+              "numerator": 0
+            }
+          },
+          "control": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          },
+          "estimands": {
+            "relevant_revision_detection": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "s3_unaffected_retention": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "unrelated_retention": {
+              "denominator": 10,
+              "numerator": 10
+            }
+          },
+          "unaffected": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          }
+        },
+        "M1": {
+          "affected": {
+            "allow": {
+              "denominator": 40,
+              "numerator": 40
+            },
+            "not_applicable": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 40,
+              "numerator": 0
+            }
+          },
+          "control": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          },
+          "estimands": {
+            "relevant_revision_detection": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "s3_unaffected_retention": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "unrelated_retention": {
+              "denominator": 10,
+              "numerator": 10
+            }
+          },
+          "unaffected": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          }
+        },
+        "M2": {
+          "affected": {
+            "allow": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "not_applicable": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 40,
+              "numerator": 40
+            }
+          },
+          "control": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 10
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 10
+            }
+          },
+          "estimands": {
+            "relevant_revision_detection": {
+              "denominator": 40,
+              "numerator": 40
+            },
+            "s3_unaffected_retention": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "unrelated_retention": {
+              "denominator": 10,
+              "numerator": 0
+            }
+          },
+          "unaffected": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 20
+            }
+          }
+        },
+        "M3": {
+          "affected": {
+            "allow": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "not_applicable": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 40,
+              "numerator": 40
+            }
+          },
+          "control": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          },
+          "estimands": {
+            "relevant_revision_detection": {
+              "denominator": 40,
+              "numerator": 40
+            },
+            "s3_unaffected_retention": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "unrelated_retention": {
+              "denominator": 10,
+              "numerator": 10
+            }
+          },
+          "unaffected": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 0
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          }
+        },
+        "M4": {
+          "affected": {
+            "allow": {
+              "denominator": 40,
+              "numerator": 0
+            },
+            "not_applicable": {
+              "denominator": 40,
+              "numerator": 20
+            },
+            "reject": {
+              "denominator": 40,
+              "numerator": 20
+            }
+          },
+          "control": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 10
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 10
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          },
+          "estimands": {
+            "relevant_revision_detection": {
+              "denominator": 20,
+              "numerator": 20
+            },
+            "s3_unaffected_retention": {
+              "denominator": 10,
+              "numerator": 10
+            },
+            "unrelated_retention": {
+              "denominator": 5,
+              "numerator": 5
+            }
+          },
+          "unaffected": {
+            "allow": {
+              "denominator": 20,
+              "numerator": 10
+            },
+            "not_applicable": {
+              "denominator": 20,
+              "numerator": 10
+            },
+            "reject": {
+              "denominator": 20,
+              "numerator": 0
+            }
+          }
+        }
+      }
+    },
+    "observed_control_cells": 20,
+    "observed_primary_cells": 40,
+    "overall": {
+      "actor_scope_isolation": {
+        "denominator": 20,
+        "numerator": 20
+      },
+      "cross_actor_dependency_leakage": {
+        "denominator": 20,
+        "numerator": 0
+      },
+      "cross_actor_state_change_leakage": {
+        "denominator": 20,
+        "numerator": 0
+      },
+      "post_admission_invalid_action_execution_rate": {
+        "denominator": 40,
+        "numerator": 20
+      },
+      "relevant_revision_detection": {
+        "denominator": 40,
+        "numerator": 40
+      },
+      "unrelated_retention": {
+        "denominator": 10,
+        "numerator": 10
+      }
+    },
+    "p_values_added": false,
+    "schema_version": "minecraft-k6-aggregate/1",
+    "verdict": null
+  },
+  "execution_revision": "ecb553323487bff69be2cfa375caea8dd02eada5",
+  "inventory_digest": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+  "pair_count": 30,
+  "protocol_digest": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+  "protocol_pre_run_exposure": {
+    "construction_validation": {
+      "control_cell_count": 20,
+      "native_submission_performed": false,
+      "primary_cell_count": 40,
+      "scope": "all_60_cells_through_pre_enforcement_construction"
+    },
+    "representative_submission_validation": {
+      "aggregate_scientific_result_artifact_generated": false,
+      "cell_count": 7,
+      "cells": [
+        "K6-S1-I1-dual_dag_advisory",
+        "K6-S1-I1-dual_dag_authority",
+        "K6-S2-I4-dual_dag_authority",
+        "K6-S3-I5-Alice-dual_dag_authority",
+        "K6-S3-I5-Bob-dual_dag_authority",
+        "K6-C1-I1-dual_dag_authority",
+        "K6-C2-I1-dual_dag_authority"
+      ],
+      "scope": "bounded_engineering_pilot"
+    }
+  },
+  "raw_trace_count": 60,
+  "result_schema_digest": "3fbde9b456c28a3a954b97819435314e4bc2bf1c1fec47ca2a151aaa5f32a02f",
+  "run_id": "issue511-k6-census-001",
+  "runner_contract_digest": "165cf4864079a73e0ba932b78fcc5f8ca8bc2bab7ec1e1ba94fa9be05e718f96",
+  "runner_identity": "minecraft-k7d-atomic-census-runner",
+  "runner_version": 2,
+  "schema_version": "minecraft-k7b-aggregate/1"
+}
