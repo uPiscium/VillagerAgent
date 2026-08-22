@@ -1,0 +1,306 @@
+{
+  "artifact_bindings": {
+    "candidate_pool": {
+      "artifact_id": "minecraft-k10-candidate-pool",
+      "artifact_version": 1,
+      "detached_artifact_sha256": "5e95279edfbd45ee258932ebfaa33ef2c1dc563273afa0b4878eb86eaf7bb2ff"
+    },
+    "inventory": {
+      "artifact_id": "minecraft-k10-action-inventory",
+      "artifact_version": 1,
+      "detached_artifact_sha256": "51ba4d0e8e387fd06450367f48d3049c07fc01665be888519acec556d5e3e58a"
+    },
+    "result_schema": {
+      "artifact_id": "minecraft-k10-cell-trace-schema",
+      "artifact_version": 1,
+      "detached_artifact_sha256": "6cd3a1919a3278aca80646a82233c54834c408f91bdb5a43aaf4f7587aa9c9b1"
+    },
+    "selection_manifest_digest": "ce92e9426a10486b17dd0551a4dfce5a46cfcb4524fb67f3c2404b50df7f8480"
+  },
+  "artifact_id": "minecraft-k10-holdout-protocol",
+  "artifact_version": 1,
+  "cell_construction": {
+    "condition_order": [
+      "dual_dag_advisory",
+      "dual_dag_authority"
+    ],
+    "control_family_order": [
+      "C1",
+      "C2"
+    ],
+    "family_counts": {
+      "C1": 20,
+      "C2": 20,
+      "S1": 20,
+      "S2": 20,
+      "S3": 40
+    },
+    "inventory_order": [
+      "K10-I1-H1",
+      "K10-I1-H2",
+      "K10-I2-H1",
+      "K10-I2-H2",
+      "K10-I3-H1",
+      "K10-I3-H2",
+      "K10-I4-H1",
+      "K10-I4-H2",
+      "K10-I5-H1",
+      "K10-I5-H2"
+    ],
+    "primary_family_order": [
+      "S1",
+      "S2",
+      "S3"
+    ],
+    "s3_affected_actor_order": [
+      "Alice",
+      "Bob"
+    ]
+  },
+  "conditions": [
+    "dual_dag_advisory",
+    "dual_dag_authority"
+  ],
+  "controls": {
+    "C1": "unrelated actor-visible proposition update",
+    "C2": "content-bound evaluator-only truth before/after change excluded from runtime evidence and precondition callbacks"
+  },
+  "design_reference": "https://github.com/upiscium/VillagerAgent/issues/511#issuecomment-5378257706",
+  "detached_artifact_sha256": "94b70d7d746863f7febb5d79169cf91b37bb78b79e73c7733fe58490ec81424e",
+  "exact_action_invariant": {
+    "compared_fields": [
+      "candidate_id",
+      "attempt_id",
+      "exact_request_digest",
+      "action",
+      "arguments",
+      "target"
+    ],
+    "reconstruction_or_substitution_invalid": true,
+    "same_prepared_object_required": true
+  },
+  "exclusion_criteria": [
+    "semantic artifact identity or digest mismatch",
+    "selected request previously submitted",
+    "exact prepared action reconstruction or substitution",
+    "nonzero planner, model, controller-redecision, or action-regeneration count",
+    "detached EnvPre or SecPre oracle failure in a primary cell",
+    "hidden evaluator truth entering runtime evidence",
+    "infrastructure failure is reported separately and never silently replaced",
+    "automatic recovery behavior is not claimed or measured"
+  ],
+  "frozen_expectations": {
+    "C1": {
+      "EAdm_retained": true,
+      "native_reached_both_conditions": true
+    },
+    "C2": {
+      "authority_and_evidence_state_unchanged": true,
+      "evaluator_truth_changes": true
+    },
+    "S3": {
+      "affected_invalidated": true,
+      "dependency_leakage": 0,
+      "state_change_leakage": 0,
+      "unaffected_retained": true
+    },
+    "advisory": {
+      "affected_native_reached": true
+    },
+    "affected_primary": {
+      "EAdm_r_d": false,
+      "EAdm_r_p": true,
+      "relevant_revision_detected": true
+    },
+    "authority": {
+      "affected_native_reached": false
+    }
+  },
+  "historical_unseen_audit": {
+    "archive_cells_path": "results/issue511/k6-census-001/cells",
+    "claim": "previously effect-boundary-unsubmitted within disclosed and checked-in sources",
+    "disclosed_source_bindings": {
+      "benchmarks/minecraft/k1_f1.py": {
+        "request_content_digests": [
+          "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8"
+        ],
+        "sha256": "5fe89b73e69d13579dc435f21311a5f484357771d4b9904b52b53c39b5c77be4"
+      },
+      "benchmarks/minecraft/k2_dependency_ablation.py": {
+        "request_content_digests": [
+          "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8"
+        ],
+        "sha256": "8d5c196ec6e8a7d95afb839da55aba3242a501b62c74433d5c2013ca2794f9d6"
+      },
+      "benchmarks/minecraft/k3a_actor_scope.py": {
+        "request_content_digests": [
+          "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8"
+        ],
+        "sha256": "9390aff3da2f181bb3d63023eb50f8065f0abcfebeabac84bf0852c770747a4d"
+      },
+      "benchmarks/minecraft/k3b_contradiction.py": {
+        "request_content_digests": [
+          "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8"
+        ],
+        "sha256": "991a9ff283669d50c57c4a0fd70725ee1fe2487130cf1206df1b287f7953ce59"
+      },
+      "tests/test_minecraft_eac_runtime.py": {
+        "request_content_digests": [
+          "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8"
+        ],
+        "sha256": "bcf719e6dbe6a4509dba417fa15e7654cb2434073b359a8f7ae16e97c3c3b644"
+      },
+      "tests/test_minecraft_k6_fixture.py": {
+        "request_content_digests": [
+          "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8",
+          "f5c5dda18c599e0bb7aa682594ec2618bc6cb108886456ffca533733625650b6",
+          "ded40b2e1ba22bd3e125010fa0928b7914dbfc6bc23afdcfbcede533f6b4008d",
+          "3f9b8a69163a8e1acea3f7109fec713d44a3ded8d63a4c4b24bf46f5fdad0648",
+          "c5fe72905e1d3d94bc05e8dab487c6333514db39798c6ff1ad99c115601a556c"
+        ],
+        "sha256": "6353a945725ac7d83de9ad6615c8c2469674a28872347affb37d7971029d7cb7"
+      }
+    },
+    "expected_trace_count": 60,
+    "k6_protocol_path": "benchmarks/minecraft/k6_protocol_v1.json",
+    "older_disclosed_submission_identity": "MineBlock {\"x\":1,\"y\":2,\"z\":3}",
+    "prior_request_content_digests": [
+      "89ff87d5dc28092d1ad25f6e4c312aafae037c98bbed45e103673e060896bdd8",
+      "f5c5dda18c599e0bb7aa682594ec2618bc6cb108886456ffca533733625650b6",
+      "ded40b2e1ba22bd3e125010fa0928b7914dbfc6bc23afdcfbcede533f6b4008d",
+      "3f9b8a69163a8e1acea3f7109fec713d44a3ded8d63a4c4b24bf46f5fdad0648",
+      "c5fe72905e1d3d94bc05e8dab487c6333514db39798c6ff1ad99c115601a556c"
+    ]
+  },
+  "mechanism_isolation": {
+    "M0": "research-only admission-time projection",
+    "M1": "research-only exact-request-identity projection",
+    "M2": "research-only global-revision projection",
+    "M3": "research-only projection of existing action-specific semantic dependency information",
+    "M3_is_independent_mechanism": false,
+    "M4": "existing runtime outcome under Authority; not a research projection",
+    "mechanism_novelty_claimed": false
+  },
+  "no_reconsideration_invariant": {
+    "action_regenerations": 0,
+    "controller_redecisions": 0,
+    "model_calls": 0,
+    "planner_calls": 0
+  },
+  "primary_estimands": {
+    "actor_scope_isolation": {
+      "denominator": "all S3 paired actor cases",
+      "numerator": "only affected actor changes without dependency or state-change leakage"
+    },
+    "cross_actor_dependency_leakage": {
+      "denominator": "all S3 paired actor cases",
+      "numerator": "cross_actor_dependency_leak=true"
+    },
+    "cross_actor_state_change_leakage": {
+      "denominator": "all S3 paired actor cases",
+      "numerator": "cross_actor_state_change_leak=true"
+    },
+    "post_admission_invalid_action_execution_rate": {
+      "denominator": "retained exact-action submissions with current EAdm=false",
+      "numerator": "native callable reached"
+    },
+    "relevant_revision_detection": {
+      "denominator": "all planned affected primary actions",
+      "numerator": "EAdm changed true to false and the mode-appropriate permit or shadow manifest is not fresh"
+    },
+    "unrelated_retention": {
+      "denominator": "all C1 actions",
+      "numerator": "EAdm and the mode-appropriate permit or shadow manifest remain fresh and the retained action reaches native callable"
+    }
+  },
+  "protected_runtime_content_bindings": {
+    "benchmarks/common/eac/authority.py": "f02465438e7e8584a2aee141d9ab1d8df23076c777ea7f1faec7b00e911a1649",
+    "benchmarks/common/eac/gateway.py": "ff70f534014251c5664b85085a9ce7d8fcf462b941aedd83c1c4aed95c9a67ee",
+    "benchmarks/common/eac/policy.py": "cb2e15c843678964366d3d118672c516ea22c66b94a1bd043c1a2767368e235a",
+    "benchmarks/common/eac/witness.py": "bcf0b0e763f0254a808bf4ea70cd5bdbb7ec672ae1009fecd11a33a4e7977e52",
+    "benchmarks/minecraft/eac_runtime.py": "9e99b372f1447cb4e9ca03250f27dc88558fd8394b54660d0a82adc1fd0b7a49",
+    "benchmarks/minecraft/k6_fixture.py": "e4c8dd6261d71fbd4ead5af11bf02b8abb0b199968ec653105737a6a58ae22eb",
+    "benchmarks/minecraft/k6_inventory_v1.json": "d4de5be4791c872a63a7cdb04ab008f24c115ba37bc6d0f8193733b6628352cc",
+    "benchmarks/minecraft/k6_protocol.py": "a4789573f1ab6f9ace1cf6b61b93b5a328467c3f66250e8c55b60d220e6449d9",
+    "benchmarks/minecraft/k6_protocol_v1.json": "44b36f925c1b7de2afe1cc02d12b659555bc77913c7e17cc042f5af2c3ea90b5",
+    "benchmarks/minecraft/k6_result_schema_v1.json": "481fa80cbeb23525ab84ba0b8265de2e07b5035cf752b9313acdc608bdb42300",
+    "benchmarks/minecraft/k7_runner.py": "e181c50c2e0a3925211e06b3a83580f1db420a87be472f6b4fc0ef8d50acfa6d",
+    "benchmarks/minecraft/k7_runner_v2.json": "b4aa9ddaef2cd14680de4d5193b715cd63d9a70fcbff798f105995f7514ae967",
+    "docs/eac/minecraft_ingestion_contract_v1.json": "ddeb257dbf3f6e042d7faf2c94fc230818260cc4fa9d97d39c0c428bd952462d",
+    "docs/eac/minecraft_preconditions_v1.json": "c4ac4268663cd5b9d7d5900f65d05b233d85f45906d6206ed73cbb6915ba46ad",
+    "docs/eac/minecraft_source_profile_v1.json": "01414650511b2ded27a5025fbc7797426b02d874cea468316fbce3711e797abe",
+    "docs/eac/support_policy_v1.json": "7652a0cba3f81cf0931a16a69adb4918e0b459d80a41a7b2768496a8787a0a6f",
+    "env/eac_observation_adapter.py": "d921ad4cebd3b5015e0cb60f5f35ce0c4411c8bc856b0adf63ff03b24aa34eee",
+    "env/eac_preflight.py": "746491abcb52c7b5a1a9fcf729c92d212b0f0023464ad148fff1ff82ef43450c",
+    "env/minecraft_client.py": "c7d0c131f49932ed19129f422b823f44d1bdfbf6d127b8d2b164fcc32fe0c48e"
+  },
+  "protocol_id": "minecraft-eac-k10-holdout",
+  "protocol_version": 1,
+  "reporting_separation": {
+    "K10": "prospectively frozen effect-boundary-unsubmitted holdout replication",
+    "K8": "post-development frozen diagnostic census with disclosed engineering pre-exposure",
+    "pooling_forbidden": true
+  },
+  "scenario_families": {
+    "S1": "opposite-polarity explicit supersession of the supporting current fluent",
+    "S2": "independently sufficient unresolved opposite-polarity support without supersession",
+    "S3": "same-proposition actor-private revision in both Alice-only and Bob-only directions"
+  },
+  "semantic_bindings": {
+    "epre_classification": {
+      "digest": "7c8bf97b80c96f1d05e8250cb9d89bb21b35c073f49979501090d72f13b56001",
+      "identity": "minecraft-preconditions",
+      "version": 1
+    },
+    "ingestion_contract": {
+      "digest": "33c9fd27a70ab3f6edffad14c07f9f66dc04b795363e7b1b55518a4d1a1ef42f",
+      "identity": "minecraft-eac-ingestion-contract",
+      "version": 1
+    },
+    "source_profile": {
+      "digest": "01f65a8fd4bb68b1631e81d3c8d50f073747b5179995eeb60be3a55fdb6979be",
+      "identity": "minecraft-eac-primary",
+      "version": 1
+    },
+    "support_policy": {
+      "digest": "ef34b67ef618ed4b34a9c2720d854e02d8fb6af917a0cbe472daef8cc5603d51",
+      "identity": "eac-primary-support",
+      "version": 1
+    }
+  },
+  "semantic_world_separation": {
+    "classified_SecPre_dependency_declared": false,
+    "detached_EnvPre_oracle": true,
+    "detached_SecPre_oracle": true,
+    "hidden_evaluator_truth_is_authority_input": false,
+    "hidden_evaluator_truth_is_precondition_input": false,
+    "hidden_evaluator_truth_transition_recorded": true,
+    "native_stub_successful_if_reached": true,
+    "primary_current_EAdm_transition": [
+      true,
+      false
+    ]
+  },
+  "study_design": {
+    "confidence_intervals": false,
+    "control_cell_count": 40,
+    "iid_samples": false,
+    "inventory_census": true,
+    "p_values": false,
+    "pair_count": 60,
+    "primary_cell_count": 80,
+    "runtime_seeds": false,
+    "total_cell_count": 120
+  },
+  "subject_runtime_semantic_reference": "ecb553323487bff69be2cfa375caea8dd02eada5",
+  "zero_pre_exposure": {
+    "engineering_validation_executed": true,
+    "holdout_advisory_submissions": 0,
+    "holdout_aggregate_generated": false,
+    "holdout_authority_submissions": 0,
+    "holdout_construction_executed": true,
+    "holdout_effect_boundary_submissions": 0,
+    "holdout_full_census_executed": false,
+    "representative_pilot": false
+  }
+}
