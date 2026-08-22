@@ -1,0 +1,56 @@
+{
+  "artifact_id": "minecraft-k7d-census-runner",
+  "artifact_version": 2,
+  "detached_artifact_sha256": "165cf4864079a73e0ba932b78fcc5f8ca8bc2bab7ec1e1ba94fa9be05e718f96",
+  "runner_id": "minecraft-k7d-atomic-census-runner",
+  "runner_version": 2,
+  "implementation": "benchmarks/minecraft/k7_runner.py",
+  "implementation_sha256": "e181c50c2e0a3925211e06b3a83580f1db420a87be472f6b4fc0ef8d50acfa6d",
+  "protocol_binding": {
+    "protocol_digest": "b03f1257a71f6ade18dca8191fae7d42ba8558831ab36b91a03e1620f05f20bb",
+    "inventory_digest": "81f40e6ca937321536ca081ab61cde5949c16af7ab540b7d5bd92af00ec7f15c",
+    "result_schema_digest": "3fbde9b456c28a3a954b97819435314e4bc2bf1c1fec47ca2a151aaa5f32a02f"
+  },
+  "census": {"primary": 40, "control": 20, "total": 60},
+  "canonical_order_source": "benchmarks.minecraft.k6_protocol.build_k6_cells",
+  "retry": false,
+  "resume": false,
+  "completeness_requirement": {"exact_cells": 60, "primary_cells": 40, "control_cells": 20, "pairs": 30, "aggregate_complete": true},
+  "failure_policy": {
+    "pre_submission_failures": [
+      "digest_or_binding_mismatch",
+      "revision_mismatch",
+      "dirty_tree",
+      "invalid_census",
+      "output_preparation_failure"
+    ],
+    "post_submission_action": "abort_without_authoritative_aggregate",
+    "cell_retry": false,
+    "resume": false,
+    "silent_replacement": false,
+    "automatic_infrastructure_classification": false,
+    "infrastructure_failures": [
+      "externally_evidenced_host_or_process_interruption",
+      "filesystem_io_unavailability_or_exhaustion",
+      "os_level_resource_failure"
+    ]
+  },
+  "persistence_layout_version": "minecraft-k7d-run/2",
+  "finalization": {
+    "model": "atomic-final-directory",
+    "staging_directory": ".final.tmp",
+    "published_directory": "final",
+    "atomic_namespace_marker": "final/",
+    "authoritative_manifest": "final/final_manifest.json",
+    "authoritative_aggregate": "final/aggregate.json",
+    "consumer_rule": "consume only final/aggregate.json when final/ and both final files exist",
+    "authoritative_completion_predicate": "final manifest bindings and aggregate SHA-256 validate",
+    "no_consumable_aggregate_before_commit": true,
+    "progress_manifest_authoritative": false,
+    "publication": "fsync staged files and directory, rename .final.tmp to final, fsync run directory",
+    "root_aggregate": "never",
+    "aborted_staging": "may remain non-authoritative for diagnostics",
+    "overwrite": false,
+    "resume": false
+  }
+}

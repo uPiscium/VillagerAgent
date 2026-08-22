@@ -1,7 +1,9 @@
-"""The one-shot durable runner for the frozen K7b K6 census."""
+"""The one-shot durable runner for the frozen K7d K6 census."""
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -17,14 +19,22 @@ from benchmarks.minecraft import k6_fixture, k6_protocol
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY_ROOT = HERE.parents[1]
-CONTRACT_PATH = HERE / "k7_runner_v1.json"
+CONTRACT_PATH = HERE / "k7_runner_v2.json"
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 STATUSES = {"not_started", "started", "completed", "failed"}
+FINALIZATION_STAGES = {
+    "after_staging_mkdir", "after_aggregate_staged", "after_final_manifest_staged",
+    "before_atomic_publication", "after_atomic_publication", "after_parent_fsync",
+}
 
 
 class K7RunnerError(RuntimeError):
     """A K7 preflight, execution, or durable-artifact gate failed."""
+
+
+class K7FinalizationDurabilityError(K7RunnerError):
+    """The atomic final directory is visible, but its parent fsync failed."""
 
 
 def _digest_without_field(value: dict[str, Any]) -> str:
@@ -41,11 +51,14 @@ def load_k7_contract(path: str | Path = CONTRACT_PATH) -> tuple[dict[str, Any], 
         "protocol_binding",
         "census", "canonical_order_source", "retry", "resume",
         "completeness_requirement", "failure_policy", "persistence_layout_version",
+        "finalization",
     }
     if not isinstance(value, dict) or set(value) != required:
         raise K7RunnerError("K7 runner contract schema mismatch")
-    if value["artifact_id"] != "minecraft-k7b-census-runner" or value["artifact_version"] != 1:
+    if value["artifact_id"] != "minecraft-k7d-census-runner" or value["artifact_version"] != 2:
         raise K7RunnerError("K7 runner contract identity mismatch")
+    if value["runner_id"] != "minecraft-k7d-atomic-census-runner" or value["runner_version"] != 2:
+        raise K7RunnerError("K7 runner identity mismatch")
     if value["implementation"] != "benchmarks/minecraft/k7_runner.py":
         raise K7RunnerError("K7 runner contract implementation binding mismatch")
     if not isinstance(value["implementation_sha256"], str) or re.fullmatch(
@@ -78,7 +91,7 @@ def load_k7_contract(path: str | Path = CONTRACT_PATH) -> tuple[dict[str, Any], 
             "digest_or_binding_mismatch", "revision_mismatch", "dirty_tree",
             "invalid_census", "output_preparation_failure",
         ],
-        "post_submission_action": "abort_without_aggregate",
+        "post_submission_action": "abort_without_authoritative_aggregate",
         "cell_retry": False,
         "resume": False,
         "silent_replacement": False,
@@ -90,8 +103,26 @@ def load_k7_contract(path: str | Path = CONTRACT_PATH) -> tuple[dict[str, Any], 
         ],
     }:
         raise K7RunnerError("K7 runner contract failure policy mismatch")
-    if value["persistence_layout_version"] != "minecraft-k7b-run/1":
+    if value["persistence_layout_version"] != "minecraft-k7d-run/2":
         raise K7RunnerError("K7 runner contract persistence layout mismatch")
+    if value["finalization"] != {
+        "model": "atomic-final-directory",
+        "staging_directory": ".final.tmp",
+        "published_directory": "final",
+        "atomic_namespace_marker": "final/",
+        "authoritative_manifest": "final/final_manifest.json",
+        "authoritative_aggregate": "final/aggregate.json",
+        "consumer_rule": "consume only final/aggregate.json when final/ and both final files exist",
+        "authoritative_completion_predicate": "final manifest bindings and aggregate SHA-256 validate",
+        "no_consumable_aggregate_before_commit": True,
+        "progress_manifest_authoritative": False,
+        "publication": "fsync staged files and directory, rename .final.tmp to final, fsync run directory",
+        "root_aggregate": "never",
+        "aborted_staging": "may remain non-authoritative for diagnostics",
+        "overwrite": False,
+        "resume": False,
+    }:
+        raise K7RunnerError("K7 runner contract finalization model mismatch")
     return value, digest
 
 
@@ -264,6 +295,94 @@ def _fsync_directory(path: Path) -> None:
         os.close(directory)
 
 
+def _rename_directory_no_replace(source: Path, destination: Path) -> None:
+    """Atomically publish a directory without replacing an existing target."""
+    try:
+        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    except AttributeError as exc:
+        raise K7RunnerError("K7 atomic no-replace directory publication is unavailable") from exc
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        -100, os.fsencode(source), -100, os.fsencode(destination), 1,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise K7RunnerError("K7 final directory already exists")
+    raise OSError(error, os.strerror(error), str(destination))
+
+
+def _authoritative_final_valid(final: Path, run_id: str, checks: dict[str, Any]) -> bool:
+    """Return whether the atomically published final bundle is self-consistent."""
+    manifest_path = final / "final_manifest.json"
+    aggregate_path = final / "aggregate.json"
+    if (final.is_symlink() or not final.is_dir()
+            or manifest_path.is_symlink() or not manifest_path.is_file()
+            or aggregate_path.is_symlink() or not aggregate_path.is_file()):
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        aggregate_bytes = aggregate_path.read_bytes()
+        aggregate = json.loads(aggregate_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict) or not isinstance(aggregate, dict):
+        return False
+    runner = manifest.get("runner")
+    aggregate_result = aggregate.get("aggregate")
+    if not isinstance(aggregate_result, dict):
+        return False
+    return (
+        manifest.get("schema_version") == "minecraft-k7d-final-manifest/1"
+        and manifest.get("completed") is True
+        and manifest.get("run_id") == run_id
+        and manifest.get("execution_revision") == checks["execution_revision"]
+        and runner == {
+            "identity": checks["runner_id"],
+            "version": checks["runner_version"],
+            "contract_digest": checks["runner_contract_digest"],
+            "implementation_sha256": checks["implementation_sha256"],
+        }
+        and manifest.get("protocol_digest") == checks["protocol_digest"]
+        and manifest.get("inventory_digest") == checks["inventory_digest"]
+        and manifest.get("result_schema_digest") == checks["result_schema_digest"]
+        and manifest.get("counts") == {
+            "total_cells": 60, "primary_cells": 40, "control_cells": 20,
+        }
+        and manifest.get("pair_count") == 30
+        and manifest.get("canonical_cell_ids") == checks["cell_ids"]
+        and manifest.get("cell_statuses") == ["completed"] * 60
+        and manifest.get("aggregate_path") == "aggregate.json"
+        and manifest.get("aggregate_sha256")
+        == hashlib.sha256(aggregate_bytes).hexdigest()
+        and aggregate.get("schema_version") == "minecraft-k7b-aggregate/1"
+        and aggregate.get("run_id") == run_id
+        and aggregate.get("execution_revision") == checks["execution_revision"]
+        and aggregate.get("runner_identity") == checks["runner_id"]
+        and aggregate.get("runner_version") == checks["runner_version"]
+        and aggregate.get("runner_contract_digest") == checks["runner_contract_digest"]
+        and aggregate.get("protocol_digest") == checks["protocol_digest"]
+        and aggregate.get("inventory_digest") == checks["inventory_digest"]
+        and aggregate.get("result_schema_digest") == checks["result_schema_digest"]
+        and aggregate.get("raw_trace_count") == 60
+        and aggregate.get("pair_count") == 30
+        and aggregate_result.get("complete") is True
+        and aggregate_result.get("observed_primary_cells") == 40
+        and aggregate_result.get("observed_control_cells") == 20
+    )
+
+
+def _invoke_finalization_hook(hook: Any, stage: str) -> None:
+    if hook is not None:
+        if stage not in FINALIZATION_STAGES:
+            raise K7RunnerError(f"unknown K7 finalization fault stage: {stage}")
+        hook(stage)
+
+
 def _cell_identity(cell: Any) -> dict[str, Any]:
     return {name: getattr(cell, name) for name in (
         "cell_id", "scenario_family", "inventory_id", "condition", "affected_actor", "matrix"
@@ -310,6 +429,7 @@ def _run_with_dependencies(
     output_dir: str | Path,
     fixture_module: Any,
     protocol_module: Any,
+    fault_hook: Any = None,
 ) -> dict[str, Any]:
     if RUN_ID_RE.fullmatch(run_id) is None or run_id in {".", ".."}:
         raise K7RunnerError("K7 run_id is invalid")
@@ -329,7 +449,7 @@ def _run_with_dependencies(
     _fsync_directory(run_dir)
     cells = tuple(protocol_module.build_k6_cells())
     manifest = {
-        "schema_version": "minecraft-k7b-run/1",
+        "schema_version": "minecraft-k7d-run/2",
         "run_id": run_id,
         "execution_revision": checks["execution_revision"],
         "runner": {
@@ -356,6 +476,9 @@ def _run_with_dependencies(
     }
     manifest_path = run_dir / "run_manifest.json"
     _durable_json(manifest_path, manifest)
+    staging = run_dir / ".final.tmp"
+    final = run_dir / "final"
+    published = False
     try:
         for index, cell in enumerate(cells):
             entry = manifest["cells"][index]
@@ -419,14 +542,66 @@ def _run_with_dependencies(
             "protocol_pre_run_exposure": protocol["pre_run_exposure"],
             "aggregate": aggregate,
         }
-        _durable_json(run_dir / "aggregate.json", wrapper)
+        if staging.exists() or staging.is_symlink() or final.exists() or final.is_symlink():
+            raise K7RunnerError("K7 finalization target must not already exist")
+        staging.mkdir(mode=0o700)
+        _invoke_finalization_hook(fault_hook, "after_staging_mkdir")
+
+        aggregate_path = staging / "aggregate.json"
+        _durable_json(aggregate_path, wrapper)
+        _invoke_finalization_hook(fault_hook, "after_aggregate_staged")
+        aggregate_sha256 = hashlib.sha256(aggregate_path.read_bytes()).hexdigest()
+        final_manifest = {
+            "schema_version": "minecraft-k7d-final-manifest/1",
+            "completed": True,
+            "run_id": run_id,
+            "execution_revision": checks["execution_revision"],
+            "runner": {
+                "identity": checks["runner_id"], "version": checks["runner_version"],
+                "contract_digest": checks["runner_contract_digest"],
+                "implementation_sha256": checks["implementation_sha256"],
+            },
+            "protocol_digest": checks["protocol_digest"],
+            "inventory_digest": checks["inventory_digest"],
+            "result_schema_digest": checks["result_schema_digest"],
+            "canonical_cell_ids": [cell.cell_id for cell in cells],
+            "cell_statuses": ["completed"] * 60,
+            "counts": {"total_cells": 60, "primary_cells": 40, "control_cells": 20},
+            "pair_count": 30,
+            "aggregate_path": "aggregate.json",
+            "aggregate_sha256": aggregate_sha256,
+        }
+        _durable_json(staging / "final_manifest.json", final_manifest)
+        _invoke_finalization_hook(fault_hook, "after_final_manifest_staged")
+        _fsync_directory(staging)
+        _invoke_finalization_hook(fault_hook, "before_atomic_publication")
+        if final.exists() or final.is_symlink():
+            raise K7RunnerError("K7 final directory appeared before publication")
+        _rename_directory_no_replace(staging, final)
+        published = True
+        _invoke_finalization_hook(fault_hook, "after_atomic_publication")
+        try:
+            _fsync_directory(run_dir)
+        except Exception as durability_failure:
+            raise K7FinalizationDurabilityError(
+                f"K7 final directory is published but parent fsync failed: {durability_failure}"
+            ) from durability_failure
+        _invoke_finalization_hook(fault_hook, "after_parent_fsync")
+        # This is deliberately non-authoritative: the validated final bundle is
+        # the completion boundary.
         manifest["completed"] = True
         manifest["aggregate_generated"] = True
-        manifest["aggregate_path"] = "aggregate.json"
+        manifest["aggregate_path"] = "final/aggregate.json"
         manifest["run_status"] = "completed"
-        _durable_json(manifest_path, manifest, replace_existing=True)
+        try:
+            _durable_json(manifest_path, manifest, replace_existing=True)
+        except Exception as refresh_failure:
+            print(f"K7 warning: postcommit progress refresh failed: {refresh_failure}", file=sys.stderr)
         return wrapper
-    except Exception as failure:
+    except BaseException as failure:
+        if published or _authoritative_final_valid(final, run_id, checks):
+            # Publication is authoritative; never turn a committed run into failed.
+            raise
         manifest["completed"] = False
         manifest["aggregate_generated"] = False
         manifest["aggregate_path"] = None
