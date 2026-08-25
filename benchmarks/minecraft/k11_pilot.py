@@ -15,11 +15,8 @@ from typing import Any, Mapping
 
 from benchmarks.minecraft.eac_identity import resolve_git_revision, runtime_identity
 from benchmarks.minecraft.k11_analysis import analyze_trace
-from benchmarks.minecraft.k11_trace import (
-    K11ProcessInstrumentation,
-    K11TraceRecorder,
-    validate_trace,
-)
+from benchmarks.minecraft.k11_instrumentation import K11ProcessInstrumentation
+from benchmarks.minecraft.k11_trace import K11TraceRecorder, validate_trace
 from env.runtime_execution import RuntimeExecution
 from env.runtime_paths import RuntimePaths
 from start_with_config import run as run_villageragent
@@ -118,13 +115,13 @@ def _assert_clean_checkout(root: Path) -> None:
 
 
 def _prepare_execution_identity(output_root: Path) -> tuple[RuntimeExecution, str, Path, dict[str, Any]]:
-    root = ROOT.resolve(strict=True)
+    execution_root = ROOT.resolve(strict=True)
     resolved_output = output_root.resolve()
-    if resolved_output == root or root in resolved_output.parents:
+    if resolved_output == execution_root or execution_root in resolved_output.parents:
         raise K11PilotContractError("K11 P0 output root must be outside the execution repository")
-    _assert_clean_checkout(root)
-    execution = RuntimeExecution.resolve(root)
-    revision = resolve_git_revision(root)
+    _assert_clean_checkout(execution_root)
+    execution = RuntimeExecution.resolve(execution_root)
+    revision = resolve_git_revision(execution_root)
     identity = runtime_identity(execution, execution_revision=revision)
     premanifest_path = output_root / "K11_P0_EAC_PREMANIFEST.json"
     premanifest_path.write_text(
