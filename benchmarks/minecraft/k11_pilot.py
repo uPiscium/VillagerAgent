@@ -1,8 +1,8 @@
 """K11 P0 instrumentation-validation runner.
 
-P0 is a development pilot only.  This runner intentionally rejects anything
-other than the eight-run Advisory/non-judged natural cohort described by the K11
-protocol draft.  It never injects semantic changes or synchronization delays.
+P0 is a development pilot only. This runner rejects anything other than the
+eight-run Advisory/non-judged natural cohort described by the K11 protocol
+draft. It never injects semantic changes or synchronization delays.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from benchmarks.minecraft.eac_identity import resolve_git_revision, runtime_identity
 from benchmarks.minecraft.k11_analysis import analyze_trace
+from benchmarks.minecraft.k11_calibration import measure_inprocess_overhead
 from benchmarks.minecraft.k11_instrumentation import K11ProcessInstrumentation
 from benchmarks.minecraft.k11_trace import K11TraceRecorder, validate_trace
 from env.runtime_execution import RuntimeExecution
@@ -170,6 +171,15 @@ def _runtime_kwargs(
     return config
 
 
+def _event_type_counts(trace_artifact: Mapping[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for event in trace_artifact.get("events", []):
+        event_type = event.get("event_type")
+        if isinstance(event_type, str):
+            counts[event_type] = counts.get(event_type, 0) + 1
+    return counts
+
+
 def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> dict[str, Any]:
     manifest = load_p0_manifest(manifest_path)
     root = Path(output_root).resolve()
@@ -208,6 +218,14 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
 
         trace_artifact = trace.artifact()
         validation = validate_trace(trace_artifact)
+        event_counts = _event_type_counts(trace_artifact)
+        actor_threads = {
+            (event.get("actor_id"), event.get("thread_id"))
+            for event in trace_artifact.get("events", [])
+            if event.get("event_type") == "k11.agent_step_started"
+            and isinstance(event.get("actor_id"), str)
+            and isinstance(event.get("thread_id"), int)
+        }
         try:
             analysis = analyze_trace(trace_artifact)
         except Exception as exc:
@@ -228,6 +246,8 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             "runtime_error": error,
             "runtime_error_type": error_type,
             "trace_validation": validation,
+            "event_type_counts": event_counts,
+            "agent_thread_pairs": sorted([list(item) for item in actor_threads]),
             "offline_analysis_error": analysis.get("analysis_error"),
             "runtime_returned": result is not None,
         }
@@ -237,20 +257,68 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         )
         summaries.append(summary)
 
+    calibration_error = None
+    try:
+        calibration = measure_inprocess_overhead(iterations=100)
+    except Exception as exc:
+        calibration_error = f"{type(exc).__name__}: {exc}"
+        calibration = {
+            "artifact_id": "minecraft-k11-p0-inprocess-overhead-calibration",
+            "artifact_version": 1,
+            "prevalence_inference_allowed": False,
+            "calibration_error": calibration_error,
+        }
+    (root / "P0_CALIBRATION.json").write_text(
+        json.dumps(calibration, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    aggregate_event_counts: dict[str, int] = {}
+    all_actor_threads = set()
+    for summary in summaries:
+        for event_type, count in summary["event_type_counts"].items():
+            aggregate_event_counts[event_type] = aggregate_event_counts.get(event_type, 0) + count
+        all_actor_threads.update(tuple(item) for item in summary["agent_thread_pairs"])
+
+    runtime_error_count = sum(item["runtime_error"] is not None for item in summaries)
+    trace_valid_count = sum(item["trace_validation"]["valid"] is True for item in summaries)
+    analysis_valid_count = sum(item["offline_analysis_error"] is None for item in summaries)
+    coverage = {
+        "model_calls_observed": aggregate_event_counts.get("k11.model_call_started", 0) > 0,
+        "tool_calls_observed": aggregate_event_counts.get("k11.tool_call_entered", 0) > 0,
+        "prepared_actions_observed": aggregate_event_counts.get("k11.eac_action_prepared", 0) > 0,
+        "evidence_ingestions_observed": aggregate_event_counts.get("k11.eac_evidence_ingested", 0) > 0,
+        "multiple_actor_thread_pairs_observed": len(all_actor_threads) > 1,
+    }
+    coverage_sufficient = all(coverage.values())
+    p0_passed = (
+        runtime_error_count == 0
+        and trace_valid_count == len(summaries) == P0_EXPECTED_RUNS
+        and analysis_valid_count == len(summaries)
+        and calibration_error is None
+        and calibration.get("traced", {}).get("trace_validation", {}).get("valid") is True
+        and coverage_sufficient
+    )
+
     aggregate = {
         "artifact_id": "minecraft-k11-p0-validation",
         "artifact_version": 1,
         "study_phase": "K11-P0-instrumentation-validation",
         "prevalence_inference_allowed": False,
+        "p0_passed": p0_passed,
         "manifest": str(Path(manifest_path).resolve()),
         "execution_revision": revision,
         "runtime_digest": identity["runtime_digest"],
         "premanifest_identity": identity["premanifest_identity"],
         "premanifest_path": str(premanifest_path),
         "run_count": len(summaries),
-        "trace_valid_count": sum(item["trace_validation"]["valid"] is True for item in summaries),
-        "offline_analysis_valid_count": sum(item["offline_analysis_error"] is None for item in summaries),
-        "runtime_error_count": sum(item["runtime_error"] is not None for item in summaries),
+        "trace_valid_count": trace_valid_count,
+        "offline_analysis_valid_count": analysis_valid_count,
+        "runtime_error_count": runtime_error_count,
+        "aggregate_event_type_counts": aggregate_event_counts,
+        "coverage": coverage,
+        "coverage_sufficient": coverage_sufficient,
+        "calibration_error": calibration_error,
         "runs": summaries,
     }
     (root / "P0_VALIDATION.json").write_text(
@@ -267,10 +335,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     aggregate = run_p0_manifest(args.manifest, output_root=args.output_root)
     print(json.dumps(aggregate, ensure_ascii=True, indent=2, sort_keys=True))
-    return 0 if (
-        aggregate["trace_valid_count"] == aggregate["run_count"]
-        and aggregate["offline_analysis_valid_count"] == aggregate["run_count"]
-    ) else 2
+    return 0 if aggregate["p0_passed"] is True else 2
 
 
 if __name__ == "__main__":
