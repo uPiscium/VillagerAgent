@@ -8,23 +8,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import traceback
 from pathlib import Path
 from typing import Any, Mapping
 
+from benchmarks.minecraft.eac_identity import resolve_git_revision, runtime_identity
 from benchmarks.minecraft.k11_analysis import analyze_trace
 from benchmarks.minecraft.k11_trace import (
     K11ProcessInstrumentation,
     K11TraceRecorder,
     validate_trace,
 )
+from env.runtime_execution import RuntimeExecution
 from env.runtime_paths import RuntimePaths
 from start_with_config import run as run_villageragent
 
 
+ROOT = Path(__file__).resolve().parents[2]
 P0_MANIFEST_ID = "minecraft-k11-p0-manifest"
 P0_MANIFEST_VERSION = 1
 P0_EXPECTED_RUNS = 8
+EAC_IDENTITY_SOURCE = "current_immutable_checkout"
 FORBIDDEN_CONFIG_KEYS = frozenset({
     "forced_sleep",
     "prepare_sleep",
@@ -56,6 +61,8 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
         raise K11PilotContractError("K11 P0 study phase mismatch")
     if document.get("prevalence_inference_allowed") is not False:
         raise K11PilotContractError("P0 must explicitly forbid prevalence inference")
+    if document.get("eac_identity_source") != EAC_IDENTITY_SOURCE:
+        raise K11PilotContractError("K11 P0 must bind EAC identity to the current immutable checkout")
     runs = document.get("runs")
     if not isinstance(runs, list) or len(runs) != P0_EXPECTED_RUNS:
         raise K11PilotContractError("K11 P0 manifest must contain exactly eight runs")
@@ -86,8 +93,8 @@ def _validate_run(row: Mapping[str, Any]) -> None:
         raise K11PilotContractError("K11 P0 primary cohort must use dual_dag_advisory")
     if dual.get("judged_execution") is not False or dual.get("production") is not False:
         raise K11PilotContractError("K11 P0 must preserve explicit non-judged/non-production EAC admission")
-    if not dual.get("eac_premanifest") or not dual.get("eac_execution_revision"):
-        raise K11PilotContractError("K11 P0 requires explicit EAC premanifest and execution revision")
+    if "eac_premanifest" in dual or "eac_execution_revision" in dual:
+        raise K11PilotContractError("K11 P0 EAC identity is generated from the current immutable checkout, not supplied per run")
     for key in (
         "api_model", "api_base", "task_idx", "agent_num", "dig_needed", "max_task_num",
         "task_goal", "host", "port", "task_name",
@@ -96,8 +103,52 @@ def _validate_run(row: Mapping[str, Any]) -> None:
             raise K11PilotContractError(f"K11 P0 runtime is missing {key}")
 
 
-def _runtime_kwargs(row: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
+def _assert_clean_checkout(root: Path) -> None:
+    result = subprocess.run(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise K11PilotContractError("K11 P0 could not verify execution checkout cleanliness")
+    if result.stdout.strip():
+        raise K11PilotContractError("K11 P0 requires a clean immutable execution checkout")
+
+
+def _prepare_execution_identity(output_root: Path) -> tuple[RuntimeExecution, str, Path, dict[str, Any]]:
+    root = ROOT.resolve(strict=True)
+    resolved_output = output_root.resolve()
+    if resolved_output == root or root in resolved_output.parents:
+        raise K11PilotContractError("K11 P0 output root must be outside the execution repository")
+    _assert_clean_checkout(root)
+    execution = RuntimeExecution.resolve(root)
+    revision = resolve_git_revision(root)
+    identity = runtime_identity(execution, execution_revision=revision)
+    premanifest_path = output_root / "K11_P0_EAC_PREMANIFEST.json"
+    premanifest_path.write_text(
+        json.dumps(identity, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return execution, revision, premanifest_path.resolve(), identity
+
+
+def _runtime_kwargs(
+    row: Mapping[str, Any],
+    run_dir: Path,
+    *,
+    execution: RuntimeExecution,
+    execution_revision: str,
+    premanifest_path: Path,
+) -> dict[str, Any]:
     config = dict(row["runtime"])
+    dual = dict(config["minecraft_dual_dag_config"])
+    dual.update({
+        "eac_premanifest": str(premanifest_path),
+        "eac_execution_revision": execution_revision,
+    })
+    config["minecraft_dual_dag_config"] = dual
     run_id = row["run_id"]
     runtime_root = run_dir / "runtime"
     runtime_paths = RuntimePaths.isolated(runtime_root)
@@ -108,6 +159,7 @@ def _runtime_kwargs(row: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
         "runtime_event_path": str(run_dir / "runtime_events.jsonl"),
         "attempt_id": run_id,
         "emit_controller_terminal_event": True,
+        "runtime_execution": execution,
     })
     config.setdefault("role", "same")
     config.setdefault("api_key_list", None)
@@ -118,14 +170,14 @@ def _runtime_kwargs(row: Mapping[str, Any], run_dir: Path) -> dict[str, Any]:
     config.setdefault("seed_contract", None)
     config.setdefault("world_initialization", None)
     config.setdefault("position_convention", None)
-    config.setdefault("runtime_execution", None)
     return config
 
 
 def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> dict[str, Any]:
     manifest = load_p0_manifest(manifest_path)
-    root = Path(output_root)
+    root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    execution, revision, premanifest_path, identity = _prepare_execution_identity(root)
     summaries = []
 
     for row in manifest["runs"]:
@@ -140,7 +192,13 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         result = None
         try:
             with K11ProcessInstrumentation(trace):
-                result = run_villageragent(**_runtime_kwargs(row, run_dir))
+                result = run_villageragent(**_runtime_kwargs(
+                    row,
+                    run_dir,
+                    execution=execution,
+                    execution_revision=revision,
+                    premanifest_path=premanifest_path,
+                ))
         except BaseException as exc:
             error = str(exc)
             error_type = type(exc).__name__
@@ -187,7 +245,11 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         "artifact_version": 1,
         "study_phase": "K11-P0-instrumentation-validation",
         "prevalence_inference_allowed": False,
-        "manifest": str(Path(manifest_path)),
+        "manifest": str(Path(manifest_path).resolve()),
+        "execution_revision": revision,
+        "runtime_digest": identity["runtime_digest"],
+        "premanifest_identity": identity["premanifest_identity"],
+        "premanifest_path": str(premanifest_path),
         "run_count": len(summaries),
         "trace_valid_count": sum(item["trace_validation"]["valid"] is True for item in summaries),
         "offline_analysis_valid_count": sum(item["offline_analysis_error"] is None for item in summaries),
