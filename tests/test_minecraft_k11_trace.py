@@ -1,10 +1,10 @@
 from copy import deepcopy
 
 from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
+from benchmarks.minecraft.k11_instrumentation import instrument_runtime
 from benchmarks.minecraft.k11_trace import (
     K11TraceRecorder,
     exact_request_digest,
-    instrument_runtime,
     validate_trace,
 )
 
@@ -80,6 +80,7 @@ def test_k11_trace_correlates_exact_request_decision_native_and_terminal() -> No
     assert validation["counts"]["prepared"] == 1
     assert validation["counts"]["execution_decisions"] == 1
     assert validation["counts"]["native_entries"] == 1
+    assert validation["counts"]["native_completions"] == 1
     assert validation["counts"]["terminals"] == 1
     assert validation["counts"]["evidence_ingestions"] >= 1
 
