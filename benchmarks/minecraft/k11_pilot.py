@@ -12,6 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Mapping
 
+from benchmarks.minecraft.k11_analysis import analyze_trace
 from benchmarks.minecraft.k11_trace import (
     K11ProcessInstrumentation,
     K11TraceRecorder,
@@ -150,12 +151,29 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         finally:
             trace.write_json(run_dir / "k11_trace.json")
 
-        validation = validate_trace(trace.artifact())
+        trace_artifact = trace.artifact()
+        validation = validate_trace(trace_artifact)
+        try:
+            analysis = analyze_trace(trace_artifact)
+        except Exception as exc:
+            analysis = {
+                "artifact_id": "minecraft-k11-trace-analysis-draft",
+                "artifact_version": 1,
+                "prevalence_inference_allowed": False,
+                "run_id": run_id,
+                "analysis_error": str(exc),
+                "analysis_error_type": type(exc).__name__,
+            }
+        (run_dir / "k11_analysis.json").write_text(
+            json.dumps(analysis, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         summary = {
             "run_id": run_id,
             "runtime_error": error,
             "runtime_error_type": error_type,
             "trace_validation": validation,
+            "offline_analysis_error": analysis.get("analysis_error"),
             "runtime_returned": result is not None,
         }
         (run_dir / "p0_validation.json").write_text(
@@ -172,6 +190,7 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         "manifest": str(Path(manifest_path)),
         "run_count": len(summaries),
         "trace_valid_count": sum(item["trace_validation"]["valid"] is True for item in summaries),
+        "offline_analysis_valid_count": sum(item["offline_analysis_error"] is None for item in summaries),
         "runtime_error_count": sum(item["runtime_error"] is not None for item in summaries),
         "runs": summaries,
     }
@@ -189,7 +208,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     aggregate = run_p0_manifest(args.manifest, output_root=args.output_root)
     print(json.dumps(aggregate, ensure_ascii=True, indent=2, sort_keys=True))
-    return 0 if aggregate["trace_valid_count"] == aggregate["run_count"] else 2
+    return 0 if (
+        aggregate["trace_valid_count"] == aggregate["run_count"]
+        and aggregate["offline_analysis_valid_count"] == aggregate["run_count"]
+    ) else 2
 
 
 if __name__ == "__main__":
