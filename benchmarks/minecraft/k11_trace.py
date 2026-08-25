@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
+from benchmarks.common.eac.model import ExactRequest, Proposition
 
 
 TRACE_SCHEMA_VERSION = "minecraft-k11-trace/1"
@@ -71,8 +72,41 @@ def use_scope(scope: K11TraceScope):
         _SCOPE.reset(token)
 
 
+def proposition_payload(proposition: Proposition) -> dict[str, Any]:
+    key = proposition.key
+    return {
+        "namespace": key.namespace,
+        "predicate": key.predicate,
+        "arguments": plain_value(key.arguments),
+        "temporal_scope": key.temporal_scope,
+        "polarity": proposition.polarity,
+    }
+
+
+def request_payload(request: ExactRequest) -> dict[str, Any]:
+    return {
+        "candidate_id": request.candidate_id,
+        "attempt_id": request.attempt_id,
+        "action": {
+            "identity": request.action.identity,
+            "version": request.action.version,
+            "digest": request.action.digest,
+        },
+        "arguments": {name: plain_value(value) for name, value in request.arguments},
+        "target": plain_value(request.target),
+    }
+
+
 def plain_value(value: Any) -> Any:
-    """Convert captured immutable values only when exporting the trace."""
+    """Convert captured immutable values only when exporting the trace.
+
+    ExactRequest and Proposition have explicit projections because the generic
+    dataclass representation does not match the frozen K11 trace schema.
+    """
+    if isinstance(value, ExactRequest):
+        return request_payload(value)
+    if isinstance(value, Proposition):
+        return proposition_payload(value)
     try:
         from benchmarks.common.eac.canonical import FrozenJSONArray, FrozenJSONObject
         if isinstance(value, (FrozenJSONArray, FrozenJSONObject)):
@@ -90,31 +124,6 @@ def plain_value(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
-
-
-def proposition_payload(proposition) -> dict[str, Any]:
-    key = proposition.key
-    return {
-        "namespace": key.namespace,
-        "predicate": key.predicate,
-        "arguments": plain_value(key.arguments),
-        "temporal_scope": key.temporal_scope,
-        "polarity": proposition.polarity,
-    }
-
-
-def request_payload(request) -> dict[str, Any]:
-    return {
-        "candidate_id": request.candidate_id,
-        "attempt_id": request.attempt_id,
-        "action": {
-            "identity": request.action.identity,
-            "version": request.action.version,
-            "digest": request.action.digest,
-        },
-        "arguments": {name: plain_value(value) for name, value in request.arguments},
-        "target": plain_value(request.target),
-    }
 
 
 def exact_request_digest(request_value: Mapping[str, Any]) -> str:
