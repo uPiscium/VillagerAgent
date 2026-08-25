@@ -1,12 +1,8 @@
 from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
 from benchmarks.minecraft.k11_analysis import analyze_trace, replay_admissibility
-from benchmarks.minecraft.k11_trace import (
-    K11TraceRecorder,
-    K11TraceScope,
-    instrument_runtime,
-    use_scope,
-)
+from benchmarks.minecraft.k11_instrumentation import instrument_runtime
+from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
 
 
 def _mine(**kwargs):
