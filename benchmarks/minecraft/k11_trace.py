@@ -1,8 +1,8 @@
-"""Observability-only tracing for the K11 natural-exposure study.
+"""Core trace data structures for the K11 natural-exposure study.
 
-K11 tracing is intentionally isolated from the normal runtime event journal.  In
-particular, critical EAC events never use the durable JSONL sink and never add a
-new synchronization lock to the prepare/evidence/execute seam.
+Runtime instrumentation lives in ``benchmarks.minecraft.k11_instrumentation``.
+This module intentionally contains no filesystem writes on ``record()`` and no
+synchronization primitive that could widen the EAC prepare/evidence/execute seam.
 """
 from __future__ import annotations
 
@@ -14,10 +14,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
-from functools import wraps
 from itertools import count
 from pathlib import Path
-from types import MethodType
 from typing import Any, Mapping
 
 from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
@@ -73,8 +71,8 @@ def use_scope(scope: K11TraceScope):
         _SCOPE.reset(token)
 
 
-def _plain(value: Any) -> Any:
-    """Convert frozen EAC values to JSON-compatible data after measurement."""
+def plain_value(value: Any) -> Any:
+    """Convert captured immutable values only when exporting the trace."""
     try:
         from benchmarks.common.eac.canonical import FrozenJSONArray, FrozenJSONObject
         if isinstance(value, (FrozenJSONArray, FrozenJSONObject)):
@@ -82,30 +80,30 @@ def _plain(value: Any) -> Any:
     except ImportError:
         pass
     if is_dataclass(value):
-        return {field.name: _plain(getattr(value, field.name)) for field in fields(value)}
+        return {field.name: plain_value(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
+        return {str(key): plain_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
-        return [_plain(item) for item in value]
+        return [plain_value(item) for item in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
 
 
-def _proposition_payload(proposition) -> dict[str, Any]:
+def proposition_payload(proposition) -> dict[str, Any]:
     key = proposition.key
     return {
         "namespace": key.namespace,
         "predicate": key.predicate,
-        "arguments": _plain(key.arguments),
+        "arguments": plain_value(key.arguments),
         "temporal_scope": key.temporal_scope,
         "polarity": proposition.polarity,
     }
 
 
-def _request_payload(request) -> dict[str, Any]:
+def request_payload(request) -> dict[str, Any]:
     return {
         "candidate_id": request.candidate_id,
         "attempt_id": request.attempt_id,
@@ -114,22 +112,23 @@ def _request_payload(request) -> dict[str, Any]:
             "version": request.action.version,
             "digest": request.action.digest,
         },
-        "arguments": {name: _plain(value) for name, value in request.arguments},
-        "target": _plain(request.target),
+        "arguments": {name: plain_value(value) for name, value in request.arguments},
+        "target": plain_value(request.target),
     }
 
 
-def exact_request_digest(request_payload: Mapping[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(canonical_bytes(dict(request_payload))).hexdigest()
+def exact_request_digest(request_value: Mapping[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(canonical_bytes(dict(request_value))).hexdigest()
 
 
 class K11TraceRecorder:
-    """Append-only in-memory recorder with no explicit synchronization lock.
+    """Append-only process-local recorder with no explicit lock.
 
-    CPython serializes ``next(itertools.count)`` and ``list.append`` under the GIL.
-    Events retain their explicit sequence and are sorted at export, so list insertion
-    order is not treated as the cross-thread logical order.  EAC calls are additionally
-    serialized by the pre-existing MinecraftEACRuntime RLock.
+    K11 currently executes on CPython. ``next(itertools.count)`` and
+    ``list.append`` are serialized by the interpreter lock; exported events are
+    sorted by the explicit sequence. EAC semantic ordering is additionally
+    linearized by the pre-existing ``MinecraftEACRuntime`` RLock at hook sites.
+    P0 must reject the instrumentation if these assumptions do not hold.
     """
 
     def __init__(self, run_id: str):
@@ -143,8 +142,7 @@ class K11TraceRecorder:
 
     def new_identity(self, kind: str, *, actor_id: str | None = None) -> str:
         ordinal = next(self._identity_sequence)
-        actor = actor_id or "none"
-        return f"{self.run_id}:{actor}:{kind}:{ordinal}"
+        return f"{self.run_id}:{actor_id or 'none'}:{kind}:{ordinal}"
 
     def record(
         self,
@@ -154,7 +152,7 @@ class K11TraceRecorder:
         payload: Mapping[str, Any] | None = None,
         scope: K11TraceScope | None = None,
     ) -> dict[str, Any] | None:
-        """Record a small observed fact; tracing failures never alter runtime behavior."""
+        """Append one small observed fact; tracing failures are non-authoritative."""
         try:
             sequence = next(self._sequence)
             selected_scope = scope if scope is not None else current_scope()
@@ -165,17 +163,17 @@ class K11TraceRecorder:
                 "event_id": f"{self.run_id}:k11:{sequence}",
                 "event_type": event_type,
                 "source": source,
-                "monotonic_ns": time.monotonic_ns(),
-                "thread_id": threading.get_ident(),
                 "task_id": selected_scope.task_id if selected_scope else None,
                 "actor_id": selected_scope.actor_id if selected_scope else None,
                 "agent_step_id": selected_scope.agent_step_id if selected_scope else None,
                 "tool_call_id": selected_scope.tool_call_id if selected_scope else None,
                 "payload": dict(payload or {}),
+                "monotonic_ns": time.monotonic_ns(),
+                "thread_id": threading.get_ident(),
             }
             self.events.append(event)
             return event
-        except BaseException as exc:  # tracing must not change the measured execution
+        except BaseException as exc:
             try:
                 self.instrumentation_errors.append(type(exc).__name__)
             except BaseException:
@@ -183,9 +181,9 @@ class K11TraceRecorder:
             return None
 
     def artifact(self) -> dict[str, Any]:
-        events = []
+        events: list[dict[str, Any]] = []
         for raw in sorted(self.events, key=lambda item: item.get("seq", 0)):
-            event = _plain(raw)
+            event = plain_value(raw)
             request = event.get("payload", {}).get("exact_request")
             if isinstance(request, Mapping):
                 event["payload"]["exact_request_digest"] = exact_request_digest(request)
@@ -199,398 +197,13 @@ class K11TraceRecorder:
         }
 
     def write_json(self, path: str | Path) -> None:
+        """Persist only after the measured runtime section has completed."""
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
             json.dumps(self.artifact(), ensure_ascii=True, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-
-
-def _record_terminal(trace: K11TraceRecorder, prepared, *, outcome: str,
-                     error: BaseException | None = None) -> None:
-    payload = {
-        "tool_name": prepared.tool_name,
-        "exact_request": _request_payload(prepared.request),
-        "outcome": outcome,
-    }
-    if error is not None:
-        payload.update({
-            "error_type": type(error).__name__,
-            "reason": str(error)[:512],
-        })
-    trace.record(
-        "k11.eac_action_terminal",
-        source="benchmarks.minecraft.k11_trace.instrument_runtime",
-        payload=payload,
-    )
-
-
-def instrument_runtime(runtime, trace: K11TraceRecorder):
-    """Instrument one MinecraftEACRuntime instance without changing EAC semantics."""
-    if getattr(runtime, "_k11_trace_instrumented", False):
-        return runtime
-    runtime._k11_trace_instrumented = True
-    runtime._k11_trace_recorder = trace
-
-    original_prepare = runtime.prepare_tool
-    original_execute = runtime.execute_prepared
-    original_ingest = runtime.authority.ingest_record
-
-    def prepare_tool(self, tool_name, function, args, kwargs):
-        # Use the existing runtime lock as the linearization boundary.  The outer
-        # acquisition is re-entrant and only extends the existing critical section
-        # through the in-memory marker append.
-        with self._lock:
-            prepared = original_prepare(tool_name, function, args, kwargs)
-            candidate = self.authority._candidates[prepared.request.candidate_id]
-            manifest = candidate.manifest
-            trace.record(
-                "k11.eac_action_prepared",
-                source="MinecraftEACRuntime.prepare_tool",
-                payload={
-                    "tool_name": tool_name,
-                    "exact_request": _request_payload(prepared.request),
-                    "epre": [_proposition_payload(item) for item in candidate.epre],
-                    "actor_scope": _plain(candidate.actor),
-                    "mode": self.mode,
-                    "classification_identity": self.classification_identity,
-                    "manifest_fingerprint": getattr(manifest, "fingerprint", None),
-                    "runtime_sequence": self._sequence,
-                    "fluent_revision": self._fluent_revision,
-                },
-            )
-
-            gateway = prepared.gateway
-            private_native_name = "_EffectGateway__native"
-            native_effect = getattr(gateway, private_native_name)
-            if not getattr(native_effect, "_k11_native_wrapper", False):
-                @wraps(native_effect)
-                def traced_native(request):
-                    request_value = _request_payload(request)
-                    trace.record(
-                        "k11.eac_native_effect_entered",
-                        source="EffectGateway.native_effect",
-                        payload={"tool_name": tool_name, "exact_request": request_value},
-                    )
-                    try:
-                        result = native_effect(request)
-                    except BaseException as exc:
-                        trace.record(
-                            "k11.eac_native_effect_completed",
-                            source="EffectGateway.native_effect",
-                            payload={
-                                "tool_name": tool_name,
-                                "exact_request": request_value,
-                                "outcome": "effect_unknown",
-                                "error_type": type(exc).__name__,
-                            },
-                        )
-                        raise
-                    else:
-                        outcome = getattr(result, "outcome", "succeeded")
-                        trace.record(
-                            "k11.eac_native_effect_completed",
-                            source="EffectGateway.native_effect",
-                            payload={
-                                "tool_name": tool_name,
-                                "exact_request": request_value,
-                                "outcome": outcome,
-                            },
-                        )
-                        return result
-
-                traced_native._k11_native_wrapper = True
-                setattr(gateway, private_native_name, traced_native)
-            return prepared
-
-    def execute_prepared(self, prepared):
-        with self._lock:
-            trace.record(
-                "k11.eac_execution_decision_attempted",
-                source="MinecraftEACRuntime.execute_prepared",
-                payload={
-                    "tool_name": prepared.tool_name,
-                    "exact_request": _request_payload(prepared.request),
-                    "runtime_sequence": self._sequence,
-                    "fluent_revision": self._fluent_revision,
-                },
-            )
-            try:
-                result = original_execute(prepared)
-            except BaseException as exc:
-                _record_terminal(trace, prepared, outcome="raised", error=exc)
-                raise
-            else:
-                if isinstance(result, Mapping) and result.get("status") is not True:
-                    outcome = "native_failed"
-                else:
-                    outcome = "native_completed"
-                _record_terminal(trace, prepared, outcome=outcome)
-                return result
-
-    def ingest_record(authority_self, record, *, proposition, root_id, revision,
-                      provenance_id, supersedes=()):
-        # MinecraftEACRuntime.ingest_actor_record calls this while holding the
-        # pre-existing runtime lock, so the marker remains inside that boundary.
-        root = original_ingest(
-            record,
-            proposition=proposition,
-            root_id=root_id,
-            revision=revision,
-            provenance_id=provenance_id,
-            supersedes=supersedes,
-        )
-        visible = record.get("visible_to")
-        actor_id = visible[0] if isinstance(visible, (list, tuple)) and len(visible) == 1 else None
-        scope = current_scope()
-        if scope is None or scope.actor_id != actor_id:
-            scope = K11TraceScope(trace.run_id, actor_id=actor_id)
-        trace.record(
-            "k11.eac_evidence_ingested",
-            source="RuntimeAuthority.ingest_record",
-            scope=scope,
-            payload={
-                "root_id": root.root_id,
-                "record_type": record.get("type"),
-                "proposition": _proposition_payload(proposition),
-                "revision": revision,
-                "supersedes": list(supersedes),
-                "source": record.get("source"),
-                "provenance_id": provenance_id,
-                "visible_to": _plain(root.visible_to),
-                "source_stream_id": root.source_stream_id,
-                "source_stream_revision": root.source_stream_revision,
-                "runtime_sequence": runtime._sequence,
-            },
-        )
-        return root
-
-    runtime.prepare_tool = MethodType(prepare_tool, runtime)
-    runtime.execute_prepared = MethodType(execute_prepared, runtime)
-    runtime.authority.ingest_record = MethodType(ingest_record, runtime.authority)
-    return runtime
-
-
-class K11ProcessInstrumentation:
-    """Process-local wrappers for task/agent/model/tool correlation.
-
-    The wrappers are installed only around K11 pilot/final runs and restored on
-    exit.  They do not alter planner decisions, tool inputs, model prompts, or
-    scheduling controls.
-    """
-
-    def __init__(self, trace: K11TraceRecorder):
-        self.trace = trace
-        self._restores: list[tuple[Any, str, Any]] = []
-
-    def _patch(self, owner, name: str, replacement) -> None:
-        original = getattr(owner, name)
-        self._restores.append((owner, name, original))
-        setattr(owner, name, replacement)
-
-    def __enter__(self):
-        from benchmarks.minecraft import eac_runtime as eac_runtime_module
-        from env.env import VillagerBench
-        from env.minecraft_client import LLMHandler
-        from pipeline.agent import BaseAgent
-
-        trace = self.trace
-
-        original_env_init = VillagerBench.__init__
-        @wraps(original_env_init)
-        def env_init(env_self, *args, **kwargs):
-            original_env_init(env_self, *args, **kwargs)
-            env_self._k11_trace_recorder = trace
-        self._patch(VillagerBench, "__init__", env_init)
-
-        original_step = BaseAgent.step
-        @wraps(original_step)
-        def agent_step(agent_self, task, *args, **kwargs):
-            recorder = getattr(agent_self.env, "_k11_trace_recorder", None)
-            if recorder is None:
-                return original_step(agent_self, task, *args, **kwargs)
-            task_id = str(getattr(task, "id", "")) or None
-            step_id = recorder.new_identity("agent-step", actor_id=agent_self.name)
-            scope = K11TraceScope(
-                recorder.run_id,
-                task_id=task_id,
-                actor_id=agent_self.name,
-                agent_step_id=step_id,
-            )
-            with use_scope(scope):
-                recorder.record(
-                    "k11.agent_step_started",
-                    source="BaseAgent.step",
-                    payload={"task_id": task_id},
-                )
-                try:
-                    result = original_step(agent_self, task, *args, **kwargs)
-                except BaseException as exc:
-                    recorder.record(
-                        "k11.agent_step_completed",
-                        source="BaseAgent.step",
-                        payload={"outcome": "raised", "error_type": type(exc).__name__},
-                    )
-                    raise
-                else:
-                    recorder.record(
-                        "k11.agent_step_completed",
-                        source="BaseAgent.step",
-                        payload={"outcome": "returned"},
-                    )
-                    return result
-        self._patch(BaseAgent, "step", agent_step)
-
-        original_guard = VillagerBench._guard_tool_action
-        @wraps(original_guard)
-        def guard_tool_action(env_self, tool, *, actor_name=None):
-            guarded_tool = original_guard(env_self, tool, actor_name=actor_name)
-            original_func = getattr(guarded_tool, "func", None)
-            recorder = getattr(env_self, "_k11_trace_recorder", None)
-            if recorder is None or not callable(original_func):
-                return guarded_tool
-
-            @wraps(original_func)
-            def traced_tool(*args, **kwargs):
-                parent = current_scope()
-                call_id = recorder.new_identity("tool-call", actor_id=actor_name)
-                scope = K11TraceScope(
-                    recorder.run_id,
-                    task_id=parent.task_id if parent else None,
-                    actor_id=actor_name or (parent.actor_id if parent else None),
-                    agent_step_id=parent.agent_step_id if parent else None,
-                    tool_call_id=call_id,
-                )
-                tool_name = getattr(tool, "name", None) or getattr(original_func, "__name__", "")
-                with use_scope(scope):
-                    recorder.record(
-                        "k11.tool_call_entered",
-                        source="VillagerBench._guard_tool_action",
-                        payload={"tool_name": tool_name},
-                    )
-                    try:
-                        result = original_func(*args, **kwargs)
-                    except BaseException as exc:
-                        recorder.record(
-                            "k11.tool_call_exited",
-                            source="VillagerBench._guard_tool_action",
-                            payload={
-                                "tool_name": tool_name,
-                                "outcome": "raised",
-                                "error_type": type(exc).__name__,
-                            },
-                        )
-                        raise
-                    else:
-                        recorder.record(
-                            "k11.tool_call_exited",
-                            source="VillagerBench._guard_tool_action",
-                            payload={
-                                "tool_name": tool_name,
-                                "outcome": "returned",
-                                "status": result.get("status") if isinstance(result, Mapping) else None,
-                            },
-                        )
-                        return result
-
-            guarded_tool.func = traced_tool
-            return guarded_tool
-        self._patch(VillagerBench, "_guard_tool_action", guard_tool_action)
-
-        original_llm_start = LLMHandler.on_llm_start
-        @wraps(original_llm_start)
-        def llm_start(handler_self, serialized, prompts, **kwargs):
-            result = original_llm_start(handler_self, serialized, prompts, **kwargs)
-            scope = current_scope()
-            if scope is not None:
-                model_call_id = trace.new_identity("model-call", actor_id=scope.actor_id)
-                stack = getattr(handler_self, "_k11_model_call_stack", None)
-                if stack is None:
-                    stack = []
-                    handler_self._k11_model_call_stack = stack
-                stack.append(model_call_id)
-                model_name = serialized.get("name") if isinstance(serialized, Mapping) else None
-                trace.record(
-                    "k11.model_call_started",
-                    source="LLMHandler.on_llm_start",
-                    payload={"model_call_id": model_call_id, "model_name": model_name},
-                )
-            return result
-        self._patch(LLMHandler, "on_llm_start", llm_start)
-
-        original_llm_end = LLMHandler.on_llm_end
-        @wraps(original_llm_end)
-        def llm_end(handler_self, llm_result, **kwargs):
-            result = original_llm_end(handler_self, llm_result, **kwargs)
-            scope = current_scope()
-            if scope is not None:
-                stack = getattr(handler_self, "_k11_model_call_stack", [])
-                model_call_id = stack.pop() if stack else None
-                trace.record(
-                    "k11.model_call_completed",
-                    source="LLMHandler.on_llm_end",
-                    payload={"model_call_id": model_call_id},
-                )
-            return result
-        self._patch(LLMHandler, "on_llm_end", llm_end)
-
-        original_install = eac_runtime_module.install_minecraft_eac
-        @wraps(original_install)
-        def install_eac(*args, **kwargs):
-            runtime = original_install(*args, **kwargs)
-            return instrument_runtime(runtime, trace)
-        self._patch(eac_runtime_module, "install_minecraft_eac", install_eac)
-
-        # Local VLLM BaseAgent calls do not use LLMHandler.  Capture those model
-        # calls through the model method while a BaseAgent K11 scope is active.
-        try:
-            from model.vllm_model import VLLMLanguageModel
-            original_generate = VLLMLanguageModel.few_shot_generate_thoughts
-            @wraps(original_generate)
-            def generate(model_self, *args, **kwargs):
-                scope = current_scope()
-                if scope is None:
-                    return original_generate(model_self, *args, **kwargs)
-                model_call_id = trace.new_identity("model-call", actor_id=scope.actor_id)
-                trace.record(
-                    "k11.model_call_started",
-                    source="VLLMLanguageModel.few_shot_generate_thoughts",
-                    payload={
-                        "model_call_id": model_call_id,
-                        "temperature": kwargs.get("temperature"),
-                    },
-                )
-                try:
-                    result = original_generate(model_self, *args, **kwargs)
-                except BaseException as exc:
-                    trace.record(
-                        "k11.model_call_failed",
-                        source="VLLMLanguageModel.few_shot_generate_thoughts",
-                        payload={
-                            "model_call_id": model_call_id,
-                            "error_type": type(exc).__name__,
-                        },
-                    )
-                    raise
-                else:
-                    trace.record(
-                        "k11.model_call_completed",
-                        source="VLLMLanguageModel.few_shot_generate_thoughts",
-                        payload={"model_call_id": model_call_id},
-                    )
-                    return result
-            self._patch(VLLMLanguageModel, "few_shot_generate_thoughts", generate)
-        except (ImportError, AttributeError):
-            pass
-
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        for owner, name, original in reversed(self._restores):
-            setattr(owner, name, original)
-        self._restores.clear()
-        return False
 
 
 def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -612,18 +225,20 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     prepared: dict[str, list[Mapping[str, Any]]] = {}
     decisions: dict[str, list[Mapping[str, Any]]] = {}
     native_entries: dict[str, list[Mapping[str, Any]]] = {}
+    native_completions: dict[str, list[Mapping[str, Any]]] = {}
     terminals: dict[str, list[Mapping[str, Any]]] = {}
     evidence_count = 0
+
     for event in events:
         event_type = event.get("event_type")
         if event_type not in K11_EVENT_TYPES:
             warnings.append(f"unknown event type: {event_type}")
             continue
         payload = event.get("payload", {})
-        request = payload.get("exact_request") if isinstance(payload, Mapping) else None
-        candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
         if event_type == "k11.eac_evidence_ingested":
             evidence_count += 1
+        request = payload.get("exact_request") if isinstance(payload, Mapping) else None
+        candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
         if candidate_id is None:
             continue
         table = None
@@ -633,6 +248,8 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             table = decisions
         elif event_type == "k11.eac_native_effect_entered":
             table = native_entries
+        elif event_type == "k11.eac_native_effect_completed":
+            table = native_completions
         elif event_type == "k11.eac_action_terminal":
             table = terminals
         if table is not None:
@@ -657,12 +274,14 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             if prepare_digest != decision_digest:
                 errors.append(f"candidate {candidate_id} exact request changed before decision")
 
-    for candidate_id in native_entries:
+    for candidate_id, rows in native_entries.items():
         if candidate_id not in decisions:
             errors.append(f"candidate {candidate_id} reached native effect without decision marker")
+        completions = native_completions.get(candidate_id, [])
+        if len(completions) != len(rows):
+            errors.append(f"candidate {candidate_id} native entry/completion count differs")
 
-    instrumentation_errors = artifact.get("instrumentation_errors", [])
-    if instrumentation_errors:
+    if artifact.get("instrumentation_errors"):
         errors.append("instrumentation recorder reported internal errors")
 
     return {
@@ -674,6 +293,7 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             "prepared": sum(len(rows) for rows in prepared.values()),
             "execution_decisions": sum(len(rows) for rows in decisions.values()),
             "native_entries": sum(len(rows) for rows in native_entries.values()),
+            "native_completions": sum(len(rows) for rows in native_completions.values()),
             "terminals": sum(len(rows) for rows in terminals.values()),
             "evidence_ingestions": evidence_count,
         },
