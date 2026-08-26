@@ -43,7 +43,7 @@ These tests are development fixtures, not K11 natural observations. The controll
 The checked-in P0 manifest reuses infrastructure identities already disclosed by existing repository configs:
 
 - model: `gemma4:12b`
-- Ollama endpoint: `http://10.255.255.5:11434`
+- Ollama endpoint: `https://ollama.arc.upiscium.dev`
 - Minecraft target: `10.12.3.1:40000`
 
 These are configuration provenance, not an assertion that the endpoints are currently available.
@@ -51,7 +51,7 @@ These are configuration provenance, not an assertion that the endpoints are curr
 Before P0, verify reachability from the runtime host using the ordinary operator tools available there. For example:
 
 ```bash
-curl -fsS http://10.255.255.5:11434/api/tags >/dev/null
+curl -fsS https://ollama.arc.upiscium.dev/api/tags >/dev/null
 nc -vz 10.12.3.1 40000
 ```
 
