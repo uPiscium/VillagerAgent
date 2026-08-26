@@ -50,6 +50,18 @@ def test_isolated_runtime_paths_stay_under_attempt_root(tmp_path):
     assert paths.recipe_hint == tmp_path / "attempt-a" / "data" / "recipe_hint.json"
     assert paths.build_map == tmp_path / "attempt-a" / "data" / "map.json"
     assert paths.map_description == tmp_path / "attempt-a" / "data" / "map_description.json"
+    assert paths.openai_log == tmp_path / "attempt-a" / "data" / "openai.logs"
+    assert paths.openai_cache == tmp_path / "attempt-a" / "cache" / "openai.cache"
+    assert paths.llm_inference == tmp_path / "attempt-a" / "data" / "llm_inference.json"
+
+
+def test_openai_artifact_paths_preserve_legacy_relative_layout(tmp_path):
+    paths = RuntimePaths.legacy(tmp_path)
+
+    assert paths.tokens == tmp_path / "data" / "tokens.json"
+    assert paths.openai_log == tmp_path / "data" / "openai.logs"
+    assert paths.openai_cache == tmp_path / ".cache" / "openai.cache"
+    assert paths.llm_inference == tmp_path / "data" / "llm_inference.json"
 
 
 def test_runtime_subprocess_environment_supports_direct_bridge_entrypoint(tmp_path):

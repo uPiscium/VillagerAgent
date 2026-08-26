@@ -9,15 +9,18 @@ from model.abstract_language_model import AbstractLanguageModel
 import json
 from retry import retry
 import random
+import threading
 import httpx
 import base64
 
+from env.runtime_paths import RuntimePaths, atomic_write_json
 from model.utils import extract_info
 
 logging.basicConfig(
     level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+_OPENAI_STATE_LOCK = threading.RLock()
 
 
 def _contains_tag(content: str, tag: str) -> bool:
@@ -35,12 +38,12 @@ class OpenAILanguageModel(AbstractLanguageModel):
     # def __init__(self, api_key="", api_model="gpt-3.5-turbo-1106", evaluation_strategy="value", api_base="https://api.openai.com/v1/",
     #              enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None):
     def __init__(self, api_key="", api_model="qwen-max", evaluation_strategy="value", api_base="https://api.chatanywhere.tech/v1",
-                 enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None):
+                 enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None,
+                 runtime_paths: RuntimePaths | None = None):
+        self.runtime_paths = runtime_paths or RuntimePaths.from_environment()
         if api_key == "" or api_key is None:
             api_key = os.environ.get("OPENAI_API_KEY", "")
-        if api_key != "":
-            openai.api_key = api_key
-        else:
+        if api_key == "":
             raise Exception("Please provide OpenAI API key")
         self.api_key = api_key
 
@@ -53,10 +56,6 @@ class OpenAILanguageModel(AbstractLanguageModel):
             api_base = os.environ.get(
                 "OPENAI_API_BASE", ""
             )  # if not set, use the default base path of "https://api.openai.com/v1"
-        if api_base != "":
-            # e.g. https://api.openai.com/v1/ or your custom url
-            openai.api_base = api_base
-            # logger.info(f"Using custom api_base {api_base}")
         self.api_base = api_base
         if api_model == "" or api_model is None:
             api_model = os.environ.get("OPENAI_API_MODEL", "")
@@ -89,14 +88,14 @@ class OpenAILanguageModel(AbstractLanguageModel):
             max_retries=5,
         )
 
-        if not os.path.exists("data"):
-            os.mkdir("data")
-        if not os.path.exists("data/openai.logs"):
-            with open("data/openai.logs", "w") as log_file:
-                log_file.write("")
-        if not os.path.exists("data/tokens.json"):
-            with open("data/tokens.json", "w") as token_file:
-                init_data = {
+        with _OPENAI_STATE_LOCK:
+            self.runtime_paths.data_dir.mkdir(parents=True, exist_ok=True)
+            self.runtime_paths.cache_dir.mkdir(parents=True, exist_ok=True)
+            if not self.runtime_paths.openai_log.exists():
+                with self.runtime_paths.openai_log.open("w") as log_file:
+                    log_file.write("")
+            if not self.runtime_paths.tokens.exists():
+                atomic_write_json(self.runtime_paths.tokens, {
                     "dates": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                     "tokens_used": 0,
                     "prompt_tokens": 0,
@@ -104,8 +103,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     "successful_requests": 0,
                     "total_cost": 0,
                     "action_cost": 0,
-                }
-                json.dump(init_data, token_file)
+                })
 
     def generate_thoughts(self, state, k):
         pass
@@ -114,19 +112,15 @@ class OpenAILanguageModel(AbstractLanguageModel):
         pass
 
     def cache_api_call_handler(self, prompt, max_tokens, temperature, k=1, stop=None):
-        if os.path.exists(".cache"):
-            if not os.path.exists(".cache/openai.cache"):
-                with open(".cache/openai.cache", "w") as cache_file:
-                    json.dump({}, cache_file)
-                return None
-
-            with open(".cache/openai.cache", "r") as cache_file:
-                cache = json.load(cache_file)
-        else:
-            os.mkdir(".cache")
-            with open(".cache/openai.cache", "w") as cache_file:
-                json.dump({}, cache_file, indent=4)
-            cache = {}
+        cache_path = self.runtime_paths.openai_cache
+        with _OPENAI_STATE_LOCK:
+            if cache_path.exists():
+                with cache_path.open("r") as cache_file:
+                    cache = json.load(cache_file)
+            else:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(cache_path, {})
+                cache = {}
 
         if prompt in cache:
             return cache[prompt]
@@ -134,41 +128,34 @@ class OpenAILanguageModel(AbstractLanguageModel):
             return None
 
     def save_cache(self, prompt, response):
-        if os.path.exists(".cache"):
-            if not os.path.exists(".cache/openai.cache"):
-                with open(".cache/openai.cache", "w") as cache_file:
-                    json.dump({}, cache_file, indent=4)
-                return None
-            with open(".cache/openai.cache", "r") as cache_file:
-                cache = json.load(cache_file)
-        else:
-            os.mkdir(".cache")
-            with open(".cache/openai.cache", "w") as cache_file:
-                json.dump({}, cache_file, indent=4)
-            cache = {}
-
-        cache[prompt] = response
-        with open(".cache/openai.cache", "w") as cache_file:
-            json.dump(cache, cache_file, indent=4)
+        cache_path = self.runtime_paths.openai_cache
+        with _OPENAI_STATE_LOCK:
+            if cache_path.exists():
+                with cache_path.open("r") as cache_file:
+                    cache = json.load(cache_file)
+            else:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache = {}
+            cache[prompt] = response
+            atomic_write_json(cache_path, cache)
 
 
     def update_token_usage(self, prompt_tokens, completion_tokens):
-        with open("data/tokens.json", "r") as token_file:
-            tokens = json.load(token_file)
-        tokens["dates"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        tokens["tokens_used"] += prompt_tokens + completion_tokens
-        tokens["prompt_tokens"] += prompt_tokens
-        tokens["completion_tokens"] += completion_tokens
-        tokens["successful_requests"] += 1
-        if self.api_model == "gpt-3.5-turbo":
-            tokens["total_cost"] += 0.001 * prompt_tokens * 0.001 + 0.0002 * completion_tokens * 0.001
-        if self.api_model == "gpt-4":
-            tokens["total_cost"] += 0.03 * prompt_tokens * 0.001 + 0.06 * completion_tokens * 0.001
-        if self.api_model == "gpt-4-turbo":
-            tokens["total_cost"] += 0.01 * prompt_tokens * 0.001 + 0.03 * completion_tokens * 0.001
-
-        with open("data/tokens.json", "w") as token_file:
-            json.dump(tokens, token_file)
+        with _OPENAI_STATE_LOCK:
+            with self.runtime_paths.tokens.open("r") as token_file:
+                tokens = json.load(token_file)
+            tokens["dates"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            tokens["tokens_used"] += prompt_tokens + completion_tokens
+            tokens["prompt_tokens"] += prompt_tokens
+            tokens["completion_tokens"] += completion_tokens
+            tokens["successful_requests"] += 1
+            if self.api_model == "gpt-3.5-turbo":
+                tokens["total_cost"] += 0.001 * prompt_tokens * 0.001 + 0.0002 * completion_tokens * 0.001
+            if self.api_model == "gpt-4":
+                tokens["total_cost"] += 0.03 * prompt_tokens * 0.001 + 0.06 * completion_tokens * 0.001
+            if self.api_model == "gpt-4-turbo":
+                tokens["total_cost"] += 0.01 * prompt_tokens * 0.001 + 0.03 * completion_tokens * 0.001
+            atomic_write_json(self.runtime_paths.tokens, tokens)
 
     def guard_token_number(self, messages, encoding_name, max_output_tokens=2048) -> [str]:
         text = "".join([message["content"] for message in messages])
@@ -333,17 +320,18 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     raise Exception(f"content {content} is not json")
             if cache_enabled:
                 self.save_cache(prompt, content)
-            with open("data/openai.logs", "a") as log_file:
-                log_file.write(
-                    "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
-                )
+            with _OPENAI_STATE_LOCK:
+                with self.runtime_paths.openai_log.open("a") as log_file:
+                    log_file.write(
+                        "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
+                    )
 
             # logger.info(f"LLM API Time taken: {time.time() - start_time}")
-            # if os.path.exists("data/llm_inference.json"):
-            #     with open("data/llm_inference.json", "r") as log_file:
+            # if self.runtime_paths.llm_inference.exists():
+            #     with self.runtime_paths.llm_inference.open("r") as log_file:
             #         log = json.load(log_file)
             #     log["time"] += time.time() - start_time
-            #     with open("data/llm_inference.json", "w") as log_file:
+            #     with self.runtime_paths.llm_inference.open("w") as log_file:
             #         json.dump(log, log_file)
             return content
             
@@ -470,17 +458,16 @@ class OpenAILanguageModel(AbstractLanguageModel):
                         raise Exception(f"content {content} is not json")
                 if cache_enabled:
                     self.save_cache(prompt, content)
-                with open("data/openai.logs", "a") as log_file:
-                    log_file.write(
-                        "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
-                    )
-
-                if os.path.exists("data/llm_inference.json"):
-                    with open("data/llm_inference.json", "r") as log_file:
-                        log = json.load(log_file)
-                    log["time"] += time.time() - start_time
-                    with open("data/llm_inference.json", "w") as log_file:
-                        json.dump(log, log_file)
+                with _OPENAI_STATE_LOCK:
+                    with self.runtime_paths.openai_log.open("a") as log_file:
+                        log_file.write(
+                            "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
+                        )
+                    if self.runtime_paths.llm_inference.exists():
+                        with self.runtime_paths.llm_inference.open("r") as log_file:
+                            log = json.load(log_file)
+                        log["time"] += time.time() - start_time
+                        atomic_write_json(self.runtime_paths.llm_inference, log)
                 return content
 
             except openai.APIConnectionError as e:
