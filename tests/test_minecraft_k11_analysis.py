@@ -1,6 +1,6 @@
 from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
-from benchmarks.minecraft.k11_analysis import analyze_trace, replay_admissibility
+from benchmarks.minecraft.k11_analysis import analyze_trace, replay_admissibility, validate_p0_analysis
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
 from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
 
@@ -119,3 +119,117 @@ def test_k11_offline_analysis_recognizes_controlled_relevant_invalidation_fixtur
     assert action["EAdm_disposition"] is False
     assert action["native_effect_entered"] is True
     assert action["prepare_to_decision_ns"] > 0
+
+
+def test_k11_p0_analysis_rejects_trace_failure_even_without_analysis_error() -> None:
+    runtime, trace = _runtime("k11-analysis-gate")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    runtime.execute_prepared(_prepare(runtime))
+    analysis = analyze_trace(trace.artifact())
+    analysis["p0_trace_validation"] = {"valid": False, "errors": ["missing lifecycle"]}
+    result = validate_p0_analysis(analysis)
+    assert result["valid"] is False
+    assert any("trace validation" in error for error in result["errors"])
+
+
+def test_k11_p0_analysis_accepts_inadmissible_baseline_after_complete_replay() -> None:
+    analysis = {
+        "artifact_id": "minecraft-k11-trace-analysis-draft",
+        "prevalence_inference_allowed": False,
+        "p0_trace_validation": {"valid": True},
+        "denominators": {"D1": 1, "D2": 0, "D3": 0, "D4": 0, "D5": 0, "D6": 0},
+        "actions": [{
+            "tool_name": "MineBlock", "D1": True,
+            "EAdm_prepare": False, "EAdm_disposition": False,
+            "qc_state": "prepared_inadmissible_baseline",
+        }],
+    }
+    assert validate_p0_analysis(analysis)["valid"] is True
+
+
+def test_k11_p0_analysis_rejects_non_boolean_or_missing_replay_results() -> None:
+    analysis = {
+        "artifact_id": "minecraft-k11-trace-analysis-draft",
+        "prevalence_inference_allowed": False,
+        "p0_trace_validation": {"valid": True},
+        "denominators": {"D1": 1, "D2": 0, "D3": 0, "D4": 0, "D5": 0, "D6": 0},
+        "actions": [{
+            "tool_name": "MineBlock", "D1": True,
+            "EAdm_prepare": True, "EAdm_disposition": None,
+        }],
+    }
+    result = validate_p0_analysis(analysis)
+    assert result["valid"] is False
+    assert any("replay" in error for error in result["errors"])
+
+
+def test_k11_p0_analysis_rejects_top_level_analysis_error() -> None:
+    analysis = {
+        "artifact_id": "minecraft-k11-trace-analysis-draft",
+        "prevalence_inference_allowed": False,
+        "analysis_error": "replay crashed",
+        "p0_trace_validation": {"valid": True},
+        "denominators": {"D1": 1, "D2": 0, "D3": 0, "D4": 0, "D5": 0, "D6": 0},
+        "actions": [{
+            "tool_name": "MineBlock", "D1": True,
+            "EAdm_prepare": True, "EAdm_disposition": True,
+        }],
+    }
+    result = validate_p0_analysis(analysis)
+    assert result["valid"] is False
+    assert any("top-level analysis error" in error for error in result["errors"])
+
+
+def test_k11_p0_analysis_rejects_inconsistent_higher_denominator() -> None:
+    analysis = {
+        "artifact_id": "minecraft-k11-trace-analysis-draft",
+        "prevalence_inference_allowed": False,
+        "p0_trace_validation": {"valid": True},
+        "denominators": {"D1": 1, "D2": 1, "D3": 0, "D4": 0, "D5": 0, "D6": 0},
+        "actions": [{
+            "tool_name": "MineBlock", "D1": True, "D2": False,
+            "EAdm_prepare": False, "EAdm_disposition": False,
+            "qc_state": "prepared_inadmissible_baseline",
+        }],
+    }
+    result = validate_p0_analysis(analysis)
+    assert result["valid"] is False
+    assert any("D2 denominator" in error for error in result["errors"])
+
+
+def test_k11_p0_analysis_rejects_dropped_primary_trace_candidate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "benchmarks.minecraft.k11_analysis.validate_p0_trace",
+        lambda unused: {"valid": True},
+    )
+    trace = {"events": [{
+        "event_type": "k11.eac_action_prepared",
+        "payload": {"exact_request": {
+            "candidate_id": candidate,
+            "action": {"identity": "MineBlock"},
+        }},
+    } for candidate in ("candidate-1", "candidate-2")]}
+    analysis = {
+        "artifact_id": "minecraft-k11-trace-analysis-draft",
+        "prevalence_inference_allowed": False,
+        "denominators": {"D1": 1, "D2": 0, "D3": 0, "D4": 0, "D5": 0, "D6": 0},
+        "actions": [{
+            "candidate_id": "candidate-1", "tool_name": "MineBlock", "D1": True,
+            "EAdm_prepare": False, "EAdm_disposition": False,
+            "qc_state": "prepared_inadmissible_baseline",
+        }],
+    }
+    result = validate_p0_analysis(analysis, trace)
+    assert result["valid"] is False
+    assert any("every primary trace candidate" in error for error in result["errors"])
+
+
+def test_k11_p0_analysis_rejects_malformed_validation_structures() -> None:
+    result = validate_p0_analysis({
+        "artifact_id": "minecraft-k11-trace-analysis-draft",
+        "prevalence_inference_allowed": False,
+        "p0_trace_validation": [],
+        "denominators": [],
+        "actions": [],
+    })
+    assert result["valid"] is False

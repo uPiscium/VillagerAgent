@@ -4,7 +4,10 @@ from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
 from benchmarks.minecraft.k11_trace import (
     K11TraceRecorder,
+    K11TraceScope,
     exact_request_digest,
+    use_scope,
+    validate_p0_trace,
     validate_trace,
 )
 
@@ -39,6 +42,24 @@ def _prepare(runtime):
             "murmur": "",
         },
     )
+
+
+def _complete_p0_artifact(run_id="k11-p0-complete"):
+    runtime, trace = _runtime(run_id)
+    scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    with use_scope(scope):
+        trace.record("k11.agent_step_started", source="test")
+        trace.record("k11.model_call_started", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.model_call_completed", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.tool_call_entered", source="test")
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+        runtime.execute_prepared(_prepare(runtime))
+        trace.record("k11.tool_call_exited", source="test")
+        trace.record("k11.agent_step_completed", source="test")
+    return trace.artifact()
 
 
 def test_k11_advisory_prepare_does_not_add_measurement_evaluation() -> None:
@@ -163,3 +184,84 @@ def test_k11_trace_contains_no_online_natural_classification_labels() -> None:
     serialized = str(trace.artifact())
     for label in ("N0", "N1", "N2", "N3", "N4", "reconsidered", "invalidated"):
         assert label not in serialized
+
+
+def test_k11_p0_trace_rejects_high_level_only_artifact() -> None:
+    artifact = {"schema_version": "minecraft-k11-trace/1", "run_id": "empty", "events": []}
+    assert validate_p0_trace(artifact)["valid"] is False
+
+
+def test_k11_p0_trace_rejects_primary_digest_mismatch() -> None:
+    runtime, trace = _runtime("k11-p0-digest")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    runtime.execute_prepared(_prepare(runtime))
+    artifact = deepcopy(trace.artifact())
+    terminal = next(event for event in artifact["events"] if event["event_type"] == "k11.eac_action_terminal")
+    terminal["payload"]["exact_request_digest"] = "sha256:" + "f" * 64
+    assert validate_p0_trace(artifact)["valid"] is False
+
+
+def test_k11_p0_trace_accepts_complete_correlated_run() -> None:
+    validation = validate_p0_trace(_complete_p0_artifact())
+    assert validation["valid"] is True
+    assert validation["counts"]["prepared"] == 1
+
+
+def test_k11_p0_trace_rejects_cross_actor_lifecycle_pairing() -> None:
+    artifact = _complete_p0_artifact("k11-p0-cross-actor")
+    completed = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.agent_step_completed"
+    )
+    completed["actor_id"] = "Bob"
+    validation = validate_p0_trace(artifact)
+    assert validation["valid"] is False
+    assert any("agent lifecycle" in error for error in validation["errors"])
+
+
+def test_k11_p0_trace_rejects_additional_dangling_model_call() -> None:
+    artifact = _complete_p0_artifact("k11-p0-dangling-model")
+    started = next(
+        deepcopy(event) for event in artifact["events"]
+        if event["event_type"] == "k11.model_call_started"
+    )
+    started["seq"] = max(event["seq"] for event in artifact["events"]) + 1
+    started["event_id"] = "k11-p0-dangling-model:k11:dangling"
+    started["payload"]["model_call_id"] = "model-dangling"
+    artifact["events"].append(started)
+
+    validation = validate_p0_trace(artifact)
+    assert validation["valid"] is False
+    assert any("model lifecycle" in error for error in validation["errors"])
+
+
+def test_k11_p0_trace_rejects_cross_scope_eac_correlation() -> None:
+    artifact = _complete_p0_artifact("k11-p0-cross-scope")
+    decision = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_execution_decision_attempted"
+    )
+    decision["actor_id"] = "Bob"
+
+    validation = validate_p0_trace(artifact)
+    assert validation["valid"] is False
+    assert any("not correlated" in error for error in validation["errors"])
+
+
+def test_k11_p0_trace_rejects_orphan_eac_event() -> None:
+    artifact = _complete_p0_artifact("k11-p0-orphan")
+    orphan = next(
+        deepcopy(event) for event in artifact["events"]
+        if event["event_type"] == "k11.eac_execution_decision_attempted"
+    )
+    orphan["seq"] = max(event["seq"] for event in artifact["events"]) + 1
+    orphan["event_id"] = "k11-p0-orphan:k11:orphan"
+    orphan["payload"]["exact_request"]["candidate_id"] = "orphan-candidate"
+    orphan["payload"]["exact_request_digest"] = exact_request_digest(
+        orphan["payload"]["exact_request"]
+    )
+    artifact["events"].append(orphan)
+
+    validation = validate_p0_trace(artifact)
+    assert validation["valid"] is False
+    assert any("has no preparation" in error for error in validation["errors"])

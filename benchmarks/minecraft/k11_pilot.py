@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from benchmarks.minecraft.eac_identity import resolve_git_revision, runtime_identity
-from benchmarks.minecraft.k11_analysis import analyze_trace
+from benchmarks.minecraft.k11_analysis import analyze_trace, validate_p0_analysis
 from benchmarks.minecraft.k11_calibration import measure_inprocess_overhead
 from benchmarks.minecraft.k11_instrumentation import K11ProcessInstrumentation
-from benchmarks.minecraft.k11_trace import K11TraceRecorder, validate_trace
+from benchmarks.minecraft.k11_trace import K11TraceRecorder, validate_p0_trace, validate_trace
 from env.runtime_execution import RuntimeExecution
 from env.runtime_paths import RuntimePaths
 from start_with_config import run as run_villageragent
@@ -180,6 +180,20 @@ def _event_type_counts(trace_artifact: Mapping[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _p0_passes(*, summaries: list[Mapping[str, Any]], calibration_error: str | None,
+               calibration: Mapping[str, Any], coverage_sufficient: bool) -> bool:
+    """Gate P0 on every run's validation, never aggregate event presence alone."""
+    return bool(
+        len(summaries) == P0_EXPECTED_RUNS
+        and all(item.get("runtime_error") is None for item in summaries)
+        and all(item.get("trace_validation", {}).get("valid") is True for item in summaries)
+        and all(item.get("analysis_validation", {}).get("valid") is True for item in summaries)
+        and calibration_error is None
+        and calibration.get("traced", {}).get("trace_validation", {}).get("valid") is True
+        and coverage_sufficient
+    )
+
+
 def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> dict[str, Any]:
     manifest = load_p0_manifest(manifest_path)
     root = Path(output_root).resolve()
@@ -217,7 +231,8 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             trace.write_json(run_dir / "k11_trace.json")
 
         trace_artifact = trace.artifact()
-        validation = validate_trace(trace_artifact)
+        generic_validation = validate_trace(trace_artifact)
+        validation = validate_p0_trace(trace_artifact)
         event_counts = _event_type_counts(trace_artifact)
         actor_threads = {
             (event.get("actor_id"), event.get("thread_id"))
@@ -237,6 +252,7 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
                 "analysis_error": str(exc),
                 "analysis_error_type": type(exc).__name__,
             }
+        analysis_validation = validate_p0_analysis(analysis, trace_artifact)
         (run_dir / "k11_analysis.json").write_text(
             json.dumps(analysis, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -246,6 +262,8 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             "runtime_error": error,
             "runtime_error_type": error_type,
             "trace_validation": validation,
+            "generic_trace_validation": generic_validation,
+            "analysis_validation": analysis_validation,
             "event_type_counts": event_counts,
             "agent_thread_pairs": sorted([list(item) for item in actor_threads]),
             "offline_analysis_error": analysis.get("analysis_error"),
@@ -282,7 +300,7 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
 
     runtime_error_count = sum(item["runtime_error"] is not None for item in summaries)
     trace_valid_count = sum(item["trace_validation"]["valid"] is True for item in summaries)
-    analysis_valid_count = sum(item["offline_analysis_error"] is None for item in summaries)
+    analysis_valid_count = sum(item["analysis_validation"]["valid"] is True for item in summaries)
     coverage = {
         "model_calls_observed": aggregate_event_counts.get("k11.model_call_started", 0) > 0,
         "tool_calls_observed": aggregate_event_counts.get("k11.tool_call_entered", 0) > 0,
@@ -291,13 +309,11 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         "multiple_actor_thread_pairs_observed": len(all_actor_threads) > 1,
     }
     coverage_sufficient = all(coverage.values())
-    p0_passed = (
-        runtime_error_count == 0
-        and trace_valid_count == len(summaries) == P0_EXPECTED_RUNS
-        and analysis_valid_count == len(summaries)
-        and calibration_error is None
-        and calibration.get("traced", {}).get("trace_validation", {}).get("valid") is True
-        and coverage_sufficient
+    p0_passed = _p0_passes(
+        summaries=summaries,
+        calibration_error=calibration_error,
+        calibration=calibration,
+        coverage_sufficient=coverage_sufficient,
     )
 
     aggregate = {

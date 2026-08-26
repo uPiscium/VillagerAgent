@@ -307,3 +307,153 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             "evidence_ingestions": evidence_count,
         },
     }
+
+
+def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply the strict, per-run completeness gate required by K11 P0.
+
+    ``validate_trace`` remains deliberately useful for small unit fixtures.  This
+    validator is the admission gate for a pilot run: aggregate event presence is
+    not sufficient, and every primary request must remain exactly correlated.
+    """
+    generic = validate_trace(artifact)
+    errors = list(generic["errors"])
+    events = artifact.get("events") if isinstance(artifact, Mapping) else None
+    if not isinstance(events, list) or not events:
+        return {"valid": False, "errors": errors + ["P0 trace is empty or malformed"], "warnings": generic["warnings"], "counts": generic.get("counts", {})}
+
+    def rows(kind: str) -> list[Mapping[str, Any]]:
+        return [event for event in events if isinstance(event, Mapping) and event.get("event_type") == kind]
+
+    starts = rows("k11.agent_step_started")
+    completed = rows("k11.agent_step_completed")
+    def lifecycle_key(event: Mapping[str, Any], identity: Any) -> tuple[Any, ...] | None:
+        if not identity:
+            return None
+        return (identity, event.get("agent_step_id"), event.get("actor_id"), event.get("task_id"))
+
+    def require_lifecycles(start_rows: list[Mapping[str, Any]], terminal_rows: list[Mapping[str, Any]],
+                           identity, label: str) -> None:
+        starts_by_key: dict[tuple[Any, ...], list[Mapping[str, Any]]] = {}
+        terminals_by_key: dict[tuple[Any, ...], list[Mapping[str, Any]]] = {}
+        def collect(source_rows, table) -> None:
+            for row in source_rows:
+                key = lifecycle_key(row, identity(row))
+                if key is None:
+                    errors.append(f"P0 {label} lifecycle lacks identity")
+                    continue
+                table.setdefault(key, []).append(row)
+
+        collect(start_rows, starts_by_key)
+        collect(terminal_rows, terminals_by_key)
+        if not starts_by_key:
+            errors.append(f"P0 trace lacks a correlated {label} lifecycle")
+            return
+        if set(starts_by_key) != set(terminals_by_key):
+            errors.append(f"P0 {label} lifecycle identities are incomplete")
+        for key in set(starts_by_key) | set(terminals_by_key):
+            start_matches = starts_by_key.get(key, [])
+            terminal_matches = terminals_by_key.get(key, [])
+            if len(start_matches) != 1 or len(terminal_matches) != 1:
+                errors.append(f"P0 {label} lifecycle {key[0]} is not one-to-one")
+            elif start_matches[0].get("seq", 0) >= terminal_matches[0].get("seq", 0):
+                errors.append(f"P0 {label} lifecycle {key[0]} is misordered")
+
+    require_lifecycles(starts, completed, lambda event: event.get("agent_step_id"), "agent")
+
+    model_starts = rows("k11.model_call_started")
+    model_terminals = rows("k11.model_call_completed") + rows("k11.model_call_failed")
+    require_lifecycles(
+        model_starts, model_terminals,
+        lambda event: event.get("payload", {}).get("model_call_id"), "model",
+    )
+
+    tool_enters = rows("k11.tool_call_entered")
+    tool_exits = rows("k11.tool_call_exited")
+    require_lifecycles(tool_enters, tool_exits, lambda event: event.get("tool_call_id"), "tool")
+    if not rows("k11.eac_evidence_ingested"):
+        errors.append("P0 trace lacks evidence ingestion")
+
+    prepared = [event for event in rows("k11.eac_action_prepared")
+                if event.get("payload", {}).get("exact_request", {}).get("action", {}).get("identity") in PRIMARY_EFFECT_ACTIONS]
+    if not prepared:
+        errors.append("P0 trace lacks a primary preparation")
+
+    decisions = rows("k11.eac_execution_decision_attempted")
+    terminals = rows("k11.eac_action_terminal")
+    native_entries = rows("k11.eac_native_effect_entered")
+    native_completions = rows("k11.eac_native_effect_completed")
+    all_prepared_ids = {
+        row.get("payload", {}).get("exact_request", {}).get("candidate_id")
+        for row in rows("k11.eac_action_prepared")
+    }
+    for row in decisions + terminals + native_entries + native_completions:
+        row_request = row.get("payload", {}).get("exact_request")
+        row_candidate = row_request.get("candidate_id") if isinstance(row_request, Mapping) else None
+        if not isinstance(row_candidate, str) or not row_candidate:
+            errors.append(f"P0 {row.get('event_type')} event lacks candidate identity")
+        elif row_candidate not in all_prepared_ids:
+            errors.append(f"P0 {row.get('event_type')} event has no preparation")
+        row_digest = row.get("payload", {}).get("exact_request_digest")
+        if isinstance(row_request, Mapping) and row_digest != exact_request_digest(row_request):
+            errors.append(f"P0 {row.get('event_type')} event has an invalid exact request digest")
+    for event in prepared:
+        request = event.get("payload", {}).get("exact_request", {})
+        candidate = request.get("candidate_id") if isinstance(request, Mapping) else None
+        attempt = request.get("attempt_id") if isinstance(request, Mapping) else None
+        digest = event.get("payload", {}).get("exact_request_digest")
+        scope = tuple(event.get(field) for field in (
+            "actor_id", "task_id", "agent_step_id", "tool_call_id",
+        ))
+        if (not isinstance(candidate, str) or not candidate
+                or not isinstance(attempt, str) or not attempt
+                or not isinstance(digest, str) or not digest
+                or any(not value for value in scope)):
+            errors.append("P0 primary preparation lacks exact request or scoped identity")
+        related_decisions = [row for row in decisions if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
+        related_terminals = [row for row in terminals if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
+        if len(related_decisions) != 1:
+            errors.append(f"primary candidate {candidate} lacks exactly one execution decision")
+        if len(related_terminals) != 1:
+            errors.append(f"primary candidate {candidate} lacks exactly one terminal")
+        if related_decisions:
+            prepare_ns = event.get("monotonic_ns")
+            decision_ns = related_decisions[0].get("monotonic_ns")
+            if (not isinstance(prepare_ns, int) or not isinstance(decision_ns, int)
+                    or decision_ns <= prepare_ns):
+                errors.append(f"primary candidate {candidate} lacks a positive prepare-to-decision interval")
+        related_entries = [row for row in native_entries
+                           if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
+        related_completions = [row for row in native_completions
+                               if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
+        if len(related_entries) not in {0, 1} or len(related_completions) != len(related_entries):
+            errors.append(f"primary candidate {candidate} native lifecycle is incomplete or duplicated")
+        correlated = related_decisions + related_terminals + related_entries + related_completions
+        for row in correlated:
+            row_payload = row.get("payload", {})
+            row_request = row_payload.get("exact_request")
+            row_scope = tuple(row.get(field) for field in (
+                "actor_id", "task_id", "agent_step_id", "tool_call_id",
+            ))
+            if (row_payload.get("exact_request_digest") != digest
+                    or row_request != request or row_scope != scope):
+                errors.append(f"primary candidate {candidate} exact request digest is not correlated")
+        if isinstance(request, Mapping) and digest != exact_request_digest(request):
+            errors.append(f"primary candidate {candidate} preparation has an invalid exact request digest")
+        ordered = [event] + related_decisions + related_entries + related_completions + related_terminals
+        ordered_sequences = [row.get("seq") for row in ordered]
+        if (any(not isinstance(value, int) for value in ordered_sequences)
+                or ordered_sequences != sorted(ordered_sequences)
+                or len(set(ordered_sequences)) != len(ordered_sequences)):
+            errors.append(f"primary candidate {candidate} EAC lifecycle is misordered")
+
+    if artifact.get("instrumentation_errors"):
+        # Keep this explicit here even though the generic validator also reports it.
+        if "instrumentation recorder reported internal errors" not in errors:
+            errors.append("instrumentation recorder reported internal errors")
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": generic["warnings"],
+        "counts": generic.get("counts", {}),
+    }

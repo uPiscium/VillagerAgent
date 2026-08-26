@@ -14,7 +14,7 @@ from typing import Any, Mapping
 from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.common.eac.authority import _proposition_slot
 from benchmarks.minecraft.eac_runtime import CLASSIFICATION_PATH, MinecraftEACRuntime
-from benchmarks.minecraft.k11_trace import PRIMARY_EFFECT_ACTIONS, TRACE_SCHEMA_VERSION, validate_trace
+from benchmarks.minecraft.k11_trace import PRIMARY_EFFECT_ACTIONS, TRACE_SCHEMA_VERSION, validate_p0_trace, validate_trace
 
 
 class K11AnalysisError(ValueError):
@@ -181,6 +181,7 @@ def _candidate_events(trace: Mapping[str, Any], event_type: str) -> dict[str, Ma
 def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
     """Build P0 structural diagnostics and draft D1-D6/N0-N4 classifications."""
     validation = validate_trace(trace)
+    p0_validation = validate_p0_trace(trace)
     prepared_by_id = _candidate_events(trace, "k11.eac_action_prepared")
     decision_by_id = _candidate_events(trace, "k11.eac_execution_decision_attempted")
     native_by_id = _candidate_events(trace, "k11.eac_native_effect_entered")
@@ -300,9 +301,78 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
         "prevalence_inference_allowed": False,
         "run_id": trace.get("run_id"),
         "trace_validation": validation,
+        "p0_trace_validation": p0_validation,
         "denominators": denominators,
         "taxonomy": taxonomy,
         "qc_states": qc,
         "prepare_to_decision_ns": durations,
         "actions": rows,
     }
+
+
+def validate_p0_analysis(analysis: Mapping[str, Any], trace: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Validate that offline P0 replay diagnostics are complete and admissible."""
+    errors: list[str] = []
+    embedded_trace_validation = analysis.get("p0_trace_validation", {})
+    trace_validation = (
+        validate_p0_trace(trace) if trace is not None
+        else embedded_trace_validation if isinstance(embedded_trace_validation, Mapping) else {}
+    )
+    if not isinstance(trace_validation, Mapping):
+        trace_validation = {}
+        errors.append("P0 trace validation result is malformed")
+    if analysis.get("analysis_error") is not None:
+        errors.append("P0 analysis contains a top-level analysis error")
+    if analysis.get("artifact_id") != "minecraft-k11-trace-analysis-draft":
+        errors.append("P0 analysis artifact identity is invalid")
+    if analysis.get("prevalence_inference_allowed") is not False:
+        errors.append("P0 analysis must explicitly forbid prevalence inference")
+    if trace_validation.get("valid") is not True:
+        errors.append("P0 trace validation did not pass")
+    denominators = analysis.get("denominators", {})
+    if not isinstance(denominators, Mapping):
+        denominators = {}
+        errors.append("P0 analysis denominators are malformed")
+    if type(denominators.get("D1")) is not int or denominators["D1"] < 1:
+        errors.append("P0 analysis requires at least one D1 primary action")
+    actions = analysis.get("actions", [])
+    if not isinstance(actions, list):
+        actions = []
+        errors.append("P0 analysis actions are malformed")
+    primary = [row for row in actions if isinstance(row, Mapping) and row.get("tool_name") in PRIMARY_EFFECT_ACTIONS]
+    if trace is not None:
+        trace_candidates = [
+            event.get("payload", {}).get("exact_request", {}).get("candidate_id")
+            for event in trace.get("events", [])
+            if event.get("event_type") == "k11.eac_action_prepared"
+            and event.get("payload", {}).get("exact_request", {}).get("action", {}).get("identity")
+            in PRIMARY_EFFECT_ACTIONS
+        ]
+        analysis_candidates = [row.get("candidate_id") for row in primary]
+        if (any(not isinstance(value, str) or not value for value in trace_candidates + analysis_candidates)
+                or len(set(trace_candidates)) != len(trace_candidates)
+                or len(set(analysis_candidates)) != len(analysis_candidates)
+                or set(trace_candidates) != set(analysis_candidates)):
+            errors.append("P0 analysis does not cover every primary trace candidate exactly once")
+    for name in ("D1", "D2", "D3", "D4", "D5", "D6"):
+        expected = sum(row.get(name) is True for row in primary)
+        observed = denominators.get(name) if isinstance(denominators, Mapping) else None
+        if type(observed) is not int or observed != expected:
+            errors.append(f"P0 analysis {name} denominator is inconsistent with primary actions")
+    if any(row.get("D1") is not True for row in primary):
+        errors.append("P0 analysis contains a primary action outside D1")
+    replayed = [
+        row for row in primary
+        if type(row.get("EAdm_prepare")) is bool
+        and type(row.get("EAdm_disposition")) is bool
+    ]
+    if not replayed:
+        errors.append("P0 analysis lacks a replayed primary action")
+    if len(replayed) != len(primary):
+        errors.append("not all expected primary prepare/disposition replays completed")
+    forbidden = {"offline_replay_failed", "ordering_ambiguous", "disposition_unresolved"}
+    for row in primary:
+        if row.get("qc_state") in forbidden:
+            errors.append(f"P0 analysis contains instrumentation-related QC state: {row['qc_state']}")
+    return {"valid": not errors, "errors": errors, "trace_validation": trace_validation,
+            "counts": {"primary_actions": len(primary), "replayed_primary_actions": len(replayed)}}

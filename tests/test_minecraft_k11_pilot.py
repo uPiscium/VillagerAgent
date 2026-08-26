@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.minecraft.k11_pilot import K11PilotContractError, load_p0_manifest
+from benchmarks.minecraft.k11_pilot import (
+    K11PilotContractError,
+    P0_EXPECTED_RUNS,
+    _p0_passes,
+    load_p0_manifest,
+)
 
 
 def _runtime(index: int) -> dict:
@@ -102,3 +107,44 @@ def test_k11_p0_manifest_rejects_user_supplied_eac_identity(tmp_path: Path) -> N
         document["runs"][0]["runtime"]["minecraft_dual_dag_config"][field] = value
         with pytest.raises(K11PilotContractError, match="generated from the current immutable checkout"):
             load_p0_manifest(_write(tmp_path, document))
+
+
+def test_k11_p0_manifest_contract_tests_remain_independent_of_analysis_error() -> None:
+    # The run-level validators, rather than a missing analysis_error field, are
+    # the pilot's source of truth (exercised by the pilot integration path).
+    assert P0_EXPECTED_RUNS == 8
+
+
+def test_k11_p0_final_gate_requires_every_run_validation() -> None:
+    summaries = [{
+        "runtime_error": None,
+        "trace_validation": {"valid": True},
+        "analysis_validation": {"valid": True},
+    } for _ in range(P0_EXPECTED_RUNS)]
+    calibration = {"traced": {"trace_validation": {"valid": True}}}
+
+    assert _p0_passes(
+        summaries=summaries, calibration_error=None,
+        calibration=calibration, coverage_sufficient=True,
+    ) is True
+
+    summaries[3]["trace_validation"] = {"valid": False}
+    assert _p0_passes(
+        summaries=summaries, calibration_error=None,
+        calibration=calibration, coverage_sufficient=True,
+    ) is False
+
+
+def test_k11_p0_final_gate_requires_every_offline_analysis() -> None:
+    summaries = [{
+        "runtime_error": None,
+        "trace_validation": {"valid": True},
+        "analysis_validation": {"valid": True},
+    } for _ in range(P0_EXPECTED_RUNS)]
+    summaries[-1]["analysis_validation"] = {"valid": False}
+
+    assert _p0_passes(
+        summaries=summaries, calibration_error=None,
+        calibration={"traced": {"trace_validation": {"valid": True}}},
+        coverage_sufficient=True,
+    ) is False
