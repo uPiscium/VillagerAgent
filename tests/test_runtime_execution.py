@@ -193,6 +193,18 @@ def test_allowlisted_non_runtime_root_file_does_not_change_identity(tmp_path):
     first.verify()
 
 
+def test_allowlisted_results_archive_does_not_change_identity(tmp_path):
+    _minimal_default_root(tmp_path)
+    first = RuntimeExecution.resolve(tmp_path)
+    archive = tmp_path / "results" / "archived-study"
+    archive.mkdir(parents=True)
+    (archive / "evidence.json").write_text('{"status": "archived"}\n', encoding="utf-8")
+
+    second = RuntimeExecution.resolve(tmp_path)
+
+    assert second.manifest_sha256 == first.manifest_sha256
+
+
 def test_default_closure_identities_installed_node_dependencies(tmp_path):
     _minimal_default_root(tmp_path)
     dependency = tmp_path / "node_modules" / "mineflayer" / "index.js"
