@@ -30,6 +30,7 @@ Run the K11-specific tests before any natural pilot run:
 python -m pytest -q \
   tests/test_minecraft_k11_trace.py \
   tests/test_minecraft_k11_analysis.py \
+  tests/test_minecraft_k11_instrumentation.py \
   tests/test_minecraft_k11_calibration.py \
   tests/test_minecraft_k11_pilot.py
 ```
@@ -37,6 +38,12 @@ python -m pytest -q \
 Do not start P0 if these tests fail.
 
 These tests are development fixtures, not K11 natural observations. The controlled invalidation used by `test_minecraft_k11_analysis.py` exists only to verify the offline classifier and must never enter a P0/P1/final prevalence denominator.
+
+The controlled replacement fixture additionally proves that a complete positive abandonment/replacement lineage can produce offline N1. It does not assert that P0 contains a natural N1 event. Ambiguous disappearance remains `disposition_unresolved`.
+
+### Pre-freeze runtime-hygiene disclosure
+
+The K11 development checkout includes a general runtime-hygiene change that relocates OpenAI-compatible token, log, inference, and cache state into the run-specific `RuntimePaths` closure. This is not K11-only instrumentation and the final study must not describe the subject runtime as byte-for-byte unchanged from the pre-K11 audited base. Legacy default paths and cache lookup results are preserved. One legacy edge behavior is intentionally normalized: when the cache directory already existed but the cache file did not, the old first `save_cache()` call created an empty file and discarded the response; the retained implementation writes that first response. The P0 manifest records this disclosure, and the generated execution revision/runtime digest bind the retained change before any final freeze.
 
 ## 3. Endpoint preflight
 
@@ -142,11 +149,13 @@ calibration_error = null
 
 Coverage additionally requires observation of:
 
-- model-call start events;
+- model-call start events, including the direct `OpenAILanguageModel` path used by the configured Ollama provider;
 - guarded tool-call entry events;
 - EAC prepared-action events;
 - actor-visible evidence-ingestion events;
 - more than one actor/thread pair across the pilot.
+
+Observed model-call events prove only that the listed paths were exercised. Complete direct-call lifecycle coverage is established by the K11 instrumentation contract tests, not inferred from a nonzero aggregate event count.
 
 The traced in-process calibration must also have a valid trace.
 

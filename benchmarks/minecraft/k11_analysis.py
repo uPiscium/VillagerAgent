@@ -14,7 +14,14 @@ from typing import Any, Mapping
 from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.common.eac.authority import _proposition_slot
 from benchmarks.minecraft.eac_runtime import CLASSIFICATION_PATH, MinecraftEACRuntime
-from benchmarks.minecraft.k11_trace import PRIMARY_EFFECT_ACTIONS, TRACE_SCHEMA_VERSION, validate_p0_trace, validate_trace
+from benchmarks.minecraft.k11_trace import (
+    PRIMARY_EFFECT_ACTIONS,
+    TRACE_SCHEMA_VERSION,
+    _event_precedes,
+    derive_positive_disposition,
+    validate_p0_trace,
+    validate_trace,
+)
 
 
 class K11AnalysisError(ValueError):
@@ -206,24 +213,42 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             "qc_state": None,
         }
         decision = decision_by_id.get(candidate_id)
-        if decision is None:
+        positive_abandonment = derive_positive_disposition(trace, prepared)
+        if decision is not None and positive_abandonment is not None:
+            decision_precedes = _event_precedes(decision, positive_abandonment["marker"])
+            if decision_precedes is True:
+                positive_abandonment = None
+            else:
+                row["qc_state"] = (
+                    "unsupported_path_observed" if decision_precedes is False
+                    else "ordering_ambiguous"
+                )
+                rows.append(row)
+                continue
+        disposition = decision if decision is not None else (
+            positive_abandonment["marker"] if positive_abandonment is not None else None
+        )
+        if disposition is None:
             row["qc_state"] = "disposition_unresolved"
             rows.append(row)
             continue
         prepare_ns = prepared.get("monotonic_ns")
-        decision_ns = decision.get("monotonic_ns")
-        if not isinstance(prepare_ns, int) or not isinstance(decision_ns, int) or decision_ns <= prepare_ns:
+        disposition_ns = disposition.get("monotonic_ns")
+        if (not isinstance(prepare_ns, int) or not isinstance(disposition_ns, int)
+                or disposition_ns <= prepare_ns):
             row["qc_state"] = "ordering_ambiguous"
             rows.append(row)
             continue
-        row["prepare_to_decision_ns"] = decision_ns - prepare_ns
+        row["prepare_to_disposition_ns"] = disposition_ns - prepare_ns
+        if decision is not None:
+            row["prepare_to_decision_ns"] = disposition_ns - prepare_ns
 
         try:
             eadm_prepare = replay_admissibility(
                 trace, prepared, cutoff_seq=prepared["seq"], replay_label=candidate_id + ":prepare"
             )
             eadm_disposition = replay_admissibility(
-                trace, prepared, cutoff_seq=decision["seq"], replay_label=candidate_id + ":disposition"
+                trace, prepared, cutoff_seq=disposition["seq"], replay_label=candidate_id + ":disposition"
             )
         except Exception as exc:
             row["qc_state"] = "offline_replay_failed"
@@ -245,7 +270,7 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             event for event in trace.get("events", [])
             if event.get("event_type") == "k11.eac_evidence_ingested"
             and event.get("actor_id") == actor_id
-            and prepared["seq"] < event.get("seq", -1) < decision["seq"]
+            and prepared["seq"] < event.get("seq", -1) < disposition["seq"]
         ]
         if not interval_mutations:
             row["taxonomy"] = "N0"
@@ -271,9 +296,14 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             continue
         row["D5"] = True
 
-        prepare_digest = prepared.get("payload", {}).get("exact_request_digest")
-        decision_digest = decision.get("payload", {}).get("exact_request_digest")
-        if prepare_digest == decision_digest:
+        if positive_abandonment:
+            row["taxonomy"] = "N1"
+            row["disposition_kind"] = positive_abandonment["kind"]
+            row["successor_candidate_ids"] = positive_abandonment["successor_candidate_ids"]
+        elif decision is not None and (
+            prepared.get("payload", {}).get("exact_request_digest")
+            == decision.get("payload", {}).get("exact_request_digest")
+        ):
             row["D6"] = True
             row["taxonomy"] = "N2"
             row["native_effect_entered"] = candidate_id in native_by_id
@@ -295,6 +325,9 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
         if state:
             qc[state] = qc.get(state, 0) + 1
     durations = [row["prepare_to_decision_ns"] for row in rows if "prepare_to_decision_ns" in row]
+    disposition_durations = [
+        row["prepare_to_disposition_ns"] for row in rows if "prepare_to_disposition_ns" in row
+    ]
     return {
         "artifact_id": "minecraft-k11-trace-analysis-draft",
         "artifact_version": 1,
@@ -306,6 +339,7 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
         "taxonomy": taxonomy,
         "qc_states": qc,
         "prepare_to_decision_ns": durations,
+        "prepare_to_disposition_ns": disposition_durations,
         "actions": rows,
     }
 

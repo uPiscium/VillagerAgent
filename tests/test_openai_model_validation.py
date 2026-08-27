@@ -55,6 +55,26 @@ def test_openai_cache_isolated_between_runtime_roots(tmp_path, monkeypatch):
     assert not (tmp_path / ".cache" / "openai.cache").exists()
 
 
+def test_openai_first_cache_write_consistently_retains_response(tmp_path, monkeypatch):
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
+    monkeypatch.chdir(tmp_path)
+    legacy = OpenAILanguageModel(api_key="test-key", runtime_paths=RuntimePaths.legacy())
+    isolated = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path / "runtime")
+    )
+
+    assert legacy.cache_api_call_handler("missing", 1, 0) is None
+    assert isolated.cache_api_call_handler("missing", 1, 0) is None
+    assert not legacy.runtime_paths.openai_cache.exists()
+    assert not isolated.runtime_paths.openai_cache.exists()
+
+    legacy.save_cache("prompt", "legacy-response")
+    isolated.save_cache("prompt", "isolated-response")
+
+    assert json.loads(legacy.runtime_paths.openai_cache.read_text()) == {"prompt": "legacy-response"}
+    assert json.loads(isolated.runtime_paths.openai_cache.read_text()) == {"prompt": "isolated-response"}
+
+
 def test_openai_uses_environment_runtime_paths(monkeypatch, tmp_path):
     monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
     paths = RuntimePaths.isolated(tmp_path / "from-env")

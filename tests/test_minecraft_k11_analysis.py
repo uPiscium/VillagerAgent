@@ -37,6 +37,13 @@ def _prepare(runtime):
     )
 
 
+def _prepare_at(runtime, x, y, z):
+    return runtime.prepare_tool(
+        "MineBlock", _mine, (),
+        {"player_name": "Alice", "x": x, "y": y, "z": z, "emotion": [], "murmur": ""},
+    )
+
+
 def test_k11_offline_replay_matches_positive_prepare_state() -> None:
     runtime, trace = _runtime("k11-replay-positive")
     scope = K11TraceScope(
@@ -119,6 +126,74 @@ def test_k11_offline_analysis_recognizes_controlled_relevant_invalidation_fixtur
     assert action["EAdm_disposition"] is False
     assert action["native_effect_entered"] is True
     assert action["prepare_to_decision_ns"] > 0
+
+
+def test_k11_offline_analysis_recognizes_controlled_positive_replacement_as_n1() -> None:
+    """Development classifier fixture only; never a natural prevalence observation."""
+    runtime, trace = _runtime("k11-replay-replacement")
+    scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    successor_scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-2",
+    )
+    with use_scope(scope):
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+        original = _prepare_at(runtime, 1, 2, 3)
+        runtime._ingest_current_fluent(
+            "Alice",
+            Proposition(
+                PropositionKey("minecraft", "target_block_present", (1, 2, 3), "current"),
+                polarity=False,
+            ),
+            source="minecraft-visible-observation",
+        )
+        trace.record(
+            "k11.tool_call_exited",
+            source="controlled-development-fixture",
+            payload={"outcome": "returned"},
+        )
+    with use_scope(successor_scope):
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 4, "y": 5, "z": 6})
+        successor = _prepare_at(runtime, 4, 5, 6)
+        runtime.execute_prepared(successor)
+    with use_scope(K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice", agent_step_id="step-1",
+    )):
+        trace.record(
+            "k11.agent_step_completed",
+            source="controlled-development-fixture",
+            payload={"outcome": "returned"},
+        )
+
+    analysis = analyze_trace(trace.artifact())
+
+    assert analysis["trace_validation"]["valid"] is True
+    assert analysis["taxonomy"]["N1"] == 1
+    original_row = next(row for row in analysis["actions"] if row["candidate_id"] == original.request.candidate_id)
+    assert original_row["D1"] is True
+    assert original_row["D2"] is True
+    assert original_row["D3"] is True
+    assert original_row["D4"] is True
+    assert original_row["D5"] is True
+    assert original_row["D6"] is False
+    assert original_row["EAdm_prepare"] is True
+    assert original_row["EAdm_disposition"] is False
+    assert original_row["taxonomy"] == "N1"
+    assert original_row["disposition_kind"] == "replacement"
+
+
+def test_k11_offline_analysis_keeps_ambiguous_disappearance_unresolved() -> None:
+    runtime, trace = _runtime("k11-replay-unresolved")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    _prepare(runtime)
+
+    analysis = analyze_trace(trace.artifact())
+
+    assert analysis["taxonomy"]["N1"] == 0
+    assert analysis["actions"][0]["qc_state"] == "disposition_unresolved"
 
 
 def test_k11_p0_analysis_rejects_trace_failure_even_without_analysis_error() -> None:

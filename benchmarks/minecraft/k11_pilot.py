@@ -61,6 +61,17 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
         raise K11PilotContractError("P0 must explicitly forbid prevalence inference")
     if document.get("eac_identity_source") != EAC_IDENTITY_SOURCE:
         raise K11PilotContractError("K11 P0 must bind EAC identity to the current immutable checkout")
+    runtime_hygiene = document.get("runtime_hygiene")
+    if (not isinstance(runtime_hygiene, Mapping)
+            or runtime_hygiene.get("classification") != "pre-freeze-runtime-hygiene-change"
+            or runtime_hygiene.get("legacy_default_paths_preserved") is not True
+            or runtime_hygiene.get("legacy_cache_lookup_result_preserved") is not True
+            or runtime_hygiene.get("legacy_first_save_cache_write_preserved") is not False
+            or not isinstance(runtime_hygiene.get("first_save_cache_change"), str)
+            or not runtime_hygiene["first_save_cache_change"]
+            or not isinstance(runtime_hygiene.get("scientific_disclosure"), str)
+            or not runtime_hygiene["scientific_disclosure"]):
+        raise K11PilotContractError("K11 P0 manifest must bind the pre-freeze runtime-hygiene disclosure")
     runs = document.get("runs")
     if not isinstance(runs, list) or len(runs) != P0_EXPECTED_RUNS:
         raise K11PilotContractError("K11 P0 manifest must contain exactly eight runs")
@@ -180,6 +191,20 @@ def _event_type_counts(trace_artifact: Mapping[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _coverage_summary(event_counts: Mapping[str, int], actor_threads, model_call_sources) -> dict[str, bool]:
+    sources = set(model_call_sources)
+    return {
+        "model_calls_observed": event_counts.get("k11.model_call_started", 0) > 0,
+        "direct_openai_compatible_calls_observed": bool(
+            {"OpenAILanguageModel.gpt_api", "OpenAILanguageModel.gpt_api_stream"} & sources
+        ),
+        "tool_calls_observed": event_counts.get("k11.tool_call_entered", 0) > 0,
+        "prepared_actions_observed": event_counts.get("k11.eac_action_prepared", 0) > 0,
+        "evidence_ingestions_observed": event_counts.get("k11.eac_evidence_ingested", 0) > 0,
+        "multiple_actor_thread_pairs_observed": len(actor_threads) > 1,
+    }
+
+
 def _p0_passes(*, summaries: list[Mapping[str, Any]], calibration_error: str | None,
                calibration: Mapping[str, Any], coverage_sufficient: bool) -> bool:
     """Gate P0 on every run's validation, never aggregate event presence alone."""
@@ -234,6 +259,12 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         generic_validation = validate_trace(trace_artifact)
         validation = validate_p0_trace(trace_artifact)
         event_counts = _event_type_counts(trace_artifact)
+        model_call_sources = sorted({
+            event.get("source")
+            for event in trace_artifact.get("events", [])
+            if event.get("event_type") == "k11.model_call_started"
+            and isinstance(event.get("source"), str)
+        })
         actor_threads = {
             (event.get("actor_id"), event.get("thread_id"))
             for event in trace_artifact.get("events", [])
@@ -265,6 +296,7 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             "generic_trace_validation": generic_validation,
             "analysis_validation": analysis_validation,
             "event_type_counts": event_counts,
+            "model_call_sources": model_call_sources,
             "agent_thread_pairs": sorted([list(item) for item in actor_threads]),
             "offline_analysis_error": analysis.get("analysis_error"),
             "runtime_returned": result is not None,
@@ -293,21 +325,19 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
 
     aggregate_event_counts: dict[str, int] = {}
     all_actor_threads = set()
+    all_model_call_sources = set()
     for summary in summaries:
         for event_type, count in summary["event_type_counts"].items():
             aggregate_event_counts[event_type] = aggregate_event_counts.get(event_type, 0) + count
         all_actor_threads.update(tuple(item) for item in summary["agent_thread_pairs"])
+        all_model_call_sources.update(summary.get("model_call_sources", []))
 
     runtime_error_count = sum(item["runtime_error"] is not None for item in summaries)
     trace_valid_count = sum(item["trace_validation"]["valid"] is True for item in summaries)
     analysis_valid_count = sum(item["analysis_validation"]["valid"] is True for item in summaries)
-    coverage = {
-        "model_calls_observed": aggregate_event_counts.get("k11.model_call_started", 0) > 0,
-        "tool_calls_observed": aggregate_event_counts.get("k11.tool_call_entered", 0) > 0,
-        "prepared_actions_observed": aggregate_event_counts.get("k11.eac_action_prepared", 0) > 0,
-        "evidence_ingestions_observed": aggregate_event_counts.get("k11.eac_evidence_ingested", 0) > 0,
-        "multiple_actor_thread_pairs_observed": len(all_actor_threads) > 1,
-    }
+    coverage = _coverage_summary(
+        aggregate_event_counts, all_actor_threads, all_model_call_sources,
+    )
     coverage_sufficient = all(coverage.values())
     p0_passed = _p0_passes(
         summaries=summaries,
@@ -327,12 +357,18 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         "runtime_digest": identity["runtime_digest"],
         "premanifest_identity": identity["premanifest_identity"],
         "premanifest_path": str(premanifest_path),
+        "runtime_hygiene": manifest["runtime_hygiene"],
         "run_count": len(summaries),
         "trace_valid_count": trace_valid_count,
         "offline_analysis_valid_count": analysis_valid_count,
         "runtime_error_count": runtime_error_count,
         "aggregate_event_type_counts": aggregate_event_counts,
         "coverage": coverage,
+        "model_call_sources": sorted(all_model_call_sources),
+        "model_call_coverage_note": (
+            "Observed events demonstrate exercised paths only; structural coverage is established "
+            "by the K11 instrumentation contract tests."
+        ),
         "coverage_sufficient": coverage_sufficient,
         "calibration_error": calibration_error,
         "runs": summaries,

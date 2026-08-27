@@ -6,6 +6,7 @@ import pytest
 from benchmarks.minecraft.k11_pilot import (
     K11PilotContractError,
     P0_EXPECTED_RUNS,
+    _coverage_summary,
     _p0_passes,
     load_p0_manifest,
 )
@@ -39,6 +40,14 @@ def _manifest() -> dict:
         "study_phase": "K11-P0-instrumentation-validation",
         "prevalence_inference_allowed": False,
         "eac_identity_source": "current_immutable_checkout",
+        "runtime_hygiene": {
+            "classification": "pre-freeze-runtime-hygiene-change",
+            "legacy_default_paths_preserved": True,
+            "legacy_cache_lookup_result_preserved": True,
+            "legacy_first_save_cache_write_preserved": False,
+            "first_save_cache_change": "The first response is retained when the cache file is absent.",
+            "scientific_disclosure": "General subject-runtime hygiene change; not K11-only instrumentation.",
+        },
         "runs": [
             {"run_id": f"K11-P0-{index:02d}", "runtime": _runtime(index)}
             for index in range(1, 9)
@@ -98,6 +107,14 @@ def test_k11_p0_manifest_requires_current_checkout_identity_source(tmp_path: Pat
         load_p0_manifest(_write(tmp_path, document))
 
 
+def test_k11_p0_manifest_requires_runtime_hygiene_disclosure(tmp_path: Path) -> None:
+    document = _manifest()
+    document.pop("runtime_hygiene")
+
+    with pytest.raises(K11PilotContractError, match="runtime-hygiene disclosure"):
+        load_p0_manifest(_write(tmp_path, document))
+
+
 def test_k11_p0_manifest_rejects_user_supplied_eac_identity(tmp_path: Path) -> None:
     for field, value in (
         ("eac_premanifest", "/tmp/stale.json"),
@@ -113,6 +130,23 @@ def test_k11_p0_manifest_contract_tests_remain_independent_of_analysis_error() -
     # The run-level validators, rather than a missing analysis_error field, are
     # the pilot's source of truth (exercised by the pilot integration path).
     assert P0_EXPECTED_RUNS == 8
+
+
+def test_k11_p0_coverage_requires_exercised_direct_openai_compatible_path() -> None:
+    counts = {
+        "k11.model_call_started": 1,
+        "k11.tool_call_entered": 1,
+        "k11.eac_action_prepared": 1,
+        "k11.eac_evidence_ingested": 1,
+    }
+    actor_threads = {("Alice", 1), ("Bob", 2)}
+
+    langchain_only = _coverage_summary(counts, actor_threads, {"LLMHandler.on_llm_start"})
+    direct = _coverage_summary(counts, actor_threads, {"OpenAILanguageModel.gpt_api_stream"})
+
+    assert langchain_only["model_calls_observed"] is True
+    assert langchain_only["direct_openai_compatible_calls_observed"] is False
+    assert all(direct.values())
 
 
 def test_k11_p0_final_gate_requires_every_run_validation() -> None:

@@ -198,10 +198,18 @@ class K11ProcessInstrumentation:
         setattr(owner, name, replacement)
 
     def __enter__(self):
+        try:
+            return self._install()
+        except BaseException:
+            self._restore()
+            raise
+
+    def _install(self):
         from benchmarks.common.eac.gateway import EffectGateway
         from benchmarks.minecraft import eac_runtime as eac_runtime_module
         from env.env import VillagerBench
         from env.minecraft_client import LLMHandler
+        from model.openai_models import OpenAILanguageModel
         from pipeline.agent import BaseAgent
 
         trace = self.trace
@@ -327,21 +335,31 @@ class K11ProcessInstrumentation:
         def llm_start(handler_self, serialized, prompts, **kwargs):
             result = original_llm_start(handler_self, serialized, prompts, **kwargs)
             scope = current_scope()
-            if scope is not None:
-                model_call_id = trace.new_identity("model-call", actor_id=scope.actor_id)
+            model_call_id = trace.new_identity(
+                "model-call", actor_id=scope.actor_id if scope is not None else None,
+            )
+            run_id = kwargs.get("run_id")
+            if run_id is not None:
+                pending = getattr(handler_self, "_k11_model_calls_by_run_id", None)
+                if pending is None:
+                    pending = {}
+                    handler_self._k11_model_calls_by_run_id = pending
+                pending[str(run_id)] = (model_call_id, scope)
+            else:
                 stack = getattr(handler_self, "_k11_model_call_stack", None)
                 if stack is None:
                     stack = []
                     handler_self._k11_model_call_stack = stack
-                stack.append(model_call_id)
-                trace.record(
-                    "k11.model_call_started",
-                    source="LLMHandler.on_llm_start",
-                    payload={
-                        "model_call_id": model_call_id,
-                        "model_name": serialized.get("name") if isinstance(serialized, Mapping) else None,
-                    },
-                )
+                stack.append((model_call_id, scope))
+            trace.record(
+                "k11.model_call_started",
+                source="LLMHandler.on_llm_start",
+                scope=scope,
+                payload={
+                    "model_call_id": model_call_id,
+                    "model_name": serialized.get("name") if isinstance(serialized, Mapping) else None,
+                },
+            )
             return result
         self._patch(LLMHandler, "on_llm_start", llm_start)
 
@@ -349,15 +367,19 @@ class K11ProcessInstrumentation:
         @wraps(original_llm_end)
         def llm_end(handler_self, llm_result, **kwargs):
             result = original_llm_end(handler_self, llm_result, **kwargs)
-            scope = current_scope()
-            if scope is not None:
+            run_id = kwargs.get("run_id")
+            if run_id is not None:
+                pending = getattr(handler_self, "_k11_model_calls_by_run_id", {})
+                model_call_id, scope = pending.pop(str(run_id), (None, current_scope()))
+            else:
                 stack = getattr(handler_self, "_k11_model_call_stack", [])
-                model_call_id = stack.pop() if stack else None
-                trace.record(
-                    "k11.model_call_completed",
-                    source="LLMHandler.on_llm_end",
-                    payload={"model_call_id": model_call_id},
-                )
+                model_call_id, scope = stack.pop() if stack else (None, current_scope())
+            trace.record(
+                "k11.model_call_completed",
+                source="LLMHandler.on_llm_end",
+                scope=scope,
+                payload={"model_call_id": model_call_id},
+            )
             return result
         self._patch(LLMHandler, "on_llm_end", llm_end)
 
@@ -365,17 +387,65 @@ class K11ProcessInstrumentation:
         @wraps(original_llm_error)
         def llm_error(handler_self, error, **kwargs):
             result = original_llm_error(handler_self, error, **kwargs)
-            scope = current_scope()
-            if scope is not None:
+            run_id = kwargs.get("run_id")
+            if run_id is not None:
+                pending = getattr(handler_self, "_k11_model_calls_by_run_id", {})
+                model_call_id, scope = pending.pop(str(run_id), (None, current_scope()))
+            else:
                 stack = getattr(handler_self, "_k11_model_call_stack", [])
-                model_call_id = stack.pop() if stack else None
-                trace.record(
-                    "k11.model_call_failed",
-                    source="LLMHandler.on_llm_error",
-                    payload={"model_call_id": model_call_id, "error_type": type(error).__name__},
-                )
+                model_call_id, scope = stack.pop() if stack else (None, current_scope())
+            trace.record(
+                "k11.model_call_failed",
+                source="LLMHandler.on_llm_error",
+                scope=scope,
+                payload={"model_call_id": model_call_id, "error_type": type(error).__name__},
+            )
             return result
         self._patch(LLMHandler, "on_llm_error", llm_error)
+
+        def instrument_openai_provider(name: str) -> None:
+            original_provider_call = getattr(OpenAILanguageModel, name)
+            @wraps(original_provider_call)
+            def provider_call(model_self, *args, **kwargs):
+                scope = current_scope()
+                requested_model = kwargs.get("model")
+                if requested_model is None and len(args) >= 2:
+                    requested_model = args[1]
+                model_call_id = trace.new_identity(
+                    "model-call", actor_id=scope.actor_id if scope is not None else None,
+                )
+                source = f"OpenAILanguageModel.{name}"
+                trace.record(
+                    "k11.model_call_started",
+                    source=source,
+                    scope=scope,
+                    payload={
+                        "model_call_id": model_call_id,
+                        "model_name": requested_model or getattr(model_self, "api_model", None),
+                    },
+                )
+                try:
+                    result = original_provider_call(model_self, *args, **kwargs)
+                except BaseException as exc:
+                    trace.record(
+                        "k11.model_call_failed",
+                        source=source,
+                        scope=scope,
+                        payload={"model_call_id": model_call_id, "error_type": type(exc).__name__},
+                    )
+                    raise
+                else:
+                    trace.record(
+                        "k11.model_call_completed",
+                        source=source,
+                        scope=scope,
+                        payload={"model_call_id": model_call_id},
+                    )
+                    return result
+            self._patch(OpenAILanguageModel, name, provider_call)
+
+        instrument_openai_provider("gpt_api")
+        instrument_openai_provider("gpt_api_stream")
 
         original_install = eac_runtime_module.install_minecraft_eac
         @wraps(original_install)
@@ -419,8 +489,11 @@ class K11ProcessInstrumentation:
 
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def _restore(self) -> None:
         for owner, name, original in reversed(self._restores):
             setattr(owner, name, original)
         self._restores.clear()
+
+    def __exit__(self, exc_type, exc, tb):
+        self._restore()
         return False

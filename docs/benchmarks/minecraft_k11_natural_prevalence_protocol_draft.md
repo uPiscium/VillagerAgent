@@ -186,6 +186,8 @@ The minimum K11 event vocabulary is:
 
 The instrumentation records observed facts. It does not emit synthetic semantic labels such as `N2`, `reconsidered`, or `invalidated` online.
 
+Positive pre-decision disposition is derived offline from ordinary lifecycle facts rather than emitted as an online semantic label. The original scoped tool call must return normally without an execution decision. A later same-actor/task preparation before the agent step returns establishes replacement; otherwise a normal return of the scoped agent step establishes cancellation. Missing, raised, cross-scope, or ambiguously ordered lifecycle facts remain `disposition_unresolved`.
+
 ## 12. Correlation identities
 
 K11 must support deterministic reconstruction of:

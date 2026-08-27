@@ -130,6 +130,156 @@ def exact_request_digest(request_value: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(dict(request_value))).hexdigest()
 
 
+def _valid_preparation(event: Mapping[str, Any], *, require_scope: bool) -> bool:
+    payload = event.get("payload")
+    request = payload.get("exact_request") if isinstance(payload, Mapping) else None
+    action = request.get("action") if isinstance(request, Mapping) else None
+    try:
+        digest_valid = (
+            isinstance(request, Mapping)
+            and payload.get("exact_request_digest") == exact_request_digest(request)
+        )
+    except (TypeError, ValueError):
+        digest_valid = False
+    if (not isinstance(request, Mapping)
+            or not isinstance(request.get("candidate_id"), str) or not request["candidate_id"]
+            or not isinstance(request.get("attempt_id"), str) or not request["attempt_id"]
+            or not isinstance(action, Mapping)
+            or not isinstance(action.get("identity"), str) or not action["identity"]
+            or type(action.get("version")) is not int or action["version"] < 1
+            or not isinstance(action.get("digest"), str) or not action["digest"]
+            or not digest_valid):
+        return False
+    if require_scope and any(not event.get(field) for field in (
+            "actor_id", "task_id", "agent_step_id", "tool_call_id")):
+        return False
+    return True
+
+
+def derive_positive_disposition(
+    artifact: Mapping[str, Any], prepared: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Derive a positive pre-decision disposition from ordinary lifecycle facts.
+
+    Mere disappearance is never sufficient. The prepared tool call must return
+    normally without a decision, followed by either a same-actor/task successor
+    preparation before the agent step returns, or the normal return of that step.
+    """
+    events = artifact.get("events")
+    if not isinstance(events, list) or not isinstance(prepared, Mapping):
+        return None
+    prepared_payload = prepared.get("payload")
+    if not isinstance(prepared_payload, Mapping) or not _valid_preparation(prepared, require_scope=True):
+        return None
+    prepared_seq = prepared.get("seq")
+    prepared_ns = prepared.get("monotonic_ns")
+    scope = tuple(prepared.get(field) for field in (
+        "actor_id", "task_id", "agent_step_id", "tool_call_id",
+    ))
+    if (any(not value for value in scope) or not isinstance(prepared_seq, int)
+            or not isinstance(prepared_ns, int)):
+        return None
+    preparation_counts: dict[str, int] = {}
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        if event.get("event_type") != "k11.eac_action_prepared":
+            continue
+        payload = event.get("payload")
+        request = payload.get("exact_request") if isinstance(payload, Mapping) else None
+        candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
+        if isinstance(candidate_id, str):
+            preparation_counts[candidate_id] = preparation_counts.get(candidate_id, 0) + 1
+    prepared_request = prepared_payload.get("exact_request")
+    original_candidate = prepared_request.get("candidate_id") if isinstance(prepared_request, Mapping) else None
+    if not isinstance(original_candidate, str) or preparation_counts.get(original_candidate) != 1:
+        return None
+
+    tool_exits = [
+        event for event in events
+        if isinstance(event, Mapping)
+        and event.get("event_type") == "k11.tool_call_exited"
+        and tuple(event.get(field) for field in (
+            "actor_id", "task_id", "agent_step_id", "tool_call_id",
+        )) == scope
+        and isinstance(event.get("payload"), Mapping)
+        and event["payload"].get("outcome") == "returned"
+        and isinstance(event.get("seq"), int) and event["seq"] > prepared_seq
+        and isinstance(event.get("monotonic_ns"), int) and event["monotonic_ns"] > prepared_ns
+    ]
+    if len(tool_exits) != 1:
+        return None
+    tool_exit = tool_exits[0]
+
+    agent_returns = [
+        event for event in events
+        if isinstance(event, Mapping)
+        and event.get("event_type") == "k11.agent_step_completed"
+        and (event.get("actor_id"), event.get("task_id"), event.get("agent_step_id")) == scope[:3]
+        and isinstance(event.get("payload"), Mapping)
+        and event["payload"].get("outcome") == "returned"
+        and isinstance(event.get("seq"), int) and event["seq"] > tool_exit["seq"]
+        and isinstance(event.get("monotonic_ns"), int)
+        and event["monotonic_ns"] > tool_exit["monotonic_ns"]
+    ]
+    if len(agent_returns) != 1:
+        return None
+    agent_return = agent_returns[0]
+
+    successor_preparations = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        payload = event.get("payload")
+        request = payload.get("exact_request") if isinstance(payload, Mapping) else None
+        successor_scope = tuple(event.get(field) for field in (
+            "actor_id", "task_id", "agent_step_id", "tool_call_id",
+        ))
+        if (event.get("event_type") == "k11.eac_action_prepared"
+                and isinstance(request, Mapping)
+                and _valid_preparation(event, require_scope=True)
+                and request.get("candidate_id") != original_candidate
+                and preparation_counts.get(request.get("candidate_id")) == 1
+                and successor_scope[:3] == scope[:3]
+                and successor_scope[3] and successor_scope[3] != scope[3]
+                and isinstance(event.get("seq"), int) and event["seq"] > tool_exit["seq"]
+                and event["seq"] < agent_return["seq"]
+                and isinstance(event.get("monotonic_ns"), int)
+                and tool_exit["monotonic_ns"] < event["monotonic_ns"] < agent_return["monotonic_ns"]):
+            successor_preparations.append(event)
+
+    kind = "cancellation"
+    marker = agent_return
+    if successor_preparations:
+        by_sequence = min(successor_preparations, key=lambda event: event["seq"])
+        by_time = min(successor_preparations, key=lambda event: event["monotonic_ns"])
+        if by_sequence is not by_time:
+            return None
+        kind = "replacement"
+        marker = by_sequence
+    successor_ids = []
+    if kind == "replacement":
+        successor_ids = [marker["payload"]["exact_request"]["candidate_id"]]
+    return {
+        "kind": kind,
+        "marker": marker,
+        "tool_exit": tool_exit,
+        "successor_candidate_ids": successor_ids,
+    }
+
+
+def _event_precedes(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool | None:
+    first_seq, second_seq = first.get("seq"), second.get("seq")
+    first_ns, second_ns = first.get("monotonic_ns"), second.get("monotonic_ns")
+    if not all(isinstance(value, int) for value in (first_seq, second_seq, first_ns, second_ns)):
+        return None
+    sequence_before = first_seq < second_seq
+    time_before = first_ns < second_ns
+    if sequence_before != time_before or first_seq == second_seq or first_ns == second_ns:
+        return None
+    return sequence_before
+
+
 class K11TraceRecorder:
     """Append-only process-local recorder with no explicit lock.
 
@@ -223,7 +373,7 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     if artifact.get("schema_version") != TRACE_SCHEMA_VERSION or not isinstance(events, list):
         return {"valid": False, "errors": ["invalid K11 trace artifact"], "warnings": []}
 
-    sequences = [event.get("seq") for event in events]
+    sequences = [event.get("seq") if isinstance(event, Mapping) else None for event in events]
     if any(type(value) is not int or value <= 0 for value in sequences):
         errors.append("trace sequence is malformed")
     elif len(set(sequences)) != len(sequences):
@@ -239,13 +389,23 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     evidence_count = 0
 
     for event in events:
+        if not isinstance(event, Mapping):
+            errors.append("trace event is malformed")
+            continue
         event_type = event.get("event_type")
         if event_type not in K11_EVENT_TYPES:
             warnings.append(f"unknown event type: {event_type}")
             continue
-        payload = event.get("payload", {})
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            errors.append(f"trace {event_type} payload is malformed")
+            continue
         if event_type == "k11.eac_evidence_ingested":
             evidence_count += 1
+        if event_type == "k11.eac_action_prepared" and not _valid_preparation(
+                event, require_scope=False):
+            errors.append("trace preparation is malformed")
+            continue
         request = payload.get("exact_request") if isinstance(payload, Mapping) else None
         candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
         if candidate_id is None:
@@ -269,19 +429,34 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             errors.append(f"candidate {candidate_id} has {len(rows)} prepare events")
         decision_rows = decisions.get(candidate_id, [])
         terminal_rows = terminals.get(candidate_id, [])
-        if len(decision_rows) != 1:
-            errors.append(f"candidate {candidate_id} has {len(decision_rows)} execution-decision events")
-        if len(terminal_rows) != 1:
+        positive_disposition = derive_positive_disposition(artifact, rows[0])
+        decision_precedes = None
+        if len(decision_rows) == 1 and positive_disposition is not None:
+            decision_precedes = _event_precedes(decision_rows[0], positive_disposition["marker"])
+            if decision_precedes is False:
+                errors.append(f"candidate {candidate_id} reaches a decision after positive abandonment")
+            elif decision_precedes is None:
+                errors.append(f"candidate {candidate_id} disposition ordering is ambiguous")
+        selected_positive = positive_disposition if not decision_rows else None
+        if len(decision_rows) != 1 and selected_positive is None:
+            errors.append(f"candidate {candidate_id} lacks exactly one disposition event")
+        if decision_rows and len(terminal_rows) != 1:
             errors.append(f"candidate {candidate_id} has {len(terminal_rows)} terminal events")
-        if decision_rows:
+        if selected_positive is not None and terminal_rows:
+            errors.append(f"candidate {candidate_id} has a terminal after positive abandonment")
+        disposition_rows = decision_rows or (
+            [selected_positive["marker"]] if selected_positive is not None else []
+        )
+        if disposition_rows:
             prepare_ns = rows[0].get("monotonic_ns")
-            decision_ns = decision_rows[0].get("monotonic_ns")
-            if not isinstance(prepare_ns, int) or not isinstance(decision_ns, int) or decision_ns <= prepare_ns:
-                warnings.append(f"candidate {candidate_id} has non-positive prepare-to-decision interval")
+            disposition_ns = disposition_rows[0].get("monotonic_ns")
+            if (not isinstance(prepare_ns, int) or not isinstance(disposition_ns, int)
+                    or disposition_ns <= prepare_ns):
+                warnings.append(f"candidate {candidate_id} has non-positive prepare-to-disposition interval")
             prepare_digest = rows[0].get("payload", {}).get("exact_request_digest")
-            decision_digest = decision_rows[0].get("payload", {}).get("exact_request_digest")
-            if prepare_digest != decision_digest:
-                errors.append(f"candidate {candidate_id} exact request changed before decision")
+            disposition_digest = disposition_rows[0].get("payload", {}).get("exact_request_digest")
+            if decision_rows and prepare_digest != disposition_digest:
+                errors.append(f"candidate {candidate_id} exact request changed before disposition")
 
     for candidate_id, rows in native_entries.items():
         if candidate_id not in decisions:
@@ -300,6 +475,10 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
         "counts": {
             "events": len(events),
             "prepared": sum(len(rows) for rows in prepared.values()),
+            "positive_abandonments": sum(
+                derive_positive_disposition(artifact, rows[0]) is not None
+                for candidate_id, rows in prepared.items() if candidate_id not in decisions
+            ),
             "execution_decisions": sum(len(rows) for rows in decisions.values()),
             "native_entries": sum(len(rows) for rows in native_entries.values()),
             "native_completions": sum(len(rows) for rows in native_completions.values()),
@@ -321,6 +500,13 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     events = artifact.get("events") if isinstance(artifact, Mapping) else None
     if not isinstance(events, list) or not events:
         return {"valid": False, "errors": errors + ["P0 trace is empty or malformed"], "warnings": generic["warnings"], "counts": generic.get("counts", {})}
+    if any("malformed" in error for error in errors):
+        return {
+            "valid": False,
+            "errors": errors,
+            "warnings": generic["warnings"],
+            "counts": generic.get("counts", {}),
+        }
 
     def rows(kind: str) -> list[Mapping[str, Any]]:
         return [event for event in events if isinstance(event, Mapping) and event.get("event_type") == kind]
@@ -412,16 +598,30 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             errors.append("P0 primary preparation lacks exact request or scoped identity")
         related_decisions = [row for row in decisions if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
         related_terminals = [row for row in terminals if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
-        if len(related_decisions) != 1:
-            errors.append(f"primary candidate {candidate} lacks exactly one execution decision")
-        if len(related_terminals) != 1:
+        positive_disposition = derive_positive_disposition(artifact, event)
+        decision_precedes = None
+        if len(related_decisions) == 1 and positive_disposition is not None:
+            decision_precedes = _event_precedes(related_decisions[0], positive_disposition["marker"])
+            if decision_precedes is False:
+                errors.append(f"primary candidate {candidate} reaches a decision after positive abandonment")
+            elif decision_precedes is None:
+                errors.append(f"primary candidate {candidate} disposition ordering is ambiguous")
+        selected_positive = positive_disposition if not related_decisions else None
+        if len(related_decisions) != 1 and selected_positive is None:
+            errors.append(f"primary candidate {candidate} lacks exactly one disposition")
+        if related_decisions and len(related_terminals) != 1:
             errors.append(f"primary candidate {candidate} lacks exactly one terminal")
-        if related_decisions:
+        if selected_positive is not None and related_terminals:
+            errors.append(f"primary candidate {candidate} has a terminal after abandonment")
+        related_dispositions = related_decisions or (
+            [selected_positive["marker"]] if selected_positive is not None else []
+        )
+        if related_dispositions:
             prepare_ns = event.get("monotonic_ns")
-            decision_ns = related_decisions[0].get("monotonic_ns")
-            if (not isinstance(prepare_ns, int) or not isinstance(decision_ns, int)
-                    or decision_ns <= prepare_ns):
-                errors.append(f"primary candidate {candidate} lacks a positive prepare-to-decision interval")
+            disposition_ns = related_dispositions[0].get("monotonic_ns")
+            if (not isinstance(prepare_ns, int) or not isinstance(disposition_ns, int)
+                    or disposition_ns <= prepare_ns):
+                errors.append(f"primary candidate {candidate} lacks a positive prepare-to-disposition interval")
         related_entries = [row for row in native_entries
                            if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
         related_completions = [row for row in native_completions
@@ -440,7 +640,7 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
                 errors.append(f"primary candidate {candidate} exact request digest is not correlated")
         if isinstance(request, Mapping) and digest != exact_request_digest(request):
             errors.append(f"primary candidate {candidate} preparation has an invalid exact request digest")
-        ordered = [event] + related_decisions + related_entries + related_completions + related_terminals
+        ordered = [event] + related_dispositions + related_entries + related_completions + related_terminals
         ordered_sequences = [row.get("seq") for row in ordered]
         if (any(not isinstance(value, int) for value in ordered_sequences)
                 or ordered_sequences != sorted(ordered_sequences)

@@ -118,8 +118,6 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 with cache_path.open("r") as cache_file:
                     cache = json.load(cache_file)
             else:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_json(cache_path, {})
                 cache = {}
 
         if prompt in cache:

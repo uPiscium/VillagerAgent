@@ -4,6 +4,22 @@
   "study_phase": "K11-P0-instrumentation-validation",
   "prevalence_inference_allowed": false,
   "eac_identity_source": "current_immutable_checkout",
+  "runtime_hygiene": {
+    "classification": "pre-freeze-runtime-hygiene-change",
+    "change": "OpenAI-compatible mutable state is routed through run-specific RuntimePaths",
+    "affected_state": [
+      "tokens.json",
+      "openai.logs",
+      "llm_inference.json",
+      "openai.cache"
+    ],
+    "legacy_default_paths_preserved": true,
+    "legacy_cache_lookup_result_preserved": true,
+    "legacy_first_save_cache_write_preserved": false,
+    "first_save_cache_change": "A missing cache file now retains the first response consistently even when the parent cache directory already exists; the legacy implementation discarded that response in this edge state.",
+    "identity_binding": "current execution revision and generated runtime digest",
+    "scientific_disclosure": "This is a general subject-runtime hygiene change, not K11-only instrumentation; final reporting must not claim an unchanged pre-K11 audited runtime."
+  },
   "provenance_sources": {
     "model_configuration": "configs/minecraft/approved-experiments/minecraft-judged-production-v1.json",
     "minecraft_target_configuration": "configs/minecraft/experiments/comparison-2026-07-20.json",

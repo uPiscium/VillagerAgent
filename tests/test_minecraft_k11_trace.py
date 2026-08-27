@@ -1,10 +1,12 @@
 from copy import deepcopy
 
+from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
 from benchmarks.minecraft.k11_trace import (
     K11TraceRecorder,
     K11TraceScope,
+    derive_positive_disposition,
     exact_request_digest,
     use_scope,
     validate_p0_trace,
@@ -44,6 +46,13 @@ def _prepare(runtime):
     )
 
 
+def _prepare_at(runtime, x, y, z):
+    return runtime.prepare_tool(
+        "MineBlock", _mine, (),
+        {"player_name": "Alice", "x": x, "y": y, "z": z, "emotion": [], "murmur": ""},
+    )
+
+
 def _complete_p0_artifact(run_id="k11-p0-complete"):
     runtime, trace = _runtime(run_id)
     scope = K11TraceScope(
@@ -59,6 +68,47 @@ def _complete_p0_artifact(run_id="k11-p0-complete"):
         runtime.execute_prepared(_prepare(runtime))
         trace.record("k11.tool_call_exited", source="test")
         trace.record("k11.agent_step_completed", source="test")
+    return trace.artifact()
+
+
+def _complete_p0_abandonment_artifact(run_id="k11-p0-abandonment"):
+    runtime, trace = _runtime(run_id)
+    agent_scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice", agent_step_id="step-1",
+    )
+    first_scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    second_scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-2",
+    )
+    with use_scope(agent_scope):
+        trace.record("k11.agent_step_started", source="test")
+        trace.record("k11.model_call_started", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.model_call_completed", source="test", payload={"model_call_id": "model-1"})
+    with use_scope(first_scope):
+        trace.record("k11.tool_call_entered", source="test")
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+        _prepare_at(runtime, 1, 2, 3)
+        runtime._ingest_current_fluent(
+            "Alice",
+            Proposition(
+                PropositionKey("minecraft", "target_block_present", (1, 2, 3), "current"),
+                polarity=False,
+            ),
+            source="minecraft-visible-observation",
+        )
+        trace.record("k11.tool_call_exited", source="test", payload={"outcome": "returned"})
+    with use_scope(second_scope):
+        trace.record("k11.tool_call_entered", source="test")
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 4, "y": 5, "z": 6})
+        successor = _prepare_at(runtime, 4, 5, 6)
+        runtime.execute_prepared(successor)
+        trace.record("k11.tool_call_exited", source="test")
+    with use_scope(agent_scope):
+        trace.record("k11.agent_step_completed", source="test", payload={"outcome": "returned"})
     return trace.artifact()
 
 
@@ -205,6 +255,98 @@ def test_k11_p0_trace_accepts_complete_correlated_run() -> None:
     validation = validate_p0_trace(_complete_p0_artifact())
     assert validation["valid"] is True
     assert validation["counts"]["prepared"] == 1
+
+
+def test_k11_p0_trace_accepts_positive_replacement_disposition() -> None:
+    validation = validate_p0_trace(_complete_p0_abandonment_artifact())
+
+    assert validation["valid"] is True
+    assert validation["counts"]["prepared"] == 2
+    assert validation["counts"]["positive_abandonments"] == 1
+
+
+def test_k11_p0_trace_rejects_disappearance_without_positive_tool_exit() -> None:
+    artifact = _complete_p0_abandonment_artifact("k11-p0-missing-tool-exit")
+    artifact["events"] = [
+        event for event in artifact["events"]
+        if not (event["event_type"] == "k11.tool_call_exited"
+                and event.get("tool_call_id") == "tool-1")
+    ]
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("disposition" in error for error in validation["errors"])
+
+
+def test_k11_p0_trace_rejects_raised_tool_exit_as_positive_disposition() -> None:
+    artifact = _complete_p0_abandonment_artifact("k11-p0-raised-tool-exit")
+    first_exit = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.tool_call_exited" and event.get("tool_call_id") == "tool-1"
+    )
+    first_exit["payload"]["outcome"] = "raised"
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("disposition" in error for error in validation["errors"])
+
+
+def test_k11_p0_trace_rejects_delayed_decision_after_positive_replacement() -> None:
+    artifact = _complete_p0_abandonment_artifact("k11-p0-delayed-decision")
+    original = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_action_prepared" and event.get("tool_call_id") == "tool-1"
+    )
+    delayed = next(
+        deepcopy(event) for event in artifact["events"]
+        if event["event_type"] == "k11.eac_execution_decision_attempted"
+    )
+    delayed["seq"] = max(event["seq"] for event in artifact["events"]) + 1
+    delayed["monotonic_ns"] = max(event["monotonic_ns"] for event in artifact["events"]) + 1
+    delayed["event_id"] = "k11-p0-delayed-decision:k11:delayed"
+    delayed["actor_id"] = original["actor_id"]
+    delayed["task_id"] = original["task_id"]
+    delayed["agent_step_id"] = original["agent_step_id"]
+    delayed["tool_call_id"] = original["tool_call_id"]
+    delayed["payload"]["exact_request"] = deepcopy(original["payload"]["exact_request"])
+    delayed["payload"]["exact_request_digest"] = original["payload"]["exact_request_digest"]
+    artifact["events"].append(delayed)
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("decision after positive abandonment" in error for error in validation["errors"])
+
+
+def test_k11_positive_disposition_does_not_treat_cross_step_successor_as_replacement() -> None:
+    artifact = _complete_p0_abandonment_artifact("k11-p0-cross-step-successor")
+    original = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_action_prepared" and event.get("tool_call_id") == "tool-1"
+    )
+    successor = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_action_prepared" and event.get("tool_call_id") == "tool-2"
+    )
+    successor["agent_step_id"] = "step-2"
+
+    disposition = derive_positive_disposition(artifact, original)
+
+    assert disposition is not None
+    assert disposition["kind"] == "cancellation"
+    assert disposition["successor_candidate_ids"] == []
+
+
+def test_k11_trace_validator_fails_closed_on_malformed_event_payload() -> None:
+    artifact = _complete_p0_artifact("k11-p0-malformed-payload")
+    artifact["events"][0]["payload"] = None
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("payload is malformed" in error for error in validation["errors"])
 
 
 def test_k11_p0_trace_rejects_cross_actor_lifecycle_pairing() -> None:
