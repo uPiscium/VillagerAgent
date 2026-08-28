@@ -23,7 +23,7 @@
   "provenance_sources": {
     "model_configuration": "configs/minecraft/approved-experiments/minecraft-judged-production-v1.json",
     "minecraft_target_configuration": "configs/minecraft/experiments/comparison-2026-07-20.json",
-    "note": "P0 reuses checked-in infrastructure identities only; it does not reuse judged tasks, outcomes, or semantic interventions. After the failed 2c72da1 cohort showed sustained proxy 504s, the pre-existing approved direct/internal Ollama endpoint was selected as an infrastructure-only remediation before any replacement cohort; old cohorts remain unpooled."
+    "note": "P0 reuses checked-in infrastructure identities only; it does not reuse judged tasks, outcomes, or semantic interventions. After the failed 2c72da1 cohort showed sustained proxy 504s, the pre-existing approved direct/internal Ollama endpoint was selected as an infrastructure-only remediation before any replacement cohort; old cohorts remain unpooled. After the failed 061307a development smoke exhausted 1024 tokens in reasoning-only output, isolated provider qualification against Ollama 0.32.0 showed that the documented reasoning_effort=none setting preserved the required JSON/tag contract at the existing token budget for controller-managed OpenAILanguageModel calls. This provider configuration change requires a new execution revision and is not pooled with prior attempts."
   },
   "runs": [
     {
@@ -31,6 +31,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -52,6 +53,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -73,6 +75,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -94,6 +97,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -115,6 +119,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -136,6 +141,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -157,6 +163,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -178,6 +185,7 @@
       "runtime": {
         "api_model": "gemma4:12b",
         "api_base": "http://10.255.255.5:11434",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,

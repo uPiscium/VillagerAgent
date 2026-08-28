@@ -51,6 +51,7 @@ The checked-in P0 manifest reuses infrastructure identities already disclosed by
 
 - model: `gemma4:12b`
 - Ollama endpoint: `http://10.255.255.5:11434`
+- controller-managed Ollama reasoning control: `reasoning_effort=none`
 - Minecraft target: `10.12.3.1:40000`
 
 These are configuration provenance, not an assertion that the endpoints are currently available.
@@ -65,6 +66,8 @@ nc -vz 10.12.3.1 40000
 Endpoint failure is infrastructure failure. Do not silently replace the endpoint, model, Minecraft target, or task prompts after inspecting P0 outcomes. If infrastructure must change, update and commit the P0 manifest before restarting the pilot from a fresh output directory.
 
 The direct/internal endpoint above replaces the named reverse-proxy route only after the failed `2c72da1` cohort was closed and retained. Bounded development qualification observed materially lower direct-route latency and no HTTP failures on either route during the small qualification, while the failed formal cohort had sustained proxy 504 responses. This is an infrastructure-only endpoint substitution, not evidence about K11 prevalence, and requires a new execution revision/cohort.
+
+The failed `061307a` development smoke then produced reasoning-only output until its 1024-token limit. A separate development-only provider qualification against Ollama `0.32.0` established that both a larger token budget and the documented `reasoning_effort=none` setting can satisfy the unchanged JSON/tag contract; the latter succeeds at the existing budget. The manifest binds that setting explicitly for controller-managed `OpenAILanguageModel` calls such as `TaskManager.init_task`. The distinct Minecraft-agent LangChain client retains its existing reasoning-aware structured-action adapter. This qualification is not P0 evidence and is not pooled with any smoke or formal cohort.
 
 ## 4. P0 manifest
 

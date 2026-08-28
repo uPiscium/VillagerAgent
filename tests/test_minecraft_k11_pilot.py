@@ -20,6 +20,7 @@ def _runtime(index: int) -> dict:
     return {
         "api_model": "qwen-test",
         "api_base": "http://127.0.0.1:11434/v1",
+        "controller_reasoning_effort": "none",
         "task_type": "none",
         "task_idx": index,
         "agent_num": 2,
@@ -79,6 +80,14 @@ def test_k11_p0_manifest_rejects_intervention_configuration(tmp_path: Path) -> N
     document = _manifest()
     document["runs"][0]["runtime"]["forced_sleep"] = 0.01
     with pytest.raises(K11PilotContractError, match="intervention"):
+        load_p0_manifest(_write(tmp_path, document))
+
+
+def test_k11_p0_manifest_requires_qualified_reasoning_setting(tmp_path: Path) -> None:
+    document = _manifest()
+    document["runs"][0]["runtime"]["controller_reasoning_effort"] = None
+
+    with pytest.raises(K11PilotContractError, match="controller_reasoning_effort=none"):
         load_p0_manifest(_write(tmp_path, document))
 
 
@@ -210,8 +219,17 @@ def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: manifest)
     monkeypatch.setattr(k11_pilot.RuntimeExecution, "resolve", lambda _root: execution)
     monkeypatch.setattr(k11_pilot, "verify_eac_premanifest", lambda *_args, **_kwargs: {})
+    def run_single(*args, **kwargs):
+        called.append((args, kwargs))
+        args[1].mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(k11_pilot, "_run_single_row", run_single)
     monkeypatch.setattr(
-        k11_pilot, "_run_single_row", lambda *args, **kwargs: called.append((args, kwargs)),
+        k11_pilot, "cleanup_process_group_descendants",
+        lambda **_kwargs: {
+            "lingering_processes_before_cleanup": [], "term_sent": False,
+            "kill_sent": False, "processes_after_cleanup": [],
+        },
     )
 
     result = k11_pilot.main([
@@ -225,6 +243,7 @@ def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch)
 
     assert result == 0
     assert called[0][0][0] == row
+    assert (tmp_path / "output" / "K11-P0-01" / "worker_shutdown.json").is_file()
 
 
 def test_k11_development_smoke_requires_full_one_run_lifecycle(tmp_path: Path, monkeypatch) -> None:

@@ -108,9 +108,11 @@ def test_openai_factory_forwards_explicit_runtime_paths(tmp_path, monkeypatch):
     model = init_language_model({
         "provider": "ollama", "api_model": "test-model",
         "api_base": "http://127.0.0.1:11434/v1", "runtime_paths": paths,
+        "reasoning_effort": "none",
     })
 
     assert model.runtime_paths == paths
+    assert model.reasoning_effort == "none"
     assert paths.tokens.exists()
 
 
@@ -279,3 +281,76 @@ def test_openai_contract_failures_are_classified_without_response_capture(
     assert secret_tag not in diagnostics_text
     if content:
         assert content not in diagnostics_text
+
+
+def test_openai_valid_contract_response_passes_unchanged_without_prompt_log(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
+    paths = RuntimePaths.isolated(tmp_path / "valid")
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=paths, model_call_attempts=1,
+        prompt_logging_enabled=False,
+    )
+    content = '{"description":"move","milestones":[],"assigned_agents":["Alice"]}'
+
+    def respond(*_args, **_kwargs):
+        model._response_metadata.value = {
+            "chunk_count": 1, "public_content_chunks": 1,
+            "public_content_chars": len(content), "reasoning_chunks": 0,
+            "reasoning_chars": 0, "finish_reason": "stop",
+        }
+        return content
+
+    monkeypatch.setattr(model, "gpt_api_stream", respond)
+    result = model.few_shot_generate_thoughts(
+        "secret system", "secret user", cache_enabled=False,
+        check_tags=["description", "milestones", "assigned agents"], json_check=True,
+    )
+
+    assert result == content
+    assert paths.openai_log.read_text(encoding="utf-8") == ""
+    diagnostic = json.loads(paths.openai_diagnostics.read_text(encoding="utf-8"))
+    assert diagnostic["outcome"] == "success"
+    assert diagnostic["validation_category"] is None
+
+
+def test_openai_stream_forwards_documented_reasoning_effort(tmp_path, monkeypatch):
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path / "reasoning"),
+    )
+    captured = []
+
+    def create(**kwargs):
+        captured.append(kwargs)
+        return iter([SimpleNamespace(choices=[SimpleNamespace(
+            delta=SimpleNamespace(content="ok", reasoning=None), finish_reason="stop",
+        )])])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    assert model.gpt_api_stream(
+        [], "gemma4:12b", 0, provider_client=client, reasoning_effort="none",
+    ) == "ok"
+    assert captured[0]["extra_body"] == {"reasoning_effort": "none"}
+
+
+def test_openai_nonstream_records_reasoning_metadata_without_content(tmp_path, monkeypatch):
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path / "nonstream"),
+    )
+    message = SimpleNamespace(content="public", reasoning="secret reasoning")
+    completion = SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")],
+    )
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+        create=lambda **_: completion,
+    )))
+
+    model.gpt_api([], "gemma4:12b", 0, provider_client=client)
+
+    metadata = model._response_metadata.value
+    assert metadata["public_content_chars"] == len("public")
+    assert metadata["reasoning_chars"] == len("secret reasoning")
+    assert "secret reasoning" not in json.dumps(metadata)

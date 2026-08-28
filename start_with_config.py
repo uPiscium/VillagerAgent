@@ -321,7 +321,7 @@ def _with_runtime_paths(function):
 
 
 @_with_runtime_paths
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None, position_convention: str | None = None, runtime_execution=None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None, position_convention: str | None = None, runtime_execution=None, controller_reasoning_effort: str | None = None):
     start_time = time.time()
     runtime_execution = runtime_execution or RuntimeExecution.resolve()
     runtime_execution.verify()
@@ -331,6 +331,8 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
     attempt_id = _resolve_attempt_id(attempt_id)
     runtime_paths = runtime_paths or RuntimePaths.legacy()
     runtime_paths.ensure_directories()
+    if controller_reasoning_effort not in {None, "high", "medium", "low", "max", "none"}:
+        raise ValueError("unsupported reasoning effort")
     document = dict(document or {})
     api_key_list = load_agent_api_key_list()
     meta_setting = {
@@ -348,6 +350,7 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             "task_name": task_name,
             "role": role,
             "attempt_id": attempt_id,
+            "controller_reasoning_effort": controller_reasoning_effort,
         }
     if task_type == "meta":
         resolved_world_initialization = resolve_world_initialization(world_initialization)
@@ -524,7 +527,10 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             start_time = time.time()
 
             # 设置llm
-            llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
+            llm_config = make_ollama_llm_config(
+                api_model=api_model, api_base=api_base, api_key=selected_api_key,
+                reasoning_effort=controller_reasoning_effort,
+            )
             # llm_config = {
             #     "api_key": api_key_list[0],
             #     "api_base": "https://api.deepseek.com/v1",
@@ -564,7 +570,10 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
             #     "api_model": "qwen3-next-80b-a3b-instruct",
             #     "api_key_list": api_key_list
             # }
-            base_llm_config = make_ollama_llm_config(api_model=api_model, api_base=api_base, api_key=selected_api_key)
+            base_llm_config = make_ollama_llm_config(
+                api_model=api_model, api_base=api_base, api_key=selected_api_key,
+                reasoning_effort=controller_reasoning_effort,
+            )
 
 
             ctrl = GlobalController(llm_config, tm, dm, env,

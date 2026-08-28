@@ -23,7 +23,7 @@ from benchmarks.minecraft.eac_identity import (
 from benchmarks.minecraft.k11_analysis import analyze_trace, validate_p0_analysis
 from benchmarks.minecraft.k11_calibration import measure_inprocess_overhead
 from benchmarks.minecraft.k11_instrumentation import K11ProcessInstrumentation
-from benchmarks.minecraft.k11_process import supervise_process
+from benchmarks.minecraft.k11_process import cleanup_process_group_descendants, supervise_process
 from benchmarks.minecraft.k11_trace import (
     PRIMARY_EFFECT_ACTIONS,
     K11TraceRecorder,
@@ -133,6 +133,10 @@ def _validate_run(row: Mapping[str, Any]) -> None:
         raise K11PilotContractError("K11 P0 runtime contains intervention-only configuration")
     if config.get("task_type") != "none":
         raise K11PilotContractError("K11 P0 must remain inside the admitted non-judged EAC task_type=none boundary")
+    if config.get("controller_reasoning_effort") != "none":
+        raise K11PilotContractError(
+            "K11 P0 must bind the qualified controller_reasoning_effort=none setting"
+        )
     dual = config.get("minecraft_dual_dag_config")
     if not isinstance(dual, Mapping):
         raise K11PilotContractError("K11 P0 requires minecraft_dual_dag_config")
@@ -447,6 +451,9 @@ def _run_isolated_row(
     else:
         summary = _failed_process_summary(run_id, supervision)
     summary = _apply_process_outcome(summary, supervision)
+    worker_shutdown_path = run_dir / "worker_shutdown.json"
+    if worker_shutdown_path.is_file():
+        summary["worker_shutdown"] = json.loads(worker_shutdown_path.read_text(encoding="utf-8"))
     validation_path.write_text(
         json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -625,13 +632,24 @@ def main(argv=None) -> int:
             execution=execution,
             execution_revision=args.execution_revision,
         )
-        _run_single_row(
-            matching_rows[0],
-            Path(args.output_root).resolve() / args.worker_run_id,
-            execution=execution,
-            execution_revision=args.execution_revision,
-            premanifest_path=premanifest_path,
-        )
+        run_dir = Path(args.output_root).resolve() / args.worker_run_id
+        try:
+            _run_single_row(
+                matching_rows[0],
+                run_dir,
+                execution=execution,
+                execution_revision=args.execution_revision,
+                premanifest_path=premanifest_path,
+            )
+        finally:
+            cleanup = cleanup_process_group_descendants(
+                termination_grace_seconds=3.0,
+                kill_grace_seconds=3.0,
+            )
+            (run_dir / "worker_shutdown.json").write_text(
+                json.dumps(cleanup, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         return 0
     if args.development_smoke_run_id:
         smoke = run_development_smoke(

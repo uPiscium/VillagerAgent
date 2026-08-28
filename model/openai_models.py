@@ -57,7 +57,9 @@ class OpenAILanguageModel(AbstractLanguageModel):
                  runtime_paths: RuntimePaths | None = None,
                  request_timeout_seconds: float = DEFAULT_OPENAI_REQUEST_TIMEOUT_SECONDS,
                  model_call_attempts: int = DEFAULT_OPENAI_MODEL_CALL_ATTEMPTS,
-                 retry_delay_seconds: float = DEFAULT_OPENAI_RETRY_DELAY_SECONDS):
+                 retry_delay_seconds: float = DEFAULT_OPENAI_RETRY_DELAY_SECONDS,
+                 prompt_logging_enabled: bool = True,
+                 reasoning_effort: str | None = None):
         self.runtime_paths = runtime_paths or RuntimePaths.from_environment()
         if api_key == "" or api_key is None:
             api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -75,6 +77,10 @@ class OpenAILanguageModel(AbstractLanguageModel):
         self.request_timeout_seconds = request_timeout_seconds
         self.model_call_attempts = model_call_attempts
         self.retry_delay_seconds = retry_delay_seconds
+        self.prompt_logging_enabled = bool(prompt_logging_enabled)
+        if reasoning_effort not in {None, "high", "medium", "low", "max", "none"}:
+            raise ValueError("unsupported reasoning effort")
+        self.reasoning_effort = reasoning_effort
         self._response_metadata = threading.local()
 
         if api_key_list:
@@ -291,7 +297,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
         return num_tokens
 
     def gpt_api(self, messages: list, model: str, temperature: float,
-                max_tokens: int | None = None, provider_client=None):
+                max_tokens: int | None = None, provider_client=None,
+                reasoning_effort: str | None = None):
         """为提供的对话消息创建新的回答
 
         Args:
@@ -303,25 +310,30 @@ class OpenAILanguageModel(AbstractLanguageModel):
         provider_client = provider_client or self.client
 
         def complete():
+            extra_body = None
             if "qwen3" in model:
-                return provider_client.chat.completions.create(
-                    model=model, messages=messages, temperature=temperature,
-                    max_tokens=max_tokens, extra_body={"enable_thinking": False},
-                )
+                extra_body = {"enable_thinking": False}
+            if reasoning_effort is not None:
+                extra_body = {**(extra_body or {}), "reasoning_effort": reasoning_effort}
             return provider_client.chat.completions.create(
                 model=model, messages=messages, temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=max_tokens, extra_body=extra_body,
             )
 
         completion = self._bounded_provider_call(complete, provider_client)
         choice = completion.choices[0]
         content = choice.message.content or ""
+        reasoning = (
+            getattr(choice.message, "reasoning", None)
+            or getattr(choice.message, "reasoning_content", None)
+            or getattr(choice.message, "thinking", None)
+        )
         self._response_metadata.value = {
             "chunk_count": 1,
             "public_content_chunks": 1 if content else 0,
             "public_content_chars": len(content),
-            "reasoning_chunks": 0,
-            "reasoning_chars": 0,
+            "reasoning_chunks": 1 if isinstance(reasoning, str) and reasoning else 0,
+            "reasoning_chars": len(reasoning) if isinstance(reasoning, str) else 0,
             "finish_reason": getattr(choice, "finish_reason", None),
         }
         # logger.warning(completion.choices[0].message.content)
@@ -329,7 +341,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
         return completion
     
     def gpt_api_stream(self, messages: list, model: str, temperature: float,
-                       max_tokens: int | None = None, provider_client=None):
+                       max_tokens: int | None = None, provider_client=None,
+                       reasoning_effort: str | None = None):
         """为提供的对话消息创建新的回答 (流式传输)
 
         Args:
@@ -340,12 +353,17 @@ class OpenAILanguageModel(AbstractLanguageModel):
         provider_client = provider_client or self.client
         # print(messages)
         def consume_stream():
+            extra_body = (
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None else None
+            )
             stream = provider_client.chat.completions.create(
                 model=model,
                 messages=messages,
                 stream=True,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                extra_body=extra_body,
             )
             stream_content = ""
             chunk_count = 0
@@ -396,7 +414,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
     def few_shot_generate_thoughts(self, system_prompt: str = "", example_prompt: [str] or str = [], max_tokens=1024,
                                    temperature=0.0, k=1, stop=None, cache_enabled=False, api_model="", check_tags=[],
-                                   json_check=False, stream=True):
+                                   json_check=False, stream=True, reasoning_effort: str | None = None):
         if api_model == "":
             api_model = self.api_model
         if type(example_prompt) == str:
@@ -414,6 +432,9 @@ class OpenAILanguageModel(AbstractLanguageModel):
             start_time = time.monotonic()
             provider_client = self._new_client()
             self.client = provider_client
+            selected_reasoning_effort = (
+                self.reasoning_effort if reasoning_effort is None else reasoning_effort
+            )
             messages = [{"role": "system", "content": system_prompt}]
             for i in range(len(example_prompt)):
                 if i % 2 == 0:
@@ -426,11 +447,13 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     content = self.gpt_api_stream(
                         messages, api_model, temperature, max_tokens=max_tokens,
                         provider_client=provider_client,
+                        reasoning_effort=selected_reasoning_effort,
                     )
                 else:
                     response = self.gpt_api(
                         messages, api_model, temperature, max_tokens=max_tokens,
                         provider_client=provider_client,
+                        reasoning_effort=selected_reasoning_effort,
                     )
                     content = response.choices[0].message.content or ""
             except Exception as exc:
@@ -485,11 +508,12 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
             if cache_enabled:
                 self.save_cache(prompt, content)
-            with _OPENAI_STATE_LOCK:
-                with self.runtime_paths.openai_log.open("a") as log_file:
-                    log_file.write(
-                        "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
-                    )
+            if self.prompt_logging_enabled:
+                with _OPENAI_STATE_LOCK:
+                    with self.runtime_paths.openai_log.open("a") as log_file:
+                        log_file.write(
+                            "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
+                        )
 
             return content
 
@@ -541,7 +565,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
     def generate_with_image(self, prompt_before_image: [str] or str, image_path: str, prompt_after_image: [str] or str="", system_prompt: str=None, max_tokens: int=-1,
                  temperature: float=0.0, k: int=1, stop=None, cache_enabled: bool=True, api_model: str="",
-                 check_tags: list=[], json_check: bool=False, stream: bool=True):
+                 check_tags: list=[], json_check: bool=False, stream: bool=True,
+                 reasoning_effort: str | None = None):
         if api_model == "":
             api_model = self.api_model
         # else:
@@ -594,11 +619,15 @@ class OpenAILanguageModel(AbstractLanguageModel):
             start_time = time.monotonic()
             provider_client = self._new_client()
             self.client = provider_client
+            selected_reasoning_effort = (
+                self.reasoning_effort if reasoning_effort is None else reasoning_effort
+            )
             try:
                 if stream:
                     content = self.gpt_api_stream(
                         messages, api_model, temperature, max_tokens=requested_max_tokens,
                         provider_client=provider_client,
+                        reasoning_effort=selected_reasoning_effort,
                     )
                     usage_data = {"prompt_tokens": self.num_tokens_from_string(prompt, api_model),
                                     "completion_tokens": self.num_tokens_from_string(content, api_model)}
@@ -606,6 +635,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     response = self.gpt_api(
                         messages, api_model, temperature, max_tokens=requested_max_tokens,
                         provider_client=provider_client,
+                        reasoning_effort=selected_reasoning_effort,
                     )
                     usage_data = {
                         "prompt_tokens": response.usage.prompt_tokens,
@@ -657,8 +687,9 @@ class OpenAILanguageModel(AbstractLanguageModel):
             if cache_enabled:
                 self.save_cache(prompt, content)
             with _OPENAI_STATE_LOCK:
-                with self.runtime_paths.openai_log.open("a") as log_file:
-                    log_file.write("\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n")
+                if self.prompt_logging_enabled:
+                    with self.runtime_paths.openai_log.open("a") as log_file:
+                        log_file.write("\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n")
                 if self.runtime_paths.llm_inference.exists():
                     with self.runtime_paths.llm_inference.open("r") as log_file:
                         log = json.load(log_file)

@@ -20,6 +20,7 @@ def _openai_compatible_args(args: dict) -> dict:
         "role_name": args.get("role_name", None),
         "api_key_list": args.get("api_key_list", None),
         "runtime_paths": args.get("runtime_paths", None),
+        "reasoning_effort": args.get("reasoning_effort", None),
     })
 
 
