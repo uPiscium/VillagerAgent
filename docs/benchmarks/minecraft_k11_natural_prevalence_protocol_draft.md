@@ -146,6 +146,10 @@ K11 introduces a dedicated append-only in-memory trace for all new K11 high-freq
 
 The K11 trace must not write to disk from the measured critical path and must not add a new synchronization lock to the EAC prepare/evidence/execute seam.
 
+Each run has one prospectively configured monotonic observation window. The window opens at `GlobalController.run` entry and closes at the earlier of (a) natural runtime terminal return/failure or (b) the fixed configured horizon. The fixed horizon must be declared in the run manifest before execution and must not depend on observed outcomes, candidate counts, EAC events, N1/N2 classifications, or task progress. Once the fixed horizon marker is linearized, the K11-only wrapper requests ordinary controller shutdown so the in-memory trace can be flushed through the existing pilot finalization path. The outer process-supervision timeout remains an infrastructure backstop and is not the observational endpoint.
+
+The development P0 manifest currently binds a 600-second horizon. This is a pilot binding, not the final K11 horizon and not a protocol freeze. Final horizon selection remains subject to the K11-E prospective freeze.
+
 The existing runtime event journal remains unchanged as baseline behavior. Current real execution creates `JsonlRuntimeEventRecorder` with its default durable behavior, which may flush/fsync on existing runtime events. K11 must not route newly added high-frequency model/tool/EAC trace events through that durable sink.
 
 The K11 trace is serialized after the measured runtime operation, or included in the terminal runtime-result collection path. A crash that prevents complete trace recovery is an incomplete observation, not permission to reconstruct missing events from guesses.
@@ -183,6 +187,8 @@ The minimum K11 event vocabulary is:
 - `k11.eac_native_effect_entered`
 - `k11.eac_native_effect_completed`
 - `k11.eac_action_terminal`
+- `k11.observation_window_opened`
+- `k11.observation_window_closed`
 
 The instrumentation records observed facts. It does not emit synthetic semantic labels such as `N2`, `reconsidered`, or `invalidated` online.
 
@@ -246,6 +252,8 @@ The disposition of a prepared exact request is the earliest trace-supported even
 2. positive higher-level trace evidence shows that the old request was abandoned/replaced/cancelled before an execution decision.
 
 If neither can be established, the action has unresolved disposition and is retained in the raw archive but is not silently classified as natural reconsideration.
+
+The observation interval is half-open: `window_open_monotonic_ns <= event.monotonic_ns < window_close_monotonic_ns`. A primary preparation inside a fixed-horizon window with no complete disposition inside that window is right-censored. It remains in D1, is reported as `observation_window_censored`, and is excluded from D2-D6 and N0-N4. Events at or after the close boundary cannot retrospectively complete its measured disposition. A missing disposition at a natural runtime terminal is not horizon censoring; it remains an instrumentation/lifecycle QC failure or unresolved case. Reports include prepared-inside-window count, complete-disposition-inside-window count, censored count, and censoring fraction.
 
 ## 16. Denominators D1–D6
 

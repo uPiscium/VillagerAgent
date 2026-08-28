@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 import sys
 import traceback
@@ -44,6 +45,14 @@ RUN_PROCESS_TIMEOUT_SECONDS = 900.0
 RUN_COMPLETION_GRACE_SECONDS = 10.0
 RUN_TERMINATION_GRACE_SECONDS = 5.0
 RUN_KILL_GRACE_SECONDS = 5.0
+RUN_STARTUP_BUDGET_SECONDS = 120.0
+MAX_OBSERVATION_HORIZON_SECONDS = (
+    RUN_PROCESS_TIMEOUT_SECONDS
+    - RUN_STARTUP_BUDGET_SECONDS
+    - RUN_COMPLETION_GRACE_SECONDS
+    - RUN_TERMINATION_GRACE_SECONDS
+    - RUN_KILL_GRACE_SECONDS
+)
 FORBIDDEN_CONFIG_KEYS = frozenset({
     "forced_sleep",
     "prepare_sleep",
@@ -99,6 +108,17 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
         raise K11PilotContractError("P0 must explicitly forbid prevalence inference")
     if document.get("eac_identity_source") != EAC_IDENTITY_SOURCE:
         raise K11PilotContractError("K11 P0 must bind EAC identity to the current immutable checkout")
+    window = document.get("observation_window")
+    horizon = window.get("horizon_seconds") if isinstance(window, Mapping) else None
+    if (not isinstance(window, Mapping)
+            or window.get("basis") != "predeclared-fixed-monotonic-horizon"
+            or window.get("natural_terminal_closes_early") is not True
+            or isinstance(horizon, bool) or not isinstance(horizon, (int, float))
+            or not math.isfinite(horizon) or horizon <= 0
+            or horizon > MAX_OBSERVATION_HORIZON_SECONDS):
+        raise K11PilotContractError(
+            "K11 P0 requires a valid predeclared observation horizon below the process deadline"
+        )
     runtime_hygiene = document.get("runtime_hygiene")
     if (not isinstance(runtime_hygiene, Mapping)
             or runtime_hygiene.get("classification") != "pre-freeze-runtime-hygiene-change"
@@ -268,6 +288,7 @@ def _run_single_row(
     execution: RuntimeExecution,
     execution_revision: str,
     premanifest_path: Path,
+    observation_horizon_seconds: float,
 ) -> dict[str, Any]:
     run_id = row["run_id"]
     if run_dir.exists() and any(run_dir.iterdir()):
@@ -278,7 +299,9 @@ def _run_single_row(
     error_type = None
     result = None
     try:
-        with K11ProcessInstrumentation(trace):
+        with K11ProcessInstrumentation(
+            trace, observation_horizon_seconds=observation_horizon_seconds,
+        ):
             result = run_villageragent(**_runtime_kwargs(
                 row,
                 run_dir,
@@ -343,6 +366,7 @@ def _run_single_row(
         "primary_terminal_count": primary_terminal_count,
         "offline_analysis_error": analysis.get("analysis_error"),
         "runtime_returned": result is not None,
+        "observation_horizon_seconds": observation_horizon_seconds,
     }
     (run_dir / "p0_validation.json").write_text(
         json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
@@ -640,6 +664,7 @@ def main(argv=None) -> int:
                 execution=execution,
                 execution_revision=args.execution_revision,
                 premanifest_path=premanifest_path,
+                observation_horizon_seconds=manifest["observation_window"]["horizon_seconds"],
             )
         finally:
             cleanup = cleanup_process_group_descendants(

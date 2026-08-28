@@ -44,6 +44,59 @@ def _prepare_at(runtime, x, y, z):
     )
 
 
+def _window_after_first_prepare(artifact, *, reason="fixed_observation_horizon"):
+    artifact = deepcopy(artifact)
+    original = artifact["events"]
+    pivot = next(
+        index for index, event in enumerate(original)
+        if event["event_type"] == "k11.eac_action_prepared"
+    )
+    opened_ns = 1_000
+    horizon_ns = opened_ns + 1_000_000_000
+    close_ns = horizon_ns if reason == "fixed_observation_horizon" else 10_000
+    opened = {
+        "seq": 1,
+        "event_id": artifact["run_id"] + ":window-open",
+        "event_type": "k11.observation_window_opened",
+        "source": "test",
+        "payload": {
+            "configured_horizon_seconds": 1,
+            "horizon_monotonic_ns": horizon_ns,
+        },
+        "monotonic_ns": opened_ns,
+        "thread_id": 1,
+        "run_id": artifact["run_id"],
+        "task_id": None,
+        "actor_id": None,
+        "agent_step_id": None,
+        "tool_call_id": None,
+    }
+    closed = {
+        **opened,
+        "event_id": artifact["run_id"] + ":window-close",
+        "event_type": "k11.observation_window_closed",
+        "payload": {
+            "reason": reason,
+            "configured_horizon_seconds": 1,
+            "window_close_monotonic_ns": close_ns,
+            "shutdown_requested": reason == "fixed_observation_horizon",
+        },
+        "monotonic_ns": close_ns,
+    }
+    rebuilt = [opened]
+    for index, event in enumerate(original):
+        event["monotonic_ns"] = (
+            opened_ns + index + 1 if index <= pivot else close_ns + index + 1
+        )
+        rebuilt.append(event)
+        if index == pivot:
+            rebuilt.append(closed)
+    for seq, event in enumerate(rebuilt, 1):
+        event["seq"] = seq
+    artifact["events"] = rebuilt
+    return artifact
+
+
 def test_k11_offline_replay_matches_positive_prepare_state() -> None:
     runtime, trace = _runtime("k11-replay-positive")
     scope = K11TraceScope(
@@ -196,6 +249,72 @@ def test_k11_offline_analysis_keeps_ambiguous_disappearance_unresolved() -> None
     assert analysis["actions"][0]["qc_state"] == "disposition_unresolved"
 
 
+def test_k11_fixed_window_right_censors_prepare_without_in_window_disposition() -> None:
+    runtime, trace = _runtime("k11-window-censored")
+    scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    with use_scope(scope):
+        trace.record("k11.agent_step_started", source="test")
+        trace.record("k11.model_call_started", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.model_call_completed", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.tool_call_entered", source="test")
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+        runtime.execute_prepared(_prepare(runtime))
+        trace.record("k11.tool_call_exited", source="test")
+        trace.record("k11.agent_step_completed", source="test")
+    artifact = _window_after_first_prepare(trace.artifact())
+
+    analysis = analyze_trace(artifact)
+
+    assert analysis["trace_validation"]["valid"] is True
+    assert analysis["denominators"] == {
+        "D1": 1, "D2": 0, "D3": 0, "D4": 0, "D5": 0, "D6": 0,
+    }
+    assert analysis["prepared_inside_window"] == 1
+    assert analysis["complete_dispositions_inside_window"] == 0
+    assert analysis["window_censored_preparations"] == 1
+    assert analysis["censoring_fraction"] == 1.0
+    assert analysis["actions"][0]["qc_state"] == "observation_window_censored"
+    assert validate_p0_analysis(analysis, artifact)["valid"] is True
+
+
+def test_k11_natural_close_does_not_relabel_missing_disposition_as_censored() -> None:
+    runtime, trace = _runtime("k11-window-natural-unresolved")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    _prepare(runtime)
+    artifact = _window_after_first_prepare(
+        trace.artifact(), reason="natural_runtime_terminal",
+    )
+
+    analysis = analyze_trace(artifact)
+
+    assert analysis["window_censored_preparations"] == 0
+    assert analysis["actions"][0]["qc_state"] == "disposition_unresolved"
+
+
+def test_k11_observation_window_uses_half_open_end_boundary() -> None:
+    runtime, trace = _runtime("k11-window-half-open")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    runtime.execute_prepared(_prepare(runtime))
+    artifact = _window_after_first_prepare(trace.artifact())
+    close_ns = next(
+        event["monotonic_ns"] for event in artifact["events"]
+        if event["event_type"] == "k11.observation_window_closed"
+    )
+    prepared = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_action_prepared"
+    )
+    prepared["monotonic_ns"] = close_ns
+
+    analysis = analyze_trace(artifact)
+
+    assert analysis["prepared_inside_window"] == 0
+    assert analysis["denominators"]["D1"] == 0
+
+
 def test_k11_p0_analysis_rejects_trace_failure_even_without_analysis_error() -> None:
     runtime, trace = _runtime("k11-analysis-gate")
     runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
@@ -308,3 +427,4 @@ def test_k11_p0_analysis_rejects_malformed_validation_structures() -> None:
         "actions": [],
     })
     assert result["valid"] is False
+from copy import deepcopy

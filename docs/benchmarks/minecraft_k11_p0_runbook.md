@@ -77,7 +77,7 @@ The pilot manifest is:
 configs/minecraft/k11-p0-natural-manifest-v0.json
 ```
 
-It contains exactly eight Advisory, `task_type=none`, non-judged, non-production runs. It forbids supplied stale EAC premanifest/revision values.
+It contains exactly eight Advisory, `task_type=none`, non-judged, non-production runs. It forbids supplied stale EAC premanifest/revision values. Its top-level `observation_window` prospectively binds a 600-second fixed monotonic horizon for this development pilot. That value is not the final K11 horizon and does not freeze the draft protocol.
 
 At pilot start the runner:
 
@@ -87,6 +87,8 @@ At pilot start the runner:
 4. deterministically derives the EAC runtime identity;
 5. writes a run-local `K11_P0_EAC_PREMANIFEST.json`;
 6. passes that exact revision and premanifest to the existing EAC admission path.
+
+The K11-only wrapper opens the window when `GlobalController.run` starts. Natural runtime terminal behavior may close it early. Otherwise the wrapper records the exact fixed close boundary before requesting ordinary controller shutdown, then the worker writes trace, analysis, validation, and shutdown artifacts. The 900-second supervisor deadline remains a failure backstop; it is not used as the observation-window close. Manifest validation reserves 120 seconds for pre-controller startup plus the existing 20 seconds of completion/termination/kill grace, so a configured horizon above 760 seconds is rejected rather than allowed to collide with that backstop.
 
 This prevents the historical checked-in Issue #510 premanifest from being incorrectly reused for K11 code.
 
@@ -113,7 +115,13 @@ python -m benchmarks.minecraft.k11_pilot \
   --development-smoke-run-id K11-P0-01
 ```
 
-The smoke is explicitly non-formal and writes `DEV_SMOKE_VALIDATION.json`. It passes only after model, guarded-tool, primary-preparation, terminal-disposition, valid replay/analysis, and clean process-exit evidence are present. Stop after this one smoke; do not start the formal eight-run cohort without a separate decision.
+The smoke is explicitly non-formal and writes `DEV_SMOKE_VALIDATION.json`. It passes only after model, guarded-tool, primary-preparation, terminal-disposition, valid replay/analysis, and clean process-exit evidence are present. A preparation cut by the fixed boundary is retained as right-censored D1 and cannot enter D2-D6 or N0-N4. Stop after this one smoke; do not start the formal eight-run cohort without a separate decision.
+
+### Development basis for the 600-second pilot binding
+
+The retained failed smoke at `/tmp/opencode/VillagerAgent-k11-p0-dev-smoke-18e72b3` reached the external 900-second process timeout and did not flush its in-memory K11 trace. Its baseline runtime journal nevertheless contains 910 events spanning 869.072 seconds from first to last emitted event. Activity continued throughout: 21 task assignments occurred, with 15 observed by 600 seconds and 19 by 750 seconds; 12 task-graph snapshots occurred, with 9 observed by 600 seconds and 11 by 750 seconds. Candidate ranking contained 816 cycles (12 non-empty and 804 empty). Nineteen assignments had failed and two were still running at timeout.
+
+For a bounded replacement development smoke, 600 seconds captures substantial repeated assignment/replanning activity while reserving roughly 300 seconds under the independent supervisor deadline for startup, controlled controller shutdown, trace serialization, analysis, and process cleanup. This is a pragmatic instrumentation-recovery choice from a failed development artifact, not a prevalence optimization and not evidence that 600 seconds is adequate for final K11 estimation. Do not adjust the horizon after inspecting within-run EAC or taxonomy outcomes.
 
 ## 7. Run P0
 
@@ -202,6 +210,7 @@ After P0, inspect:
 - all trace validation warnings/errors;
 - offline replay errors;
 - prepare-to-decision timing diagnostics;
+- prepared-inside-window, complete-disposition-inside-window, censored count, and censoring fraction;
 - `P0_CALIBRATION.json` incremental overhead;
 - whether multiple actor/thread execution was actually observed;
 - whether the existing 256-entry EAC audit truncates while the K11 trace remains complete.

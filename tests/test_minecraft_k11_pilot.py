@@ -45,6 +45,11 @@ def _manifest() -> dict:
         "study_phase": "K11-P0-instrumentation-validation",
         "prevalence_inference_allowed": False,
         "eac_identity_source": "current_immutable_checkout",
+        "observation_window": {
+            "basis": "predeclared-fixed-monotonic-horizon",
+            "horizon_seconds": 600,
+            "natural_terminal_closes_early": True,
+        },
         "runtime_hygiene": {
             "classification": "pre-freeze-runtime-hygiene-change",
             "legacy_default_paths_preserved": True,
@@ -125,6 +130,25 @@ def test_k11_p0_manifest_requires_runtime_hygiene_disclosure(tmp_path: Path) -> 
     document.pop("runtime_hygiene")
 
     with pytest.raises(K11PilotContractError, match="runtime-hygiene disclosure"):
+        load_p0_manifest(_write(tmp_path, document))
+
+
+@pytest.mark.parametrize("horizon", [None, 0, -1, float("inf"), float("nan"), True, 761])
+def test_k11_p0_manifest_requires_bounded_fixed_observation_horizon(
+    tmp_path: Path, horizon,
+) -> None:
+    document = _manifest()
+    document["observation_window"]["horizon_seconds"] = horizon
+
+    with pytest.raises(K11PilotContractError, match="predeclared observation horizon"):
+        load_p0_manifest(_write(tmp_path, document))
+
+
+def test_k11_p0_manifest_rejects_outcome_dependent_observation_window(tmp_path: Path) -> None:
+    document = _manifest()
+    document["observation_window"]["basis"] = "stop-after-first-primary-action"
+
+    with pytest.raises(K11PilotContractError, match="predeclared observation horizon"):
         load_p0_manifest(_write(tmp_path, document))
 
 
@@ -213,7 +237,10 @@ def test_k11_p0_timeout_fails_even_when_validation_artifact_exists() -> None:
 
 def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch) -> None:
     row = {"run_id": "K11-P0-01", "runtime": {}}
-    manifest = {"runs": [row]}
+    manifest = {
+        "observation_window": {"horizon_seconds": 600},
+        "runs": [row],
+    }
     execution = object()
     called = []
     monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: manifest)
@@ -243,6 +270,7 @@ def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch)
 
     assert result == 0
     assert called[0][0][0] == row
+    assert called[0][1]["observation_horizon_seconds"] == 600
     assert (tmp_path / "output" / "K11-P0-01" / "worker_shutdown.json").is_file()
 
 

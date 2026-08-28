@@ -53,6 +53,90 @@ def _prepare_at(runtime, x, y, z):
     )
 
 
+def _with_natural_window(artifact):
+    artifact = deepcopy(artifact)
+    events = artifact["events"]
+    opened_ns = min(event["monotonic_ns"] for event in events) - 1
+    closed_ns = max(event["monotonic_ns"] for event in events) + 1
+    horizon_seconds = 3600
+    common = {
+        "run_id": artifact["run_id"],
+        "task_id": None,
+        "actor_id": None,
+        "agent_step_id": None,
+        "tool_call_id": None,
+        "source": "test",
+        "thread_id": 1,
+    }
+    opened = {
+        **common,
+        "event_id": artifact["run_id"] + ":window-open",
+        "event_type": "k11.observation_window_opened",
+        "monotonic_ns": opened_ns,
+        "payload": {
+            "configured_horizon_seconds": horizon_seconds,
+            "horizon_monotonic_ns": opened_ns + horizon_seconds * 1_000_000_000,
+        },
+    }
+    closed = {
+        **common,
+        "event_id": artifact["run_id"] + ":window-close",
+        "event_type": "k11.observation_window_closed",
+        "monotonic_ns": closed_ns,
+        "payload": {
+            "reason": "natural_runtime_terminal",
+            "configured_horizon_seconds": horizon_seconds,
+            "window_close_monotonic_ns": closed_ns,
+            "shutdown_requested": False,
+        },
+    }
+    artifact["events"] = [opened, *events, closed]
+    for seq, event in enumerate(artifact["events"], 1):
+        event["seq"] = seq
+    return artifact
+
+
+def _with_fixed_close_after(artifact, event_type):
+    artifact = deepcopy(artifact)
+    events = [
+        event for event in artifact["events"]
+        if not event["event_type"].startswith("k11.observation_window_")
+    ]
+    pivot = next(index for index, event in enumerate(events)
+                 if event["event_type"] == event_type)
+    opened_ns = 1_000
+    closed_ns = opened_ns + 1_000_000_000
+    common = {
+        "run_id": artifact["run_id"], "task_id": None, "actor_id": None,
+        "agent_step_id": None, "tool_call_id": None, "source": "test", "thread_id": 1,
+    }
+    opened = {
+        **common, "event_id": artifact["run_id"] + ":window-open",
+        "event_type": "k11.observation_window_opened", "monotonic_ns": opened_ns,
+        "payload": {"configured_horizon_seconds": 1, "horizon_monotonic_ns": closed_ns},
+    }
+    closed = {
+        **common, "event_id": artifact["run_id"] + ":window-close",
+        "event_type": "k11.observation_window_closed", "monotonic_ns": closed_ns,
+        "payload": {
+            "reason": "fixed_observation_horizon", "configured_horizon_seconds": 1,
+            "window_close_monotonic_ns": closed_ns, "shutdown_requested": True,
+        },
+    }
+    rebuilt = [opened]
+    for index, event in enumerate(events):
+        event["monotonic_ns"] = (
+            opened_ns + index + 1 if index <= pivot else closed_ns + index + 1
+        )
+        rebuilt.append(event)
+        if index == pivot:
+            rebuilt.append(closed)
+    for seq, event in enumerate(rebuilt, 1):
+        event["seq"] = seq
+    artifact["events"] = rebuilt
+    return artifact
+
+
 def _complete_p0_artifact(run_id="k11-p0-complete"):
     runtime, trace = _runtime(run_id)
     scope = K11TraceScope(
@@ -68,7 +152,7 @@ def _complete_p0_artifact(run_id="k11-p0-complete"):
         runtime.execute_prepared(_prepare(runtime))
         trace.record("k11.tool_call_exited", source="test")
         trace.record("k11.agent_step_completed", source="test")
-    return trace.artifact()
+    return _with_natural_window(trace.artifact())
 
 
 def _complete_p0_abandonment_artifact(run_id="k11-p0-abandonment"):
@@ -109,7 +193,7 @@ def _complete_p0_abandonment_artifact(run_id="k11-p0-abandonment"):
         trace.record("k11.tool_call_exited", source="test")
     with use_scope(agent_scope):
         trace.record("k11.agent_step_completed", source="test", payload={"outcome": "returned"})
-    return trace.artifact()
+    return _with_natural_window(trace.artifact())
 
 
 def test_k11_advisory_prepare_does_not_add_measurement_evaluation() -> None:
@@ -237,7 +321,7 @@ def test_k11_trace_contains_no_online_natural_classification_labels() -> None:
 
 
 def test_k11_p0_trace_rejects_high_level_only_artifact() -> None:
-    artifact = {"schema_version": "minecraft-k11-trace/1", "run_id": "empty", "events": []}
+    artifact = {"schema_version": "minecraft-k11-trace/2", "run_id": "empty", "events": []}
     assert validate_p0_trace(artifact)["valid"] is False
 
 
@@ -255,6 +339,62 @@ def test_k11_p0_trace_accepts_complete_correlated_run() -> None:
     validation = validate_p0_trace(_complete_p0_artifact())
     assert validation["valid"] is True
     assert validation["counts"]["prepared"] == 1
+
+
+def test_k11_p0_trace_requires_declared_observation_window() -> None:
+    artifact = _complete_p0_artifact("k11-p0-window-required")
+    artifact["events"] = [
+        event for event in artifact["events"]
+        if not event["event_type"].startswith("k11.observation_window_")
+    ]
+    for seq, event in enumerate(artifact["events"], 1):
+        event["seq"] = seq
+
+    assert validate_trace(artifact)["valid"] is True
+    validation = validate_p0_trace(artifact)
+    assert validation["valid"] is False
+    assert any("observation window" in error for error in validation["errors"])
+
+
+def test_k11_trace_rejects_natural_close_at_fixed_horizon() -> None:
+    artifact = _complete_p0_artifact("k11-natural-at-horizon")
+    opened = artifact["events"][0]
+    closed = artifact["events"][-1]
+    horizon_ns = opened["payload"]["horizon_monotonic_ns"]
+    closed["monotonic_ns"] = horizon_ns
+    closed["payload"]["window_close_monotonic_ns"] = horizon_ns
+
+    validation = validate_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("natural observation close" in error for error in validation["errors"])
+
+
+def test_k11_trace_accepts_disposition_with_cleanup_after_fixed_close() -> None:
+    artifact = _with_fixed_close_after(
+        _complete_p0_artifact("k11-p0-cross-window-cleanup"),
+        "k11.eac_native_effect_entered",
+    )
+
+    assert validate_trace(artifact)["valid"] is True
+    assert validate_p0_trace(artifact)["valid"] is True
+
+
+def test_k11_trace_fails_closed_on_malformed_post_window_terminal() -> None:
+    artifact = _with_fixed_close_after(
+        _complete_p0_artifact("k11-p0-malformed-cross-window"),
+        "k11.eac_native_effect_entered",
+    )
+    terminal = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_action_terminal"
+    )
+    terminal["payload"] = None
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("terminal" in error for error in validation["errors"])
 
 
 def test_k11_p0_trace_accepts_positive_replacement_disposition() -> None:
@@ -312,7 +452,16 @@ def test_k11_p0_trace_rejects_delayed_decision_after_positive_replacement() -> N
     delayed["tool_call_id"] = original["tool_call_id"]
     delayed["payload"]["exact_request"] = deepcopy(original["payload"]["exact_request"])
     delayed["payload"]["exact_request_digest"] = original["payload"]["exact_request_digest"]
-    artifact["events"].append(delayed)
+    close = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.observation_window_closed"
+    )
+    close["monotonic_ns"] += 2
+    close["payload"]["window_close_monotonic_ns"] = close["monotonic_ns"]
+    delayed["monotonic_ns"] = close["monotonic_ns"] - 1
+    artifact["events"].insert(artifact["events"].index(close), delayed)
+    for seq, event in enumerate(artifact["events"], 1):
+        event["seq"] = seq
 
     validation = validate_p0_trace(artifact)
 

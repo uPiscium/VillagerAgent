@@ -1,12 +1,191 @@
 import pytest
+import threading
 from types import SimpleNamespace
 
 from benchmarks.common.eac.gateway import EffectGateway
-from benchmarks.minecraft.k11_instrumentation import K11ProcessInstrumentation
+from benchmarks.minecraft.k11_instrumentation import (
+    K11ProcessInstrumentation,
+    _ObservationWindow,
+    _controlled_shutdown_is_complete,
+)
 from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
 from env.runtime_paths import RuntimePaths
 from model.openai_models import OpenAILanguageModel
 from env.minecraft_client import LLMHandler
+
+
+class _FakeWaiter:
+    def __init__(self):
+        self.delay = None
+        self.callback = None
+        self.cancelled = False
+
+    def __call__(self, delay, callback):
+        self.delay, self.callback = delay, callback
+        return self
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class _FakeController:
+    def __init__(self):
+        self.shutdown_requests = 0
+
+    def _request_shutdown(self):
+        self.shutdown_requests += 1
+
+
+def test_k11_observation_window_fixed_close_is_authoritative_and_idempotent():
+    trace = K11TraceRecorder("k11-window-fixed")
+    waiter = _FakeWaiter()
+    clock_values = iter((100,))
+    window = _ObservationWindow(trace, 5, waiter, lambda: next(clock_values))
+    controller = _FakeController()
+    window.attach_controller(controller)
+
+    window.open()
+    assert waiter.delay == 5
+    waiter.callback()
+    waiter.callback()
+
+    events = trace.artifact()["events"]
+    assert [event["event_type"] for event in events] == [
+        "k11.observation_window_opened", "k11.observation_window_closed",
+    ]
+    assert events[1]["payload"]["reason"] == "fixed_observation_horizon"
+    assert events[1]["payload"]["window_close_monotonic_ns"] - events[0]["monotonic_ns"] == 5_000_000_000
+    assert controller.shutdown_requests == 1
+
+
+def test_k11_observation_window_natural_close_cancels_waiter():
+    trace = K11TraceRecorder("k11-window-natural")
+    waiter = _FakeWaiter()
+    clock_values = iter((10, 20))
+    window = _ObservationWindow(trace, 2, waiter, lambda: next(clock_values))
+    window.attach_controller(_FakeController())
+    window.open()
+    window.natural_close()
+    window.natural_close()
+
+    assert waiter.cancelled
+    assert trace.artifact()["events"][1]["payload"]["reason"] == "natural_runtime_terminal"
+
+
+@pytest.mark.parametrize("horizon", [0, -1, float("inf"), float("nan"), True])
+def test_k11_observation_horizon_must_be_positive_finite(horizon):
+    with pytest.raises(ValueError, match="positive and finite"):
+        K11ProcessInstrumentation(K11TraceRecorder("k11-invalid-window"), observation_horizon_seconds=horizon)
+
+
+def test_k11_only_suppresses_controller_owned_horizon_interruption():
+    expected = RuntimeError("Controller shutdown incomplete; interrupted tasks")
+    controller = SimpleNamespace(
+        _first_failure=(expected, None, {
+            "thread": "run", "error": "Controller shutdown incomplete",
+        }),
+        shutdown_context={
+            "shutdown_complete": True,
+            "interrupted_task_ids": ["task-1"],
+            "live_threads": [],
+            "undrained_queues": [],
+            "active_task_ids": [],
+            "incomplete_submission_task_ids": [],
+        },
+    )
+
+    assert _controlled_shutdown_is_complete(controller, expected) is True
+    assert _controlled_shutdown_is_complete(
+        controller, RuntimeError("unrelated failure"),
+    ) is False
+
+
+def test_k11_does_not_suppress_worker_failure_after_horizon():
+    failure = RuntimeError("model transport failed")
+    controller = SimpleNamespace(
+        _first_failure=(failure, None, {"thread": "worker", "error": str(failure)}),
+        shutdown_context={
+            "shutdown_complete": True,
+            "interrupted_task_ids": ["task-1"],
+            "live_threads": [],
+            "undrained_queues": [],
+            "active_task_ids": [],
+            "incomplete_submission_task_ids": [],
+        },
+    )
+
+    assert _controlled_shutdown_is_complete(controller, failure) is False
+
+
+def test_k11_does_not_suppress_checkpoint_failure_during_controlled_shutdown():
+    failure = RuntimeError("Controller shutdown incomplete")
+    controller = SimpleNamespace(
+        _first_failure=(failure, None, {
+            "thread": "run",
+            "error": str(failure),
+            "checkpoint_error": {"error_type": "OSError", "error": "disk full"},
+        }),
+        shutdown_context={
+            "shutdown_complete": True,
+            "interrupted_task_ids": ["task-1"],
+            "live_threads": [],
+            "undrained_queues": [],
+            "active_task_ids": [],
+            "incomplete_submission_task_ids": [],
+        },
+    )
+
+    assert _controlled_shutdown_is_complete(controller, failure) is False
+
+
+def test_k11_observation_window_can_arm_after_controller_clear_without_shifting_end():
+    trace = K11TraceRecorder("k11-window-delayed-arm")
+    waiter = _FakeWaiter()
+    clock_values = iter((100, 2_000_000_100))
+    window = _ObservationWindow(trace, 5, waiter, lambda: next(clock_values))
+    window.attach_controller(_FakeController())
+
+    window.open(arm=False)
+    assert waiter.callback is None
+    window.arm()
+
+    assert waiter.delay == 3.0
+    opened = trace.artifact()["events"][0]
+    assert opened["payload"]["horizon_monotonic_ns"] == 5_000_000_100
+
+
+def test_k11_wrapped_controller_arms_after_clear_and_cannot_lose_immediate_horizon(
+    monkeypatch,
+):
+    from pipeline.controller_tiny import GlobalController
+
+    trace = K11TraceRecorder("k11-window-controller-clear")
+    waiter = _FakeWaiter()
+    controller = SimpleNamespace(shutdown_event=threading.Event())
+    controller._request_shutdown = controller.shutdown_event.set
+
+    def run(fake_controller):
+        fake_controller.shutdown_event.clear()
+        waiter.callback()
+        assert fake_controller.shutdown_event.is_set()
+        return "stopped"
+
+    monkeypatch.setattr(GlobalController, "run", run)
+    with K11ProcessInstrumentation(
+        trace,
+        observation_horizon_seconds=5,
+        observation_waiter=waiter,
+        monotonic_clock=lambda: 100,
+    ):
+        assert GlobalController.run(controller) == "stopped"
+        with pytest.raises(RuntimeError, match="one controller run"):
+            GlobalController.run(controller)
+
+    events = trace.artifact()["events"]
+    assert [event["event_type"] for event in events] == [
+        "k11.observation_window_opened", "k11.observation_window_closed",
+    ]
+    assert events[-1]["payload"]["reason"] == "fixed_observation_horizon"
 
 
 def _model():

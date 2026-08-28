@@ -4,6 +4,12 @@
   "study_phase": "K11-P0-instrumentation-validation",
   "prevalence_inference_allowed": false,
   "eac_identity_source": "current_immutable_checkout",
+  "observation_window": {
+    "basis": "predeclared-fixed-monotonic-horizon",
+    "horizon_seconds": 600,
+    "natural_terminal_closes_early": true,
+    "status": "development-pilot-binding-not-final-k11-freeze"
+  },
   "runtime_hygiene": {
     "classification": "pre-freeze-runtime-hygiene-change",
     "change": "OpenAI-compatible mutable state is routed through run-specific RuntimePaths",

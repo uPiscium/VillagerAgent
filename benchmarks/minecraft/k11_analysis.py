@@ -21,6 +21,8 @@ from benchmarks.minecraft.k11_trace import (
     derive_positive_disposition,
     validate_p0_trace,
     validate_trace,
+    event_in_observation_window,
+    observation_window_bounds,
 )
 
 
@@ -173,10 +175,13 @@ def _changed_dependency_ids(event: Mapping[str, Any]) -> set[str]:
     return changed
 
 
-def _candidate_events(trace: Mapping[str, Any], event_type: str) -> dict[str, Mapping[str, Any]]:
+def _candidate_events(trace: Mapping[str, Any], event_type: str,
+                      bounds: tuple[int, int, str] | None = None) -> dict[str, Mapping[str, Any]]:
     result = {}
     for event in trace.get("events", []):
         if event.get("event_type") != event_type:
+            continue
+        if bounds is not None and not event_in_observation_window(event, bounds):
             continue
         request = event.get("payload", {}).get("exact_request")
         candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
@@ -189,9 +194,17 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
     """Build P0 structural diagnostics and draft D1-D6/N0-N4 classifications."""
     validation = validate_trace(trace)
     p0_validation = validate_p0_trace(trace)
-    prepared_by_id = _candidate_events(trace, "k11.eac_action_prepared")
-    decision_by_id = _candidate_events(trace, "k11.eac_execution_decision_attempted")
-    native_by_id = _candidate_events(trace, "k11.eac_native_effect_entered")
+    bounds = observation_window_bounds(trace)
+    def in_population(event: Mapping[str, Any]) -> bool:
+        return event_in_observation_window(event, bounds)
+    prepared_by_id = _candidate_events(trace, "k11.eac_action_prepared", bounds)
+    decision_by_id = _candidate_events(trace, "k11.eac_execution_decision_attempted", bounds)
+    native_by_id = _candidate_events(trace, "k11.eac_native_effect_entered", bounds)
+    scoped_trace = trace
+    if bounds is not None:
+        scoped_trace = dict(trace)
+        scoped_trace["events"] = [event for event in trace.get("events", [])
+                                   if isinstance(event, Mapping) and in_population(event)]
     rows = []
 
     for candidate_id, prepared in prepared_by_id.items():
@@ -211,9 +224,12 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             "D6": False,
             "taxonomy": None,
             "qc_state": None,
+            "prepared_inside_window": True,
+            "complete_dispositions_inside_window": False,
+            "window_censored_preparations": 0,
         }
         decision = decision_by_id.get(candidate_id)
-        positive_abandonment = derive_positive_disposition(trace, prepared)
+        positive_abandonment = derive_positive_disposition(scoped_trace, prepared)
         if decision is not None and positive_abandonment is not None:
             decision_precedes = _event_precedes(decision, positive_abandonment["marker"])
             if decision_precedes is True:
@@ -229,6 +245,21 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             positive_abandonment["marker"] if positive_abandonment is not None else None
         )
         if disposition is None:
+            if (bounds is not None and bounds[2] == "fixed_observation_horizon"
+                    and isinstance(prepared.get("monotonic_ns"), int)
+                    and prepared["monotonic_ns"] < bounds[1]):
+                row.update({"qc_state": "observation_window_censored", "D1": True,
+                            "D2": False, "D3": False, "D4": False, "D5": False, "D6": False,
+                            "prepared_inside_window": True, "complete_dispositions_inside_window": False,
+                            "window_censored_preparations": 1})
+                try:
+                    row["EAdm_prepare"] = replay_admissibility(
+                        trace, prepared, cutoff_seq=prepared["seq"], replay_label=candidate_id + ":prepare"
+                    )["admissible"]
+                except Exception:
+                    pass
+                rows.append(row)
+                continue
             row["qc_state"] = "disposition_unresolved"
             rows.append(row)
             continue
@@ -240,6 +271,7 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             rows.append(row)
             continue
         row["prepare_to_disposition_ns"] = disposition_ns - prepare_ns
+        row["complete_dispositions_inside_window"] = True
         if decision is not None:
             row["prepare_to_decision_ns"] = disposition_ns - prepare_ns
 
@@ -270,7 +302,8 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
             event for event in trace.get("events", [])
             if event.get("event_type") == "k11.eac_evidence_ingested"
             and event.get("actor_id") == actor_id
-            and prepared["seq"] < event.get("seq", -1) < disposition["seq"]
+            and prepared["monotonic_ns"] < event.get("monotonic_ns", -1) < disposition["monotonic_ns"]
+            and in_population(event)
         ]
         if not interval_mutations:
             row["taxonomy"] = "N0"
@@ -315,6 +348,9 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
         name: sum(row.get(name) is True for row in rows)
         for name in ("D1", "D2", "D3", "D4", "D5", "D6")
     }
+    prepared_inside = len(rows)
+    complete_inside = sum(row.get("complete_dispositions_inside_window") is True for row in rows)
+    censored_count = sum(row.get("qc_state") == "observation_window_censored" for row in rows)
     taxonomy = {
         name: sum(row.get("taxonomy") == name for row in rows)
         for name in ("N0", "N1", "N2", "N3", "N4")
@@ -336,6 +372,10 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
         "trace_validation": validation,
         "p0_trace_validation": p0_validation,
         "denominators": denominators,
+        "prepared_inside_window": prepared_inside,
+        "complete_dispositions_inside_window": complete_inside,
+        "window_censored_preparations": censored_count,
+        "censoring_fraction": (censored_count / prepared_inside if prepared_inside else 0.0),
         "taxonomy": taxonomy,
         "qc_states": qc,
         "prepare_to_decision_ns": durations,
@@ -375,10 +415,12 @@ def validate_p0_analysis(analysis: Mapping[str, Any], trace: Mapping[str, Any] |
         errors.append("P0 analysis actions are malformed")
     primary = [row for row in actions if isinstance(row, Mapping) and row.get("tool_name") in PRIMARY_EFFECT_ACTIONS]
     if trace is not None:
+        bounds = observation_window_bounds(trace)
         trace_candidates = [
             event.get("payload", {}).get("exact_request", {}).get("candidate_id")
             for event in trace.get("events", [])
             if event.get("event_type") == "k11.eac_action_prepared"
+            and event_in_observation_window(event, bounds)
             and event.get("payload", {}).get("exact_request", {}).get("action", {}).get("identity")
             in PRIMARY_EFFECT_ACTIONS
         ]
@@ -395,15 +437,20 @@ def validate_p0_analysis(analysis: Mapping[str, Any], trace: Mapping[str, Any] |
             errors.append(f"P0 analysis {name} denominator is inconsistent with primary actions")
     if any(row.get("D1") is not True for row in primary):
         errors.append("P0 analysis contains a primary action outside D1")
+    censored = [row for row in primary if row.get("qc_state") == "observation_window_censored"]
     replayed = [
         row for row in primary
+        if row not in censored
         if type(row.get("EAdm_prepare")) is bool
         and type(row.get("EAdm_disposition")) is bool
     ]
-    if not replayed:
+    non_censored = [row for row in primary if row not in censored]
+    if non_censored and not replayed:
         errors.append("P0 analysis lacks a replayed primary action")
-    if len(replayed) != len(primary):
+    if len(replayed) != len(non_censored):
         errors.append("not all expected primary prepare/disposition replays completed")
+    if any(type(row.get("EAdm_prepare")) is not bool for row in censored):
+        errors.append("window-censored primary lacks prepare replay")
     forbidden = {"offline_replay_failed", "ordering_ambiguous", "disposition_unresolved"}
     for row in primary:
         if row.get("qc_state") in forbidden:

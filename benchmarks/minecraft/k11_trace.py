@@ -10,6 +10,7 @@ import hashlib
 import json
 import threading
 import time
+import math
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
@@ -22,7 +23,7 @@ from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
 from benchmarks.common.eac.model import ExactRequest, Proposition
 
 
-TRACE_SCHEMA_VERSION = "minecraft-k11-trace/1"
+TRACE_SCHEMA_VERSION = "minecraft-k11-trace/2"
 PRIMARY_EFFECT_ACTIONS = frozenset({
     "MineBlock",
     "placeBlock",
@@ -44,7 +45,59 @@ K11_EVENT_TYPES = frozenset({
     "k11.eac_native_effect_entered",
     "k11.eac_native_effect_completed",
     "k11.eac_action_terminal",
+    "k11.observation_window_opened",
+    "k11.observation_window_closed",
 })
+
+WINDOW_REASONS = frozenset({"fixed_observation_horizon", "natural_runtime_terminal"})
+
+
+def observation_window(artifact: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+    """Return the strict observation window, or None for legacy fixtures."""
+    events = artifact.get("events", [])
+    opened = [e for e in events if isinstance(e, Mapping) and e.get("event_type") == "k11.observation_window_opened"]
+    closed = [e for e in events if isinstance(e, Mapping) and e.get("event_type") == "k11.observation_window_closed"]
+    if not opened and not closed:
+        return None
+    if len(opened) != 1 or len(closed) != 1:
+        return (opened[0] if opened else {}, closed[0] if closed else {})
+    return opened[0], closed[0]
+
+
+def observation_window_bounds(artifact: Mapping[str, Any]) -> tuple[int, int, str] | None:
+    pair = observation_window(artifact)
+    if pair is None:
+        return None
+    opened, closed = pair
+    closed_payload = closed.get("payload", {})
+    if not isinstance(closed_payload, Mapping):
+        return None
+    reason = closed_payload.get("reason")
+    start = opened.get("monotonic_ns")
+    end = closed_payload.get("window_close_monotonic_ns")
+    if isinstance(start, int) and isinstance(end, int) and isinstance(reason, str):
+        return start, end, reason
+    return None
+
+
+def event_in_observation_window(
+    event: Mapping[str, Any], bounds: tuple[int, int, str] | None,
+) -> bool:
+    if bounds is None:
+        return True
+    value = event.get("monotonic_ns")
+    return isinstance(value, int) and bounds[0] <= value < bounds[1]
+
+
+def _candidate_id(event: Mapping[str, Any]) -> str | None:
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return None
+    request = payload.get("exact_request")
+    if not isinstance(request, Mapping):
+        return None
+    candidate_id = request.get("candidate_id")
+    return candidate_id if isinstance(candidate_id, str) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +363,7 @@ class K11TraceRecorder:
         source: str,
         payload: Mapping[str, Any] | None = None,
         scope: K11TraceScope | None = None,
+        monotonic_ns: int | None = None,
     ) -> dict[str, Any] | None:
         """Append one small observed fact; tracing failures are non-authoritative."""
         try:
@@ -327,7 +381,7 @@ class K11TraceRecorder:
                 "agent_step_id": selected_scope.agent_step_id if selected_scope else None,
                 "tool_call_id": selected_scope.tool_call_id if selected_scope else None,
                 "payload": dict(payload or {}),
-                "monotonic_ns": time.monotonic_ns(),
+                "monotonic_ns": time.monotonic_ns() if monotonic_ns is None else monotonic_ns,
                 "thread_id": threading.get_ident(),
             }
             self.events.append(event)
@@ -373,6 +427,51 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     if artifact.get("schema_version") != TRACE_SCHEMA_VERSION or not isinstance(events, list):
         return {"valid": False, "errors": ["invalid K11 trace artifact"], "warnings": []}
 
+    pair = observation_window(artifact)
+    bounds = observation_window_bounds(artifact)
+    if pair is not None:
+        opened, closed = pair
+        opened_rows = [event for event in events if isinstance(event, Mapping)
+                       and event.get("event_type") == "k11.observation_window_opened"]
+        closed_rows = [event for event in events if isinstance(event, Mapping)
+                       and event.get("event_type") == "k11.observation_window_closed"]
+        if len(opened_rows) != 1 or len(closed_rows) != 1:
+            errors.append("observation window requires exactly one open and close event")
+        if bounds is None:
+            errors.append("observation window timestamps or reason are malformed")
+        else:
+            start, end, reason = bounds
+            opened_payload = opened.get("payload", {})
+            closed_payload = closed.get("payload", {})
+            if not isinstance(opened_payload, Mapping):
+                opened_payload = {}
+            if not isinstance(closed_payload, Mapping):
+                closed_payload = {}
+            if start >= end:
+                errors.append("observation window is misordered")
+            if (not isinstance(opened.get("seq"), int) or not isinstance(closed.get("seq"), int)
+                    or opened["seq"] >= closed["seq"]):
+                errors.append("observation window sequence is misordered")
+            if reason not in WINDOW_REASONS:
+                errors.append("observation window reason is invalid")
+            configured = opened_payload.get("configured_horizon_seconds")
+            horizon = opened_payload.get("horizon_monotonic_ns")
+            if (type(configured) not in (int, float) or isinstance(configured, bool)
+                    or not math.isfinite(configured) or configured <= 0
+                    or type(horizon) is not int
+                    or horizon != start + round(configured * 1_000_000_000)
+                    or closed_payload.get("configured_horizon_seconds") != configured
+                    or closed.get("monotonic_ns") != end):
+                errors.append("observation window horizon metadata is invalid")
+            if reason == "fixed_observation_horizon" and (
+                    type(horizon) is not int or end != horizon
+                    or closed_payload.get("shutdown_requested") is not True):
+                errors.append("fixed observation horizon close is invalid")
+            if reason == "natural_runtime_terminal" and (
+                    type(horizon) is not int or end >= horizon
+                    or closed_payload.get("shutdown_requested") is not False):
+                errors.append("natural observation close is invalid")
+
     sequences = [event.get("seq") if isinstance(event, Mapping) else None for event in events]
     if any(type(value) is not int or value <= 0 for value in sequences):
         errors.append("trace sequence is malformed")
@@ -395,6 +494,9 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
         event_type = event.get("event_type")
         if event_type not in K11_EVENT_TYPES:
             warnings.append(f"unknown event type: {event_type}")
+            continue
+        if (pair is not None and event_type.startswith("k11.eac_")
+                and not event_in_observation_window(event, bounds)):
             continue
         payload = event.get("payload")
         if not isinstance(payload, Mapping):
@@ -424,12 +526,27 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
         if table is not None:
             table.setdefault(candidate_id, []).append(event)
 
+    scoped_artifact = artifact
+    if bounds is not None:
+        scoped_artifact = dict(artifact)
+        scoped_artifact["events"] = [
+            item for item in events if event_in_observation_window(item, bounds)
+        ]
+
+    def all_candidate_rows(kind: str, candidate_id: str) -> list[Mapping[str, Any]]:
+        return [
+            item for item in events
+            if isinstance(item, Mapping) and item.get("event_type") == kind
+            and _candidate_id(item) == candidate_id
+        ]
+
     for candidate_id, rows in prepared.items():
         if len(rows) != 1:
             errors.append(f"candidate {candidate_id} has {len(rows)} prepare events")
         decision_rows = decisions.get(candidate_id, [])
-        terminal_rows = terminals.get(candidate_id, [])
-        positive_disposition = derive_positive_disposition(artifact, rows[0])
+        terminal_rows = all_candidate_rows("k11.eac_action_terminal", candidate_id)
+        # Positive abandonment is authoritative only inside a declared window.
+        positive_disposition = derive_positive_disposition(scoped_artifact, rows[0])
         decision_precedes = None
         if len(decision_rows) == 1 and positive_disposition is not None:
             decision_precedes = _event_precedes(decision_rows[0], positive_disposition["marker"])
@@ -438,7 +555,11 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             elif decision_precedes is None:
                 errors.append(f"candidate {candidate_id} disposition ordering is ambiguous")
         selected_positive = positive_disposition if not decision_rows else None
-        if len(decision_rows) != 1 and selected_positive is None:
+        censored = (bounds is not None and bounds[2] == "fixed_observation_horizon"
+                    and event_in_observation_window(rows[0], bounds)
+                    and (not decision_rows or any(
+                        not event_in_observation_window(item, bounds) for item in decision_rows)))
+        if len(decision_rows) != 1 and selected_positive is None and not censored:
             errors.append(f"candidate {candidate_id} lacks exactly one disposition event")
         if decision_rows and len(terminal_rows) != 1:
             errors.append(f"candidate {candidate_id} has {len(terminal_rows)} terminal events")
@@ -461,7 +582,7 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     for candidate_id, rows in native_entries.items():
         if candidate_id not in decisions:
             errors.append(f"candidate {candidate_id} reached native effect without decision marker")
-        completions = native_completions.get(candidate_id, [])
+        completions = all_candidate_rows("k11.eac_native_effect_completed", candidate_id)
         if len(completions) != len(rows):
             errors.append(f"candidate {candidate_id} native entry/completion count differs")
 
@@ -476,7 +597,7 @@ def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             "events": len(events),
             "prepared": sum(len(rows) for rows in prepared.values()),
             "positive_abandonments": sum(
-                derive_positive_disposition(artifact, rows[0]) is not None
+                derive_positive_disposition(scoped_artifact, rows[0]) is not None
                 for candidate_id, rows in prepared.items() if candidate_id not in decisions
             ),
             "execution_decisions": sum(len(rows) for rows in decisions.values()),
@@ -507,12 +628,18 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             "warnings": generic["warnings"],
             "counts": generic.get("counts", {}),
         }
+    bounds = observation_window_bounds(artifact)
+    if bounds is None:
+        errors.append("P0 trace requires one valid observation window")
 
-    def rows(kind: str) -> list[Mapping[str, Any]]:
-        return [event for event in events if isinstance(event, Mapping) and event.get("event_type") == kind]
+    def rows(kind: str, *, within_window: bool = True) -> list[Mapping[str, Any]]:
+        return [event for event in events if isinstance(event, Mapping) and event.get("event_type") == kind
+                and (not within_window or kind in {
+                    "k11.observation_window_opened", "k11.observation_window_closed"
+                } or event_in_observation_window(event, bounds))]
 
-    starts = rows("k11.agent_step_started")
-    completed = rows("k11.agent_step_completed")
+    starts = rows("k11.agent_step_started", within_window=False)
+    completed = rows("k11.agent_step_completed", within_window=False)
     def lifecycle_key(event: Mapping[str, Any], identity: Any) -> tuple[Any, ...] | None:
         if not identity:
             return None
@@ -547,15 +674,18 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
 
     require_lifecycles(starts, completed, lambda event: event.get("agent_step_id"), "agent")
 
-    model_starts = rows("k11.model_call_started")
-    model_terminals = rows("k11.model_call_completed") + rows("k11.model_call_failed")
+    model_starts = rows("k11.model_call_started", within_window=False)
+    model_terminals = (
+        rows("k11.model_call_completed", within_window=False)
+        + rows("k11.model_call_failed", within_window=False)
+    )
     require_lifecycles(
         model_starts, model_terminals,
         lambda event: event.get("payload", {}).get("model_call_id"), "model",
     )
 
-    tool_enters = rows("k11.tool_call_entered")
-    tool_exits = rows("k11.tool_call_exited")
+    tool_enters = rows("k11.tool_call_entered", within_window=False)
+    tool_exits = rows("k11.tool_call_exited", within_window=False)
     require_lifecycles(tool_enters, tool_exits, lambda event: event.get("tool_call_id"), "tool")
     if not rows("k11.eac_evidence_ingested"):
         errors.append("P0 trace lacks evidence ingestion")
@@ -566,13 +696,26 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
         errors.append("P0 trace lacks a primary preparation")
 
     decisions = rows("k11.eac_execution_decision_attempted")
-    terminals = rows("k11.eac_action_terminal")
     native_entries = rows("k11.eac_native_effect_entered")
-    native_completions = rows("k11.eac_native_effect_completed")
     all_prepared_ids = {
         row.get("payload", {}).get("exact_request", {}).get("candidate_id")
         for row in rows("k11.eac_action_prepared")
     }
+    def belongs_to_measured_preparation(event: Mapping[str, Any]) -> bool:
+        return _candidate_id(event) in all_prepared_ids
+
+    terminals = [
+        event for event in rows("k11.eac_action_terminal", within_window=False)
+        if belongs_to_measured_preparation(event)
+    ]
+    native_entry_candidate_ids = {
+        _candidate_id(event)
+        for event in native_entries
+    }
+    native_completions = [
+        event for event in rows("k11.eac_native_effect_completed", within_window=False)
+        if _candidate_id(event) in native_entry_candidate_ids
+    ]
     for row in decisions + terminals + native_entries + native_completions:
         row_request = row.get("payload", {}).get("exact_request")
         row_candidate = row_request.get("candidate_id") if isinstance(row_request, Mapping) else None
@@ -598,7 +741,13 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             errors.append("P0 primary preparation lacks exact request or scoped identity")
         related_decisions = [row for row in decisions if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
         related_terminals = [row for row in terminals if row.get("payload", {}).get("exact_request", {}).get("candidate_id") == candidate]
-        positive_disposition = derive_positive_disposition(artifact, event)
+        scoped_artifact = artifact
+        if bounds is not None:
+            scoped_artifact = dict(artifact)
+            scoped_artifact["events"] = [
+                item for item in events if event_in_observation_window(item, bounds)
+            ]
+        positive_disposition = derive_positive_disposition(scoped_artifact, event)
         decision_precedes = None
         if len(related_decisions) == 1 and positive_disposition is not None:
             decision_precedes = _event_precedes(related_decisions[0], positive_disposition["marker"])
@@ -607,7 +756,10 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             elif decision_precedes is None:
                 errors.append(f"primary candidate {candidate} disposition ordering is ambiguous")
         selected_positive = positive_disposition if not related_decisions else None
-        if len(related_decisions) != 1 and selected_positive is None:
+        censored = (bounds is not None and bounds[2] == "fixed_observation_horizon"
+                    and event_in_observation_window(event, bounds)
+                    and not related_decisions)
+        if len(related_decisions) != 1 and selected_positive is None and not censored:
             errors.append(f"primary candidate {candidate} lacks exactly one disposition")
         if related_decisions and len(related_terminals) != 1:
             errors.append(f"primary candidate {candidate} lacks exactly one terminal")
@@ -642,9 +794,9 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
             errors.append(f"primary candidate {candidate} preparation has an invalid exact request digest")
         ordered = [event] + related_dispositions + related_entries + related_completions + related_terminals
         ordered_sequences = [row.get("seq") for row in ordered]
-        if (any(not isinstance(value, int) for value in ordered_sequences)
+        if (not censored and (any(not isinstance(value, int) for value in ordered_sequences)
                 or ordered_sequences != sorted(ordered_sequences)
-                or len(set(ordered_sequences)) != len(ordered_sequences)):
+                or len(set(ordered_sequences)) != len(ordered_sequences))):
             errors.append(f"primary candidate {candidate} EAC lifecycle is misordered")
 
     if artifact.get("instrumentation_errors"):

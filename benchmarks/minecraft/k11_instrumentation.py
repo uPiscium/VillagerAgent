@@ -6,6 +6,9 @@ request, semantic reevaluation, filesystem write, or new EAC lock is introduced.
 """
 from __future__ import annotations
 
+import math
+import threading
+import time
 from functools import wraps
 from types import MethodType
 from typing import Any, Mapping
@@ -70,6 +73,30 @@ def _terminal(trace: K11TraceRecorder, prepared, *, outcome: str,
         "k11.eac_action_terminal",
         source="benchmarks.minecraft.k11_instrumentation.instrument_runtime",
         payload=payload,
+    )
+
+
+def _controlled_shutdown_is_complete(controller, exc: BaseException) -> bool:
+    """Accept only the controller's own horizon-interruption failure and proof."""
+    # The controller-owned context is authoritative; an exception attribute is
+    # only diagnostic and must not independently authorize suppression.
+    context = getattr(controller, "shutdown_context", None)
+    failure = getattr(controller, "_first_failure", None)
+    if (not isinstance(failure, tuple) or len(failure) != 3
+            or failure[0] is not exc or not isinstance(failure[2], Mapping)
+            or failure[2].get("thread") != "run"
+            or not str(failure[2].get("error", "")).startswith("Controller shutdown incomplete")
+            or failure[2].get("checkpoint_error")):
+        return False
+    if not isinstance(context, Mapping) or context.get("shutdown_complete") is not True:
+        return False
+    return bool(context.get("interrupted_task_ids")) and all(
+        not context.get(key) for key in (
+        "live_threads",
+        "undrained_queues",
+        "active_task_ids",
+        "incomplete_submission_task_ids",
+        )
     )
 
 
@@ -185,11 +212,147 @@ def instrument_runtime(runtime, trace: K11TraceRecorder):
     return runtime
 
 
+class _ThreadingObservationWaiter:
+    """The production waiter; tests can replace it with a deterministic seam."""
+
+    def __call__(self, delay: float, callback):
+        timer = threading.Timer(delay, callback)
+        timer.daemon = True
+        timer.start()
+        return timer
+
+
+class _ObservationWindow:
+    def __init__(self, trace, horizon_seconds, waiter, clock):
+        self.trace = trace
+        self.horizon_seconds = horizon_seconds
+        self.waiter = waiter
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._closed = False
+        self._horizon_reached = False
+        self._timer = None
+        self._armed = False
+        self.opened_at = None
+        self.closed_at = None
+        self.horizon_at = None
+
+    @property
+    def horizon_reached(self):
+        with self._lock:
+            return self._horizon_reached
+
+    def open(self, *, arm=True):
+        self.opened_at = self.clock()
+        self.horizon_at = self.opened_at + round(self.horizon_seconds * 1_000_000_000)
+        self.trace.record(
+            "k11.observation_window_opened",
+            source="GlobalController.run",
+            payload={
+                "configured_horizon_seconds": self.horizon_seconds,
+                "horizon_monotonic_ns": self.horizon_at,
+            },
+            monotonic_ns=self.opened_at,
+        )
+        if arm:
+            self.arm(now=self.opened_at)
+
+    def arm(self, *, now=None):
+        with self._lock:
+            if self._armed or self._closed:
+                return False
+            self._armed = True
+        current = self.clock() if now is None else now
+        delay = max(0.0, (self.horizon_at - current) / 1_000_000_000)
+        self._timer = self.waiter(delay, self._on_horizon)
+        return True
+
+    def _close(self, reason: str, *, close_ns: int, shutdown_requested: bool):
+        with self._lock:
+            if self._closed:
+                return False
+            self._closed = True
+            self._horizon_reached = reason == "fixed_observation_horizon"
+            self.closed_at = close_ns
+        self.trace.record(
+            "k11.observation_window_closed",
+            source="GlobalController.run",
+            payload={
+                "reason": reason,
+                "configured_horizon_seconds": self.horizon_seconds,
+                "window_close_monotonic_ns": self.closed_at,
+                "shutdown_requested": shutdown_requested,
+            },
+            monotonic_ns=self.closed_at,
+        )
+        return True
+
+    def _on_horizon(self):
+        if self._close(
+            "fixed_observation_horizon",
+            close_ns=self.horizon_at,
+            shutdown_requested=True,
+        ):
+            # The close marker is intentionally linearized before shutdown is
+            # requested, making the end of the measured window authoritative.
+            self.controller._request_shutdown()
+
+    def natural_close(self):
+        self._cancel()
+        with self._lock:
+            if self._closed:
+                return False
+        now = self.clock()
+        if now >= self.horizon_at:
+            self._on_horizon()
+            return self.horizon_reached
+        return self._close(
+            "natural_runtime_terminal",
+            close_ns=now,
+            shutdown_requested=False,
+        )
+
+    def _cancel(self):
+        timer = self._timer
+        if timer is not None:
+            cancel = getattr(timer, "cancel", None)
+            if callable(cancel):
+                cancel()
+
+    def dispose(self):
+        self._cancel()
+        timer = self._timer
+        join = getattr(timer, "join", None)
+        if callable(join) and timer is not threading.current_thread():
+            join()
+
+    def attach_controller(self, controller):
+        self.controller = controller
+
+
 class K11ProcessInstrumentation:
     """Install K11-only process hooks and restore every patched symbol on exit."""
 
-    def __init__(self, trace: K11TraceRecorder):
+    def __init__(self, trace: K11TraceRecorder, *, observation_horizon_seconds=None,
+                 waiter=None, clock=None, observation_waiter=None,
+                 monotonic_clock=None):
+        if observation_horizon_seconds is not None and (
+                isinstance(observation_horizon_seconds, bool)
+                or not isinstance(observation_horizon_seconds, (int, float))
+                or not math.isfinite(observation_horizon_seconds)
+                or observation_horizon_seconds <= 0
+        ):
+            raise ValueError("observation_horizon_seconds must be positive and finite")
+        if waiter is not None and observation_waiter is not None:
+            raise TypeError("specify only one observation waiter")
+        if clock is not None and monotonic_clock is not None:
+            raise TypeError("specify only one monotonic clock")
         self.trace = trace
+        self.observation_horizon_seconds = observation_horizon_seconds
+        self._observation_waiter = waiter or observation_waiter or _ThreadingObservationWaiter()
+        self._observation_clock = clock or monotonic_clock or time.monotonic_ns
+        self._observation_run_lock = threading.Lock()
+        self._observation_run_started = False
         self._restores: list[tuple[Any, str, Any]] = []
 
     def _patch(self, owner, name: str, replacement) -> None:
@@ -213,6 +376,56 @@ class K11ProcessInstrumentation:
         from pipeline.agent import BaseAgent
 
         trace = self.trace
+
+        if self.observation_horizon_seconds is not None:
+            from pipeline.controller_tiny import ControllerShutdownError, GlobalController
+
+            original_controller_run = GlobalController.run
+
+            @wraps(original_controller_run)
+            def controller_run(controller_self, *args, **kwargs):
+                with self._observation_run_lock:
+                    if self._observation_run_started:
+                        raise RuntimeError(
+                            "K11 observation instrumentation supports one controller run per process"
+                        )
+                    self._observation_run_started = True
+                window = _ObservationWindow(
+                    trace,
+                    self.observation_horizon_seconds,
+                    self._observation_waiter,
+                    self._observation_clock,
+                )
+                window.attach_controller(controller_self)
+                window.open(arm=False)
+                shutdown_event = controller_self.shutdown_event
+                original_clear = shutdown_event.clear
+
+                def clear_and_arm():
+                    original_clear()
+                    window.arm()
+
+                shutdown_event.clear = clear_and_arm
+                try:
+                    result = original_controller_run(controller_self, *args, **kwargs)
+                except ControllerShutdownError as exc:
+                    if (window.horizon_reached
+                            and _controlled_shutdown_is_complete(controller_self, exc)):
+                        return None
+                    window.natural_close()
+                    raise
+                except BaseException:
+                    window.natural_close()
+                    raise
+                else:
+                    if not window.horizon_reached:
+                        window.natural_close()
+                    return result
+                finally:
+                    shutdown_event.clear = original_clear
+                    window.dispose()
+
+            self._patch(GlobalController, "run", controller_run)
 
         # Wrap native callbacks at gateway construction time.  Consequently the
         # per-action prepare marker can be the final instrumentation operation
