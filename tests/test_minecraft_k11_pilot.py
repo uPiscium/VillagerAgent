@@ -2,13 +2,17 @@ import json
 from pathlib import Path
 
 import pytest
+import benchmarks.minecraft.k11_pilot as k11_pilot
 
 from benchmarks.minecraft.k11_pilot import (
     K11PilotContractError,
     P0_EXPECTED_RUNS,
+    _apply_process_outcome,
     _coverage_summary,
     _p0_passes,
+    _primary_terminal_count,
     load_p0_manifest,
+    run_development_smoke,
 )
 
 
@@ -182,3 +186,178 @@ def test_k11_p0_final_gate_requires_every_offline_analysis() -> None:
         calibration={"traced": {"trace_validation": {"valid": True}}},
         coverage_sufficient=True,
     ) is False
+
+
+def test_k11_p0_timeout_fails_even_when_validation_artifact_exists() -> None:
+    summary = {"runtime_error": None, "runtime_error_type": None}
+
+    result = _apply_process_outcome(summary, {
+        "timed_out": True,
+        "exit_code": -15,
+        "process_group_alive_after_cleanup": False,
+        "post_artifact_linger": False,
+        "post_parent_group_linger": False,
+    })
+
+    assert result["runtime_error_type"] == "RunProcessTimeout"
+
+
+def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch) -> None:
+    row = {"run_id": "K11-P0-01", "runtime": {}}
+    manifest = {"runs": [row]}
+    execution = object()
+    called = []
+    monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: manifest)
+    monkeypatch.setattr(k11_pilot.RuntimeExecution, "resolve", lambda _root: execution)
+    monkeypatch.setattr(k11_pilot, "verify_eac_premanifest", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        k11_pilot, "_run_single_row", lambda *args, **kwargs: called.append((args, kwargs)),
+    )
+
+    result = k11_pilot.main([
+        "--manifest", str(tmp_path / "manifest.json"),
+        "--output-root", str(tmp_path / "output"),
+        "--worker-run-id", "K11-P0-01",
+        "--execution-revision", "a" * 40,
+        "--premanifest", str(tmp_path / "premanifest.json"),
+        "--manifest-digest", k11_pilot._manifest_digest(manifest),
+    ])
+
+    assert result == 0
+    assert called[0][0][0] == row
+
+
+def test_k11_development_smoke_requires_full_one_run_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    row = {"run_id": "K11-P0-01", "runtime": {}}
+    monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: {"runs": [row]})
+    monkeypatch.setattr(
+        k11_pilot,
+        "_prepare_execution_identity",
+        lambda root: (
+            object(), "a" * 40, root / "K11_P0_EAC_PREMANIFEST.json",
+            {"runtime_digest": "sha256:runtime", "premanifest_identity": "premanifest"},
+        ),
+    )
+    summary = {
+        "runtime_error": None,
+        "trace_validation": {"valid": True},
+        "analysis_validation": {"valid": True},
+        "primary_terminal_count": 1,
+        "event_type_counts": {
+            "k11.model_call_started": 1,
+            "k11.tool_call_entered": 1,
+            "k11.eac_action_prepared": 1,
+            "k11.eac_action_terminal": 1,
+        },
+    }
+    monkeypatch.setattr(k11_pilot, "_run_isolated_row", lambda *_args, **_kwargs: summary)
+
+    result = run_development_smoke(
+        tmp_path / "manifest.json", output_root=tmp_path / "smoke", run_id="K11-P0-01",
+    )
+
+    assert result["smoke_passed"] is True
+    assert result["formal_p0"] is False
+    artifact = json.loads((tmp_path / "smoke" / "DEV_SMOKE_VALIDATION.json").read_text())
+    assert artifact == result
+
+
+def test_k11_development_smoke_fails_without_terminal_disposition(tmp_path: Path, monkeypatch) -> None:
+    row = {"run_id": "K11-P0-01", "runtime": {}}
+    monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: {"runs": [row]})
+    monkeypatch.setattr(
+        k11_pilot,
+        "_prepare_execution_identity",
+        lambda root: (
+            object(), "a" * 40, root / "premanifest.json",
+            {"runtime_digest": "sha256:runtime", "premanifest_identity": "premanifest"},
+        ),
+    )
+    monkeypatch.setattr(k11_pilot, "_run_isolated_row", lambda *_args, **_kwargs: {
+        "runtime_error": None,
+        "trace_validation": {"valid": True},
+        "analysis_validation": {"valid": True},
+        "event_type_counts": {
+            "k11.model_call_started": 1,
+            "k11.tool_call_entered": 1,
+            "k11.eac_action_prepared": 1,
+        },
+    })
+
+    result = run_development_smoke(
+        tmp_path / "manifest.json", output_root=tmp_path / "smoke", run_id="K11-P0-01",
+    )
+
+    assert result["smoke_passed"] is False
+
+
+def test_k11_cli_requires_explicit_formal_or_smoke_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        k11_pilot,
+        "run_p0_manifest",
+        lambda *_args, **_kwargs: pytest.fail("formal P0 must not start implicitly"),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        k11_pilot.main([
+            "--manifest", str(tmp_path / "manifest.json"),
+            "--output-root", str(tmp_path / "output"),
+        ])
+
+    assert raised.value.code == 2
+
+
+def test_k11_smoke_does_not_count_unrelated_terminal_for_primary_preparation() -> None:
+    trace = {"events": [
+        {
+            "event_type": "k11.eac_action_prepared",
+            "payload": {"exact_request": {
+                "candidate_id": "primary",
+                "action": {"identity": "placeBlock"},
+            }},
+        },
+        {
+            "event_type": "k11.eac_action_terminal",
+            "payload": {"exact_request": {"candidate_id": "other"}},
+        },
+    ]}
+
+    assert _primary_terminal_count(trace) == 0
+
+
+def test_k11_worker_rejects_manifest_changed_after_parent_validation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        k11_pilot,
+        "load_p0_manifest",
+        lambda _path: {"runs": [{"run_id": "K11-P0-01", "runtime": {}}]},
+    )
+
+    with pytest.raises(K11PilotContractError, match="parent-validated snapshot"):
+        k11_pilot.main([
+            "--manifest", str(tmp_path / "manifest.json"),
+            "--output-root", str(tmp_path / "output"),
+            "--worker-run-id", "K11-P0-01",
+            "--execution-revision", "a" * 40,
+            "--premanifest", str(tmp_path / "premanifest.json"),
+            "--manifest-digest", "0" * 64,
+        ])
+
+
+def test_k11_cli_routes_formal_p0_only_when_explicit(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        k11_pilot,
+        "run_p0_manifest",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"p0_passed": True},
+    )
+
+    result = k11_pilot.main([
+        "--manifest", str(tmp_path / "manifest.json"),
+        "--output-root", str(tmp_path / "output"),
+        "--formal-p0",
+    ])
+
+    assert result == 0
+    assert len(calls) == 1

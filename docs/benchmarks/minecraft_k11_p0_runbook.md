@@ -50,7 +50,7 @@ The K11 development checkout includes a general runtime-hygiene change that relo
 The checked-in P0 manifest reuses infrastructure identities already disclosed by existing repository configs:
 
 - model: `gemma4:12b`
-- Ollama endpoint: `https://ollama.arc.upiscium.dev`
+- Ollama endpoint: `http://10.255.255.5:11434`
 - Minecraft target: `10.12.3.1:40000`
 
 These are configuration provenance, not an assertion that the endpoints are currently available.
@@ -58,11 +58,13 @@ These are configuration provenance, not an assertion that the endpoints are curr
 Before P0, verify reachability from the runtime host using the ordinary operator tools available there. For example:
 
 ```bash
-curl -fsS https://ollama.arc.upiscium.dev/api/tags >/dev/null
+curl -fsS http://10.255.255.5:11434/api/tags >/dev/null
 nc -vz 10.12.3.1 40000
 ```
 
 Endpoint failure is infrastructure failure. Do not silently replace the endpoint, model, Minecraft target, or task prompts after inspecting P0 outcomes. If infrastructure must change, update and commit the P0 manifest before restarting the pilot from a fresh output directory.
+
+The direct/internal endpoint above replaces the named reverse-proxy route only after the failed `2c72da1` cohort was closed and retained. Bounded development qualification observed materially lower direct-route latency and no HTTP failures on either route during the small qualification, while the failed formal cohort had sustained proxy 504 responses. This is an infrastructure-only endpoint substitution, not evidence about K11 prevalence, and requires a new execution revision/cohort.
 
 ## 4. P0 manifest
 
@@ -97,17 +99,31 @@ The runner rejects an output root inside the source repository.
 
 Do not reuse a non-empty run directory.
 
-## 6. Run P0
+## 6. Run one development smoke
+
+After committing the remediation and establishing a new clean execution revision, run exactly one development smoke before any replacement formal cohort:
 
 ```bash
 python -m benchmarks.minecraft.k11_pilot \
   --manifest configs/minecraft/k11-p0-natural-manifest-v0.json \
-  --output-root ../VillagerAgent-k11-p0-results
+  --output-root ../VillagerAgent-k11-p0-dev-smoke-01 \
+  --development-smoke-run-id K11-P0-01
 ```
 
-The command exits `0` only when `p0_passed=true`. Otherwise it exits `2` for a completed-but-invalid P0 validation result or raises on a manifest/identity precondition failure.
+The smoke is explicitly non-formal and writes `DEV_SMOKE_VALIDATION.json`. It passes only after model, guarded-tool, primary-preparation, terminal-disposition, valid replay/analysis, and clean process-exit evidence are present. Stop after this one smoke; do not start the formal eight-run cohort without a separate decision.
 
-## 7. Expected artifacts
+## 7. Run P0
+
+```bash
+python -m benchmarks.minecraft.k11_pilot \
+  --manifest configs/minecraft/k11-p0-natural-manifest-v0.json \
+  --output-root ../VillagerAgent-k11-p0-results \
+  --formal-p0
+```
+
+Formal P0 must be selected explicitly; omitting both `--formal-p0` and the development-smoke mode is rejected. The command exits `0` only when `p0_passed=true`. Otherwise it exits `2` for a completed-but-invalid P0 validation result or raises on a manifest/identity precondition failure.
+
+## 8. Expected artifacts
 
 At the output root:
 
@@ -126,6 +142,7 @@ Each run directory contains at minimum:
 k11_trace.json
 k11_analysis.json
 p0_validation.json
+process_supervision.json
 runtime_result.json        # when runtime collection reaches that path
 runtime_events.jsonl       # existing baseline runtime journal
 runtime/                   # isolated runtime artifacts
@@ -133,7 +150,7 @@ runtime/                   # isolated runtime artifacts
 
 On runtime exception, `exception.txt` is preserved as pilot evidence.
 
-## 8. P0 pass conditions
+## 9. P0 pass conditions
 
 `P0_VALIDATION.json` must report all of the following:
 

@@ -7,17 +7,29 @@ draft. It never injects semantic changes or synchronization delays.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
+import sys
 import traceback
 from pathlib import Path
 from typing import Any, Mapping
 
-from benchmarks.minecraft.eac_identity import resolve_git_revision, runtime_identity
+from benchmarks.minecraft.eac_identity import (
+    resolve_git_revision,
+    runtime_identity,
+    verify_eac_premanifest,
+)
 from benchmarks.minecraft.k11_analysis import analyze_trace, validate_p0_analysis
 from benchmarks.minecraft.k11_calibration import measure_inprocess_overhead
 from benchmarks.minecraft.k11_instrumentation import K11ProcessInstrumentation
-from benchmarks.minecraft.k11_trace import K11TraceRecorder, validate_p0_trace, validate_trace
+from benchmarks.minecraft.k11_process import supervise_process
+from benchmarks.minecraft.k11_trace import (
+    PRIMARY_EFFECT_ACTIONS,
+    K11TraceRecorder,
+    validate_p0_trace,
+    validate_trace,
+)
 from env.runtime_execution import RuntimeExecution
 from env.runtime_paths import RuntimePaths
 from start_with_config import run as run_villageragent
@@ -28,6 +40,10 @@ P0_MANIFEST_ID = "minecraft-k11-p0-manifest"
 P0_MANIFEST_VERSION = 1
 P0_EXPECTED_RUNS = 8
 EAC_IDENTITY_SOURCE = "current_immutable_checkout"
+RUN_PROCESS_TIMEOUT_SECONDS = 900.0
+RUN_COMPLETION_GRACE_SECONDS = 10.0
+RUN_TERMINATION_GRACE_SECONDS = 5.0
+RUN_KILL_GRACE_SECONDS = 5.0
 FORBIDDEN_CONFIG_KEYS = frozenset({
     "forced_sleep",
     "prepare_sleep",
@@ -42,6 +58,28 @@ FORBIDDEN_CONFIG_KEYS = frozenset({
 
 class K11PilotContractError(ValueError):
     pass
+
+
+def _manifest_digest(manifest: Mapping[str, Any]) -> str:
+    encoded = json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _primary_terminal_count(trace_artifact: Mapping[str, Any]) -> int:
+    events = trace_artifact.get("events", [])
+    primary_candidate_ids = {
+        event.get("payload", {}).get("exact_request", {}).get("candidate_id")
+        for event in events
+        if event.get("event_type") == "k11.eac_action_prepared"
+        and event.get("payload", {}).get("exact_request", {}).get("action", {}).get("identity")
+        in PRIMARY_EFFECT_ACTIONS
+    }
+    return sum(
+        event.get("event_type") == "k11.eac_action_terminal"
+        and event.get("payload", {}).get("exact_request", {}).get("candidate_id")
+        in primary_candidate_ids
+        for event in events
+    )
 
 
 def _load_json(path: str | Path) -> dict[str, Any]:
@@ -219,93 +257,268 @@ def _p0_passes(*, summaries: list[Mapping[str, Any]], calibration_error: str | N
     )
 
 
+def _run_single_row(
+    row: Mapping[str, Any],
+    run_dir: Path,
+    *,
+    execution: RuntimeExecution,
+    execution_revision: str,
+    premanifest_path: Path,
+) -> dict[str, Any]:
+    run_id = row["run_id"]
+    if run_dir.exists() and any(run_dir.iterdir()):
+        raise K11PilotContractError(f"K11 P0 run directory already contains data: {run_dir}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    trace = K11TraceRecorder(run_id)
+    error = None
+    error_type = None
+    result = None
+    try:
+        with K11ProcessInstrumentation(trace):
+            result = run_villageragent(**_runtime_kwargs(
+                row,
+                run_dir,
+                execution=execution,
+                execution_revision=execution_revision,
+                premanifest_path=premanifest_path,
+            ))
+    except BaseException as exc:
+        error = str(exc)
+        error_type = type(exc).__name__
+        (run_dir / "exception.txt").write_text(
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            encoding="utf-8",
+        )
+    finally:
+        trace.write_json(run_dir / "k11_trace.json")
+
+    trace_artifact = trace.artifact()
+    generic_validation = validate_trace(trace_artifact)
+    validation = validate_p0_trace(trace_artifact)
+    event_counts = _event_type_counts(trace_artifact)
+    model_call_sources = sorted({
+        event.get("source")
+        for event in trace_artifact.get("events", [])
+        if event.get("event_type") == "k11.model_call_started"
+        and isinstance(event.get("source"), str)
+    })
+    actor_threads = {
+        (event.get("actor_id"), event.get("thread_id"))
+        for event in trace_artifact.get("events", [])
+        if event.get("event_type") == "k11.agent_step_started"
+        and isinstance(event.get("actor_id"), str)
+        and isinstance(event.get("thread_id"), int)
+    }
+    primary_terminal_count = _primary_terminal_count(trace_artifact)
+    try:
+        analysis = analyze_trace(trace_artifact)
+    except Exception as exc:
+        analysis = {
+            "artifact_id": "minecraft-k11-trace-analysis-draft",
+            "artifact_version": 1,
+            "prevalence_inference_allowed": False,
+            "run_id": run_id,
+            "analysis_error": str(exc),
+            "analysis_error_type": type(exc).__name__,
+        }
+    analysis_validation = validate_p0_analysis(analysis, trace_artifact)
+    (run_dir / "k11_analysis.json").write_text(
+        json.dumps(analysis, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "run_id": run_id,
+        "runtime_error": error,
+        "runtime_error_type": error_type,
+        "trace_validation": validation,
+        "generic_trace_validation": generic_validation,
+        "analysis_validation": analysis_validation,
+        "event_type_counts": event_counts,
+        "model_call_sources": model_call_sources,
+        "agent_thread_pairs": sorted([list(item) for item in actor_threads]),
+        "primary_terminal_count": primary_terminal_count,
+        "offline_analysis_error": analysis.get("analysis_error"),
+        "runtime_returned": result is not None,
+    }
+    (run_dir / "p0_validation.json").write_text(
+        json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
+def _worker_command(
+    manifest_path: str | Path,
+    output_root: Path,
+    *,
+    run_id: str,
+    execution_revision: str,
+    premanifest_path: Path,
+    manifest_digest: str,
+) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "benchmarks.minecraft.k11_pilot",
+        "--manifest", str(Path(manifest_path).resolve()),
+        "--output-root", str(output_root),
+        "--worker-run-id", run_id,
+        "--execution-revision", execution_revision,
+        "--premanifest", str(premanifest_path),
+        "--manifest-digest", manifest_digest,
+    ]
+
+
+def _failed_process_summary(run_id: str, supervision: Mapping[str, Any]) -> dict[str, Any]:
+    error_type = "RunProcessTimeout" if supervision.get("timed_out") else "RunProcessFailure"
+    return {
+        "run_id": run_id,
+        "runtime_error": "isolated run process did not produce a complete validation artifact",
+        "runtime_error_type": error_type,
+        "trace_validation": {"valid": False, "errors": [error_type], "warnings": [], "counts": {}},
+        "generic_trace_validation": {"valid": False, "errors": [error_type], "warnings": [], "counts": {}},
+        "analysis_validation": {"valid": False, "errors": [error_type], "counts": {}},
+        "event_type_counts": {},
+        "model_call_sources": [],
+        "agent_thread_pairs": [],
+        "primary_terminal_count": 0,
+        "offline_analysis_error": error_type,
+        "runtime_returned": False,
+    }
+
+
+def _apply_process_outcome(
+    summary: dict[str, Any], supervision: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary["process_supervision"] = dict(supervision)
+    if summary.get("runtime_error"):
+        return summary
+    if supervision.get("timed_out"):
+        summary["runtime_error"] = "isolated run process exceeded its wall-clock deadline"
+        summary["runtime_error_type"] = "RunProcessTimeout"
+    elif (
+        supervision.get("exit_code") not in (0, None)
+        or supervision.get("process_group_alive_after_cleanup")
+        or supervision.get("post_artifact_linger")
+        or supervision.get("post_parent_group_linger")
+    ):
+        summary["runtime_error"] = "isolated run process did not terminate cleanly"
+        summary["runtime_error_type"] = "RunProcessShutdownError"
+    return summary
+
+
+def _run_isolated_row(
+    row: Mapping[str, Any],
+    *,
+    manifest_path: str | Path,
+    output_root: Path,
+    execution_revision: str,
+    premanifest_path: Path,
+    manifest_digest: str,
+) -> dict[str, Any]:
+    run_id = row["run_id"]
+    run_dir = output_root / run_id
+    if run_dir.exists() and any(run_dir.iterdir()):
+        raise K11PilotContractError(f"K11 P0 run directory already contains data: {run_dir}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    validation_path = run_dir / "p0_validation.json"
+    supervision = supervise_process(
+        _worker_command(
+            manifest_path,
+            output_root,
+            run_id=run_id,
+            execution_revision=execution_revision,
+            premanifest_path=premanifest_path,
+            manifest_digest=manifest_digest,
+        ),
+        cwd=ROOT,
+        timeout_seconds=RUN_PROCESS_TIMEOUT_SECONDS,
+        completion_grace_seconds=RUN_COMPLETION_GRACE_SECONDS,
+        termination_grace_seconds=RUN_TERMINATION_GRACE_SECONDS,
+        kill_grace_seconds=RUN_KILL_GRACE_SECONDS,
+        artifact_ready_path=validation_path,
+    )
+    (run_dir / "process_supervision.json").write_text(
+        json.dumps(supervision, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if validation_path.is_file():
+        summary = json.loads(validation_path.read_text(encoding="utf-8"))
+    else:
+        summary = _failed_process_summary(run_id, supervision)
+    summary = _apply_process_outcome(summary, supervision)
+    validation_path.write_text(
+        json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
+def run_development_smoke(
+    manifest_path: str | Path, *, output_root: str | Path, run_id: str,
+) -> dict[str, Any]:
+    manifest = load_p0_manifest(manifest_path)
+    matching_rows = [row for row in manifest["runs"] if row["run_id"] == run_id]
+    if len(matching_rows) != 1:
+        raise K11PilotContractError(f"development smoke run_id is not unique: {run_id}")
+    root = Path(output_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    _, revision, premanifest_path, identity = _prepare_execution_identity(root)
+    summary = _run_isolated_row(
+        matching_rows[0],
+        manifest_path=manifest_path,
+        output_root=root,
+        execution_revision=revision,
+        premanifest_path=premanifest_path,
+        manifest_digest=_manifest_digest(manifest),
+    )
+    counts = summary.get("event_type_counts", {})
+    smoke_passed = (
+        summary.get("runtime_error") is None
+        and summary.get("trace_validation", {}).get("valid") is True
+        and summary.get("analysis_validation", {}).get("valid") is True
+        and counts.get("k11.model_call_started", 0) > 0
+        and counts.get("k11.tool_call_entered", 0) > 0
+        and counts.get("k11.eac_action_prepared", 0) > 0
+        and summary.get("primary_terminal_count", 0) > 0
+    )
+    artifact = {
+        "artifact_id": "minecraft-k11-development-smoke-validation",
+        "artifact_version": 1,
+        "study_phase": "K11-P0-development-smoke",
+        "formal_p0": False,
+        "prevalence_inference_allowed": False,
+        "smoke_passed": smoke_passed,
+        "manifest": str(Path(manifest_path).resolve()),
+        "execution_revision": revision,
+        "runtime_digest": identity["runtime_digest"],
+        "premanifest_identity": identity["premanifest_identity"],
+        "run": summary,
+    }
+    (root / "DEV_SMOKE_VALIDATION.json").write_text(
+        json.dumps(artifact, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return artifact
+
+
 def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> dict[str, Any]:
     manifest = load_p0_manifest(manifest_path)
     root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    execution, revision, premanifest_path, identity = _prepare_execution_identity(root)
+    _, revision, premanifest_path, identity = _prepare_execution_identity(root)
     summaries = []
+    manifest_digest = _manifest_digest(manifest)
 
     for row in manifest["runs"]:
-        run_id = row["run_id"]
-        run_dir = root / run_id
-        if run_dir.exists() and any(run_dir.iterdir()):
-            raise K11PilotContractError(f"K11 P0 run directory already contains data: {run_dir}")
-        run_dir.mkdir(parents=True, exist_ok=True)
-        trace = K11TraceRecorder(run_id)
-        error = None
-        error_type = None
-        result = None
-        try:
-            with K11ProcessInstrumentation(trace):
-                result = run_villageragent(**_runtime_kwargs(
-                    row,
-                    run_dir,
-                    execution=execution,
-                    execution_revision=revision,
-                    premanifest_path=premanifest_path,
-                ))
-        except BaseException as exc:
-            error = str(exc)
-            error_type = type(exc).__name__
-            (run_dir / "exception.txt").write_text(
-                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
-                encoding="utf-8",
-            )
-        finally:
-            trace.write_json(run_dir / "k11_trace.json")
-
-        trace_artifact = trace.artifact()
-        generic_validation = validate_trace(trace_artifact)
-        validation = validate_p0_trace(trace_artifact)
-        event_counts = _event_type_counts(trace_artifact)
-        model_call_sources = sorted({
-            event.get("source")
-            for event in trace_artifact.get("events", [])
-            if event.get("event_type") == "k11.model_call_started"
-            and isinstance(event.get("source"), str)
-        })
-        actor_threads = {
-            (event.get("actor_id"), event.get("thread_id"))
-            for event in trace_artifact.get("events", [])
-            if event.get("event_type") == "k11.agent_step_started"
-            and isinstance(event.get("actor_id"), str)
-            and isinstance(event.get("thread_id"), int)
-        }
-        try:
-            analysis = analyze_trace(trace_artifact)
-        except Exception as exc:
-            analysis = {
-                "artifact_id": "minecraft-k11-trace-analysis-draft",
-                "artifact_version": 1,
-                "prevalence_inference_allowed": False,
-                "run_id": run_id,
-                "analysis_error": str(exc),
-                "analysis_error_type": type(exc).__name__,
-            }
-        analysis_validation = validate_p0_analysis(analysis, trace_artifact)
-        (run_dir / "k11_analysis.json").write_text(
-            json.dumps(analysis, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        summary = {
-            "run_id": run_id,
-            "runtime_error": error,
-            "runtime_error_type": error_type,
-            "trace_validation": validation,
-            "generic_trace_validation": generic_validation,
-            "analysis_validation": analysis_validation,
-            "event_type_counts": event_counts,
-            "model_call_sources": model_call_sources,
-            "agent_thread_pairs": sorted([list(item) for item in actor_threads]),
-            "offline_analysis_error": analysis.get("analysis_error"),
-            "runtime_returned": result is not None,
-        }
-        (run_dir / "p0_validation.json").write_text(
-            json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        summaries.append(summary)
+        summaries.append(_run_isolated_row(
+            row,
+            manifest_path=manifest_path,
+            output_root=root,
+            execution_revision=revision,
+            premanifest_path=premanifest_path,
+            manifest_digest=manifest_digest,
+        ))
 
     calibration_error = None
     try:
@@ -384,7 +597,52 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Run K11 P0 instrumentation validation")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output-root", required=True)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--worker-run-id")
+    mode.add_argument("--development-smoke-run-id")
+    mode.add_argument("--formal-p0", action="store_true")
+    parser.add_argument("--execution-revision")
+    parser.add_argument("--premanifest")
+    parser.add_argument("--manifest-digest")
     args = parser.parse_args(argv)
+    if args.worker_run_id:
+        if not args.execution_revision or not args.premanifest or not args.manifest_digest:
+            parser.error(
+                "worker mode requires --execution-revision, --premanifest, and --manifest-digest"
+            )
+        manifest = load_p0_manifest(args.manifest)
+        if _manifest_digest(manifest) != args.manifest_digest:
+            raise K11PilotContractError("worker manifest differs from the parent-validated snapshot")
+        matching_rows = [row for row in manifest["runs"] if row["run_id"] == args.worker_run_id]
+        if len(matching_rows) != 1:
+            raise K11PilotContractError(
+                f"worker run_id must identify exactly one manifest row: {args.worker_run_id}"
+            )
+        execution = RuntimeExecution.resolve(ROOT)
+        premanifest_path = Path(args.premanifest).resolve()
+        verify_eac_premanifest(
+            premanifest_path,
+            execution=execution,
+            execution_revision=args.execution_revision,
+        )
+        _run_single_row(
+            matching_rows[0],
+            Path(args.output_root).resolve() / args.worker_run_id,
+            execution=execution,
+            execution_revision=args.execution_revision,
+            premanifest_path=premanifest_path,
+        )
+        return 0
+    if args.development_smoke_run_id:
+        smoke = run_development_smoke(
+            args.manifest,
+            output_root=args.output_root,
+            run_id=args.development_smoke_run_id,
+        )
+        print(json.dumps(smoke, ensure_ascii=True, indent=2, sort_keys=True))
+        return 0 if smoke["smoke_passed"] is True else 2
+    if not args.formal_p0:
+        parser.error("select --development-smoke-run-id or explicitly select --formal-p0")
     aggregate = run_p0_manifest(args.manifest, output_root=args.output_root)
     print(json.dumps(aggregate, ensure_ascii=True, indent=2, sort_keys=True))
     return 0 if aggregate["p0_passed"] is True else 2

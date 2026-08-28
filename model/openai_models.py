@@ -1,17 +1,17 @@
-import concurrent.futures
 import logging
+import math
 import os
 import time
-import openai
 from openai import OpenAI
 import tiktoken
 from model.abstract_language_model import AbstractLanguageModel
 import json
-from retry import retry
 import random
 import threading
+import queue
 import httpx
 import base64
+import hashlib
 
 from env.runtime_paths import RuntimePaths, atomic_write_json
 from model.utils import extract_info
@@ -21,6 +21,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 _OPENAI_STATE_LOCK = threading.RLock()
+DEFAULT_OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
+DEFAULT_OPENAI_MODEL_CALL_ATTEMPTS = 3
+DEFAULT_OPENAI_RETRY_DELAY_SECONDS = 1.0
+
+
+class ModelOutputContractError(ValueError):
+    """A successful provider response that fails the required output contract."""
+
+    def __init__(self, category: str, message: str):
+        super().__init__(message)
+        self.category = category
+
+
+class ProviderCallTerminationError(TimeoutError):
+    """A timed-out provider call whose worker could not be stopped cooperatively."""
 
 
 def _contains_tag(content: str, tag: str) -> bool:
@@ -39,13 +54,28 @@ class OpenAILanguageModel(AbstractLanguageModel):
     #              enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None):
     def __init__(self, api_key="", api_model="qwen-max", evaluation_strategy="value", api_base="https://api.chatanywhere.tech/v1",
                  enable_ReAct_prompting=True, strategy="cot", role_name="", api_key_list=None,
-                 runtime_paths: RuntimePaths | None = None):
+                 runtime_paths: RuntimePaths | None = None,
+                 request_timeout_seconds: float = DEFAULT_OPENAI_REQUEST_TIMEOUT_SECONDS,
+                 model_call_attempts: int = DEFAULT_OPENAI_MODEL_CALL_ATTEMPTS,
+                 retry_delay_seconds: float = DEFAULT_OPENAI_RETRY_DELAY_SECONDS):
         self.runtime_paths = runtime_paths or RuntimePaths.from_environment()
         if api_key == "" or api_key is None:
             api_key = os.environ.get("OPENAI_API_KEY", "")
         if api_key == "":
             raise Exception("Please provide OpenAI API key")
         self.api_key = api_key
+        request_timeout_seconds = float(request_timeout_seconds)
+        retry_delay_seconds = float(retry_delay_seconds)
+        if not math.isfinite(request_timeout_seconds) or request_timeout_seconds <= 0:
+            raise ValueError("OpenAI request timeout must be positive")
+        if type(model_call_attempts) is not int or model_call_attempts < 1:
+            raise ValueError("OpenAI model call attempts must be a positive integer")
+        if not math.isfinite(retry_delay_seconds) or retry_delay_seconds < 0:
+            raise ValueError("OpenAI retry delay must be non-negative")
+        self.request_timeout_seconds = request_timeout_seconds
+        self.model_call_attempts = model_call_attempts
+        self.retry_delay_seconds = retry_delay_seconds
+        self._response_metadata = threading.local()
 
         if api_key_list:
             self.api_key_list = list(set(api_key_list))
@@ -81,12 +111,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
         self.strategy = strategy
         self.evaluation_strategy = evaluation_strategy
 
-        self.client = OpenAI(
-            # This is the default and can be omitted
-            api_key=random.choice(self.api_key_list) if len(self.api_key_list) > 0 else self.api_key,
-            base_url=self.api_base,
-            max_retries=5,
-        )
+        self.client = self._new_client()
 
         with _OPENAI_STATE_LOCK:
             self.runtime_paths.data_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +135,70 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
     def evaluate_states(self, states):
         pass
+
+    def _new_client(self):
+        return OpenAI(
+            api_key=random.choice(self.api_key_list) if self.api_key_list else self.api_key,
+            base_url=self.api_base,
+            max_retries=0,
+            timeout=httpx.Timeout(self.request_timeout_seconds, connect=5.0),
+        )
+
+    def _diagnostic_base(self, *, attempt: int, model: str, stream: bool) -> dict:
+        endpoint_hash = hashlib.sha256(str(self.api_base).encode("utf-8")).hexdigest()
+        return {
+            "schema_version": "openai-model-diagnostic/1",
+            "attempt": attempt,
+            "model": model,
+            "stream": stream,
+            "endpoint_sha256": endpoint_hash,
+        }
+
+    def _write_diagnostic(self, value: dict) -> None:
+        path = self.runtime_paths.openai_diagnostics
+        with _OPENAI_STATE_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as output:
+                output.write(json.dumps(value, ensure_ascii=True, sort_keys=True) + "\n")
+
+    def _bounded_provider_call(self, callback, provider_client):
+        outcome = queue.Queue(maxsize=1)
+
+        def invoke():
+            try:
+                outcome.put((True, callback()))
+            except BaseException as exc:
+                outcome.put((False, exc))
+
+        worker = threading.Thread(target=invoke, name="openai-provider-call", daemon=True)
+        worker.start()
+        try:
+            succeeded, value = outcome.get(timeout=self.request_timeout_seconds)
+        except queue.Empty:
+            close = getattr(provider_client, "close", None)
+            if callable(close):
+                close()
+            worker.join(timeout=1.0)
+            if worker.is_alive():
+                raise ProviderCallTerminationError(
+                    "OpenAI request worker remained active after its wall-clock budget"
+                )
+            raise TimeoutError("OpenAI request exceeded the model-call wall-clock budget")
+        if not succeeded:
+            raise value
+        return value
+
+    @staticmethod
+    def _transport_metadata(exc: Exception) -> dict:
+        status_code = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status_code is None and response is not None:
+            status_code = getattr(response, "status_code", None)
+        return {
+            "outcome": "transport_failure",
+            "error_type": type(exc).__name__,
+            "http_status": status_code if isinstance(status_code, int) else None,
+        }
 
     def cache_api_call_handler(self, prompt, max_tokens, temperature, k=1, stop=None):
         cache_path = self.runtime_paths.openai_cache
@@ -201,44 +290,98 @@ class OpenAILanguageModel(AbstractLanguageModel):
         num_tokens = len(encoding.encode(string))
         return num_tokens
 
-    def gpt_api(self, messages: list, model: str, temperature: float):
+    def gpt_api(self, messages: list, model: str, temperature: float,
+                max_tokens: int | None = None, provider_client=None):
         """为提供的对话消息创建新的回答
 
         Args:
             messages (list): 完整的对话消息
         """
         # logger.info("api")
-        start_time = time.time()
+        start_time = time.monotonic()
 
-        if "qwen3" in model:
-            completion = self.client.chat.completions.create(model=model, messages=messages, temperature=temperature, extra_body={"enable_thinking": False})
-        else:
-            completion = self.client.chat.completions.create(model=model, messages=messages, temperature=temperature)
+        provider_client = provider_client or self.client
+
+        def complete():
+            if "qwen3" in model:
+                return provider_client.chat.completions.create(
+                    model=model, messages=messages, temperature=temperature,
+                    max_tokens=max_tokens, extra_body={"enable_thinking": False},
+                )
+            return provider_client.chat.completions.create(
+                model=model, messages=messages, temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+        completion = self._bounded_provider_call(complete, provider_client)
+        choice = completion.choices[0]
+        content = choice.message.content or ""
+        self._response_metadata.value = {
+            "chunk_count": 1,
+            "public_content_chunks": 1 if content else 0,
+            "public_content_chars": len(content),
+            "reasoning_chunks": 0,
+            "reasoning_chars": 0,
+            "finish_reason": getattr(choice, "finish_reason", None),
+        }
         # logger.warning(completion.choices[0].message.content)
-        logger.debug(f"Time taken: {time.time() - start_time}")
+        logger.debug(f"Time taken: {time.monotonic() - start_time}")
         return completion
     
-    def gpt_api_stream(self, messages: list, model: str, temperature: float):
+    def gpt_api_stream(self, messages: list, model: str, temperature: float,
+                       max_tokens: int | None = None, provider_client=None):
         """为提供的对话消息创建新的回答 (流式传输)
 
         Args:
             messages (list): 完整的对话消息
         """
         # logger.info("streaming api")
-        start_time = time.time()
-        content = ""
+        start_time = time.monotonic()
+        provider_client = provider_client or self.client
         # print(messages)
-        stream = self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True,
-            temperature=temperature,
-        )
-        for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                # print(chunk.choices[0].delta.content, end="")
-                content += chunk.choices[0].delta.content
-        logger.debug(f"Time taken: {time.time() - start_time}")
+        def consume_stream():
+            stream = provider_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            stream_content = ""
+            chunk_count = 0
+            content_chunks = 0
+            reasoning_chunks = 0
+            reasoning_chars = 0
+            finish_reason = None
+            for chunk in stream:
+                chunk_count += 1
+                choice = chunk.choices[0]
+                delta = choice.delta
+                if delta.content is not None:
+                    content_chunks += 1
+                    stream_content += delta.content
+                reasoning = (
+                    getattr(delta, "reasoning", None)
+                    or getattr(delta, "reasoning_content", None)
+                    or getattr(delta, "thinking", None)
+                )
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_chunks += 1
+                    reasoning_chars += len(reasoning)
+                if getattr(choice, "finish_reason", None) is not None:
+                    finish_reason = choice.finish_reason
+            return stream_content, {
+                "chunk_count": chunk_count,
+                "public_content_chunks": content_chunks,
+                "public_content_chars": len(stream_content),
+                "reasoning_chunks": reasoning_chunks,
+                "reasoning_chars": reasoning_chars,
+                "finish_reason": finish_reason,
+            }
+
+        content, response_metadata = self._bounded_provider_call(consume_stream, provider_client)
+        self._response_metadata.value = response_metadata
+        logger.debug(f"Time taken: {time.monotonic() - start_time}")
         return content
 
     def filter_emoji(self, text: str) -> str:
@@ -251,40 +394,26 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 continue
         return ''.join(ret_str)
 
-    @retry(tries=10, delay=5, backoff=2, max_delay=60)
     def few_shot_generate_thoughts(self, system_prompt: str = "", example_prompt: [str] or str = [], max_tokens=1024,
                                    temperature=0.0, k=1, stop=None, cache_enabled=False, api_model="", check_tags=[],
                                    json_check=False, stream=True):
-        self.client = OpenAI(
-            # This is the default and can be omitted
-            api_key=random.choice(self.api_key_list) if len(self.api_key_list) > 0 else self.api_key,
-            base_url=self.api_base,
-            max_retries=5,
-        )
-
-        # print(random.choice(self.api_key_list) if len(self.api_key_list) > 0 else self.api_key)
-        # print(self.api_base)
-        # print(self.api_model)
         if api_model == "":
             api_model = self.api_model
-        # else:
-        #     if api_model not in OpenAILanguageModel._supported_models:
-        #         raise Exception(f"only support {OpenAILanguageModel._supported_models}, but got {api_model}")
         if type(example_prompt) == str:
             example_prompt = [example_prompt]
         assert self.use_chat_api == True, "few shot generation only support chat api"
         assert len(example_prompt) % 2 == 1 or len(example_prompt) == 0, "example prompt should be odd number or empty"
 
-        # logger.info("waiting for generating thoughts") 
-        # logger.info(f"using api model {api_model}")
         prompt = str(system_prompt) + "\n" + "\n".join(example_prompt)
         if cache_enabled:
             content = self.cache_api_call_handler(prompt, max_tokens, temperature, k, stop)
             if content is not None:
                 return content
-        start_time = time.time()
-        while True:
-            # try:
+
+        for attempt in range(1, self.model_call_attempts + 1):
+            start_time = time.monotonic()
+            provider_client = self._new_client()
+            self.client = provider_client
             messages = [{"role": "system", "content": system_prompt}]
             for i in range(len(example_prompt)):
                 if i % 2 == 0:
@@ -292,30 +421,68 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 else:
                     messages.append({"role": "assistant", "content": example_prompt[i]})
 
-            # dynamic change timeout by token number
-            # messages = self.guard_token_number(messages, api_model, max_tokens)
-            if stream:
-                content = self.gpt_api_stream(messages, api_model, temperature)
-                # usage_data = {"prompt_tokens": self.num_tokens_from_string(prompt, api_model),
-                #             "completion_tokens": self.num_tokens_from_string(content, api_model)}
-                # self.update_token_usage(usage_data["prompt_tokens"], usage_data["completion_tokens"])
-            else:
-                response = self.gpt_api(messages, api_model, temperature)
+            try:
+                if stream:
+                    content = self.gpt_api_stream(
+                        messages, api_model, temperature, max_tokens=max_tokens,
+                        provider_client=provider_client,
+                    )
+                else:
+                    response = self.gpt_api(
+                        messages, api_model, temperature, max_tokens=max_tokens,
+                        provider_client=provider_client,
+                    )
+                    content = response.choices[0].message.content or ""
+            except Exception as exc:
+                diagnostic = self._diagnostic_base(
+                    attempt=attempt, model=api_model, stream=stream,
+                )
+                diagnostic.update(self._transport_metadata(exc))
+                diagnostic["duration_ms"] = round(
+                    (time.monotonic() - start_time) * 1000, 3,
+                )
+                self._write_diagnostic(diagnostic)
+                if isinstance(exc, ProviderCallTerminationError) or attempt >= self.model_call_attempts:
+                    raise
+                time.sleep(self.retry_delay_seconds * attempt)
+                continue
 
-                # self.update_token_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
-
-                content = response.choices[0].message.content            
-            # print("-"*70)
-            # print(content)
-            # print("-"*70)
             content = self.filter_emoji(content)
+            response_metadata = dict(getattr(self._response_metadata, "value", {}))
+            missing_tags = [tag for tag in check_tags if not _contains_tag(content, tag)]
+            parsed_count = len(extract_info(content)) if json_check and content else 0
+            category = None
+            if missing_tags:
+                if not content and response_metadata.get("finish_reason") == "length":
+                    category = "truncated_public_content"
+                elif not content:
+                    category = "empty_public_content"
+                else:
+                    category = "missing_required_tags"
+            elif json_check and parsed_count == 0:
+                category = "invalid_json_output"
 
-            for tag in check_tags:
-                if not _contains_tag(content, tag):
-                    raise Exception(f"tag {tag} not in content {content}")
-            if json_check:
-                if len(extract_info(content)) == 0:
-                    raise Exception(f"content {content} is not json")
+            diagnostic = self._diagnostic_base(
+                attempt=attempt, model=api_model, stream=stream,
+            )
+            diagnostic.update(response_metadata)
+            diagnostic.update({
+                "duration_ms": round((time.monotonic() - start_time) * 1000, 3),
+                "outcome": "model_contract_failure" if category else "success",
+                "validation_category": category,
+                "missing_tag_count": len(missing_tags),
+                "json_object_count": parsed_count,
+            })
+            self._write_diagnostic(diagnostic)
+            if category:
+                if attempt >= self.model_call_attempts:
+                    raise ModelOutputContractError(
+                        category,
+                        f"model output contract failed: {category}",
+                    )
+                time.sleep(self.retry_delay_seconds * attempt)
+                continue
+
             if cache_enabled:
                 self.save_cache(prompt, content)
             with _OPENAI_STATE_LOCK:
@@ -324,14 +491,9 @@ class OpenAILanguageModel(AbstractLanguageModel):
                         "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
                     )
 
-            # logger.info(f"LLM API Time taken: {time.time() - start_time}")
-            # if self.runtime_paths.llm_inference.exists():
-            #     with self.runtime_paths.llm_inference.open("r") as log_file:
-            #         log = json.load(log_file)
-            #     log["time"] += time.time() - start_time
-            #     with self.runtime_paths.llm_inference.open("w") as log_file:
-            #         json.dump(log, log_file)
             return content
+
+        raise RuntimeError("OpenAI model call exhausted without a terminal outcome")
             
             # except openai.APIConnectionError as e:
             #     logger.warning("[Proxy] The server could not be reached")
@@ -377,17 +539,9 @@ class OpenAILanguageModel(AbstractLanguageModel):
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
 
-    @retry(tries=10, delay=5, backoff=2, max_delay=60)
     def generate_with_image(self, prompt_before_image: [str] or str, image_path: str, prompt_after_image: [str] or str="", system_prompt: str=None, max_tokens: int=-1,
                  temperature: float=0.0, k: int=1, stop=None, cache_enabled: bool=True, api_model: str="",
                  check_tags: list=[], json_check: bool=False, stream: bool=True):
-        
-        self.client = OpenAI(
-            api_key=random.choice(self.api_key_list) if len(self.api_key_list) > 0 else self.api_key,
-            base_url=self.api_base,
-            max_retries=5,
-        )
-        
         if api_model == "":
             api_model = self.api_model
         # else:
@@ -429,75 +583,88 @@ class OpenAILanguageModel(AbstractLanguageModel):
             messages.append({"role": "user", "content": prompt})
         
         
+        prompt = str(system_prompt) + "\n" + "\n".join(prompt_before_image + prompt_after_image)
         if cache_enabled:
-            prompt = str(system_prompt) + "\n" + "\n".join(prompt_before_image + prompt_after_image)
             content = self.cache_api_call_handler(prompt, max_tokens, temperature, k, stop)
             if content is not None:
                 return content
-        
-        start_time = time.time()
-        while True:
+
+        requested_max_tokens = None if max_tokens == -1 else max_tokens
+        for attempt in range(1, self.model_call_attempts + 1):
+            start_time = time.monotonic()
+            provider_client = self._new_client()
+            self.client = provider_client
             try:
                 if stream:
-                    content = self.gpt_api_stream(messages, api_model, temperature)
+                    content = self.gpt_api_stream(
+                        messages, api_model, temperature, max_tokens=requested_max_tokens,
+                        provider_client=provider_client,
+                    )
                     usage_data = {"prompt_tokens": self.num_tokens_from_string(prompt, api_model),
                                     "completion_tokens": self.num_tokens_from_string(content, api_model)}
-                    self.update_token_usage(usage_data["prompt_tokens"], usage_data["completion_tokens"])
                 else:
-                    response = self.gpt_api(messages, api_model, temperature)
-                    self.update_token_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
-                    content = response.choices[0].message.content
+                    response = self.gpt_api(
+                        messages, api_model, temperature, max_tokens=requested_max_tokens,
+                        provider_client=provider_client,
+                    )
+                    usage_data = {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    }
+                    content = response.choices[0].message.content or ""
+            except Exception as exc:
+                diagnostic = self._diagnostic_base(attempt=attempt, model=api_model, stream=stream)
+                diagnostic.update(self._transport_metadata(exc))
+                diagnostic["duration_ms"] = round((time.monotonic() - start_time) * 1000, 3)
+                self._write_diagnostic(diagnostic)
+                if isinstance(exc, ProviderCallTerminationError) or attempt >= self.model_call_attempts:
+                    raise
+                time.sleep(self.retry_delay_seconds * attempt)
+                continue
 
-                for tag in check_tags:
-                    if not _contains_tag(content, tag):
-                        raise Exception(f"tag {tag} not in content {content}")
-                if json_check:
-                    if len(extract_info(content)) == 0:
-                        raise Exception(f"content {content} is not json")
-                if cache_enabled:
-                    self.save_cache(prompt, content)
-                with _OPENAI_STATE_LOCK:
-                    with self.runtime_paths.openai_log.open("a") as log_file:
-                        log_file.write(
-                            "\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n"
-                        )
-                    if self.runtime_paths.llm_inference.exists():
-                        with self.runtime_paths.llm_inference.open("r") as log_file:
-                            log = json.load(log_file)
-                        log["time"] += time.time() - start_time
-                        atomic_write_json(self.runtime_paths.llm_inference, log)
-                return content
+            content = self.filter_emoji(content)
+            response_metadata = dict(getattr(self._response_metadata, "value", {}))
+            missing_tags = [tag for tag in check_tags if not _contains_tag(content, tag)]
+            parsed_count = len(extract_info(content)) if json_check and content else 0
+            category = None
+            if missing_tags:
+                if not content and response_metadata.get("finish_reason") == "length":
+                    category = "truncated_public_content"
+                elif not content:
+                    category = "empty_public_content"
+                else:
+                    category = "missing_required_tags"
+            elif json_check and parsed_count == 0:
+                category = "invalid_json_output"
 
-            except openai.APIConnectionError as e:
-                logger.warning("[Proxy] The server could not be reached")
+            diagnostic = self._diagnostic_base(attempt=attempt, model=api_model, stream=stream)
+            diagnostic.update(response_metadata)
+            diagnostic.update({
+                "duration_ms": round((time.monotonic() - start_time) * 1000, 3),
+                "outcome": "model_contract_failure" if category else "success",
+                "validation_category": category,
+                "missing_tag_count": len(missing_tags),
+                "json_object_count": parsed_count,
+            })
+            self._write_diagnostic(diagnostic)
+            if category:
+                if attempt >= self.model_call_attempts:
+                    raise ModelOutputContractError(category, f"model output contract failed: {category}")
+                time.sleep(self.retry_delay_seconds * attempt)
+                continue
 
-            except openai.RateLimitError as e:
-                sleep_duratoin = os.environ.get("OPENAI_RATE_TIMEOUT", 30)
-                logger.warning("A 429 status code was received; we should back off a bit.")
-                raise e
+            self.update_token_usage(usage_data["prompt_tokens"], usage_data["completion_tokens"])
+            if cache_enabled:
+                self.save_cache(prompt, content)
+            with _OPENAI_STATE_LOCK:
+                with self.runtime_paths.openai_log.open("a") as log_file:
+                    log_file.write("\n" + "-----------" + "\n" + "Prompt : " + str(messages) + "\n")
+                if self.runtime_paths.llm_inference.exists():
+                    with self.runtime_paths.llm_inference.open("r") as log_file:
+                        log = json.load(log_file)
+                    log["time"] += time.monotonic() - start_time
+                    atomic_write_json(self.runtime_paths.llm_inference, log)
+            return content
 
-            except openai.APIStatusError as e:
-                logger.warning("[Proxy] Another non-200-range status code was received")
-                logger.warning(e.status_code)
-                if e.status_code == 403:
-                    if self.api_key in self.api_key_list:
-                        self.api_key_list.remove(self.api_key)
-                logger.warning(e.response)
-                self.client = OpenAI(
-                    api_key=random.choice(self.api_key_list) if len(self.api_key_list) > 0 else self.api_key,
-                    base_url=self.api_base,
-                    max_retries=5,
-                )
-
-            except openai.InternalServerError as e:
-                logger.warning("Something went wrong on OpenAI's end")
-                logger.warning(e.status_code)
-                logger.warning(e.response)
-                raise e
-
-            except Exception as e:
-                logger.warning("Something other than an HTTP error occurred")
-                logger.warning(e)
-                logger.warning(e.__cause__)
-                raise e
+        raise RuntimeError("OpenAI image model call exhausted without a terminal outcome")
                

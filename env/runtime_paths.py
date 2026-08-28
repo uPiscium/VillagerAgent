@@ -126,6 +126,10 @@ class RuntimePaths:
         return self.data_dir / "openai.logs"
 
     @property
+    def openai_diagnostics(self) -> Path:
+        return self.data_dir / "openai_diagnostics.jsonl"
+
+    @property
     def openai_cache(self) -> Path:
         return self.cache_dir / "openai.cache"
 

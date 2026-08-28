@@ -23,14 +23,14 @@
   "provenance_sources": {
     "model_configuration": "configs/minecraft/approved-experiments/minecraft-judged-production-v1.json",
     "minecraft_target_configuration": "configs/minecraft/experiments/comparison-2026-07-20.json",
-    "note": "P0 reuses checked-in infrastructure identities only; it does not reuse judged tasks, outcomes, or semantic interventions. The operator-authorized temporary Ollama endpoint replacement must be verified at execution time."
+    "note": "P0 reuses checked-in infrastructure identities only; it does not reuse judged tasks, outcomes, or semantic interventions. After the failed 2c72da1 cohort showed sustained proxy 504s, the pre-existing approved direct/internal Ollama endpoint was selected as an infrastructure-only remediation before any replacement cohort; old cohorts remain unpooled."
   },
   "runs": [
     {
       "run_id": "K11-P0-01",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -51,7 +51,7 @@
       "run_id": "K11-P0-02",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -72,7 +72,7 @@
       "run_id": "K11-P0-03",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -93,7 +93,7 @@
       "run_id": "K11-P0-04",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -114,7 +114,7 @@
       "run_id": "K11-P0-05",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -135,7 +135,7 @@
       "run_id": "K11-P0-06",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -156,7 +156,7 @@
       "run_id": "K11-P0-07",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
@@ -177,7 +177,7 @@
       "run_id": "K11-P0-08",
       "runtime": {
         "api_model": "gemma4:12b",
-        "api_base": "https://ollama.arc.upiscium.dev",
+        "api_base": "http://10.255.255.5:11434",
         "task_type": "none",
         "task_idx": 0,
         "agent_num": 2,
