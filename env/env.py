@@ -15,6 +15,7 @@ import os
 from env.utils import init_logger
 import logging
 from pathlib import Path
+from langchain_core.pydantic_v1 import BaseModel
 
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
 from env.runtime_execution import RuntimeExecution
@@ -350,11 +351,49 @@ class VillagerBench:
         return [self._guard_tool_action(tool, actor_name=actor_name) for tool in tools
                 if runtime.supports_tool(getattr(tool, "name", ""))]
 
+    @staticmethod
+    def _copy_tool_for_guard(tool):
+        """Copy the tool's callable binding before installing an actor wrapper.
+
+        LangChain's Pydantic-v1 tools implement ``__copy__`` by sharing their
+        internal ``__dict__``.  Assigning ``func`` on such a shallow copy also
+        mutates the raw tool and every earlier actor copy, creating nested
+        cross-actor guards.  Split the Pydantic-v1 instance bookkeeping while
+        intentionally retaining immutable schemas and callback configuration.
+        """
+        guarded_tool = copy(tool)
+        if guarded_tool is tool:
+            raise RuntimeError("Minecraft guarded tool must support independent copying")
+        source_state = getattr(tool, "__dict__", None)
+        if source_state is not None and getattr(guarded_tool, "__dict__", None) is source_state:
+            # Pydantic-v1's __copy__ returns a distinct model object but reuses
+            # this mapping.  Split only the object state; callback/schema
+            # objects remain intentionally shared and immutable here.
+            if not isinstance(tool, BaseModel):
+                raise RuntimeError("Minecraft guarded tool copy shares unsupported mutable state")
+            object.__setattr__(guarded_tool, "__dict__", source_state.copy())
+            fields_set = getattr(tool, "__fields_set__", None)
+            if isinstance(fields_set, set):
+                object.__setattr__(guarded_tool, "__fields_set__", fields_set.copy())
+            constructor_state = getattr(tool, "_lc_kwargs", None)
+            if isinstance(constructor_state, dict):
+                object.__setattr__(guarded_tool, "_lc_kwargs", constructor_state.copy())
+        return guarded_tool
+
+    @staticmethod
+    def _set_tool_func(tool, function) -> None:
+        tool.func = function
+        constructor_state = getattr(tool, "_lc_kwargs", None)
+        if isinstance(constructor_state, dict):
+            constructor_state["func"] = function
+
     def _guard_tool_action(self, tool, *, actor_name: str | None = None):
         original = getattr(tool, "func", None)
         if not callable(original):
+            if getattr(self, "_eac_runtime", None) is not None:
+                raise RuntimeError("Minecraft EAC guarded tool requires callable func")
             return tool
-        guarded_tool = copy(tool)
+        guarded_tool = self._copy_tool_for_guard(tool)
 
         @wraps(original)
         def guarded(*args, **kwargs):
@@ -370,7 +409,7 @@ class VillagerBench:
             finally:
                 self._tool_action_exit()
 
-        guarded_tool.func = guarded
+        self._set_tool_func(guarded_tool, guarded)
         return guarded_tool
 
     def launch(self, debug: bool = False, fast_api=False):
