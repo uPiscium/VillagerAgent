@@ -83,6 +83,14 @@ _FROZEN_K6_ACTIONS = {
            "minecraft", "recipient_observed", ("target_player_name",), "current",
            ("target_player_name", "item_name", "item_count")),
 }
+_DISCLOSED_SOURCE_PATHS = frozenset({
+    "benchmarks/minecraft/k1_f1.py",
+    "benchmarks/minecraft/k2_dependency_ablation.py",
+    "benchmarks/minecraft/k3a_actor_scope.py",
+    "benchmarks/minecraft/k3b_contradiction.py",
+    "tests/test_minecraft_eac_runtime.py",
+    "tests/test_minecraft_k6_fixture.py",
+})
 
 EXPECTED_SELECTED = (
     ("K10-I1-H1", "K10-P-I1-04", "sha256:25621faadb7d12c82afc8ae7c745e374f76e22e2c6602955ac880d5d12e2e711"),
@@ -439,16 +447,21 @@ def _validate_result_schema(document: Mapping[str, Any]) -> str:
     return digest
 
 
+def _validate_frozen_source_path(relative: object) -> str:
+    if (not isinstance(relative, str) or not relative or "\\" in relative
+            or "\x00" in relative or ":" in relative or relative.startswith("/")
+            or any(part in ("", ".", "..") for part in relative.split("/"))
+            or PurePosixPath(relative).as_posix() != relative):
+        raise K10ContractError("K10 frozen source path is invalid")
+    return relative
+
+
 def _protected_content_bindings(protocol: Mapping[str, Any]) -> Mapping[str, str]:
     bindings = protocol.get("protected_runtime_content_bindings")
     if not isinstance(bindings, Mapping) or len(bindings) != 19:
         raise K10ContractError("K10 protected-content manifest mismatch")
     for relative, expected in bindings.items():
-        if (not isinstance(relative, str) or not relative or "\\" in relative
-                or "\x00" in relative or ":" in relative or relative.startswith("/")
-                or any(part in ("", ".", "..") for part in relative.split("/"))
-                or PurePosixPath(relative).as_posix() != relative):
-            raise K10ContractError("K10 protected-content path is invalid")
+        _validate_frozen_source_path(relative)
         if (not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None):
             raise K10ContractError("K10 protected-content digest is malformed")
     return bindings
@@ -521,9 +534,17 @@ def validate_live_k10_checkout(
 def audit_historical_submissions(
     protocol: Mapping[str, Any] | None = None,
     inventory: Iterable[K10InventoryItem] | None = None,
+    *, source_reader=None,
 ) -> dict[str, Any]:
     """Fail closed unless selected requests are absent from all disclosed sources."""
     protocol = dict(protocol or _load_json(PROTOCOL_PATH))
+    protocol_source = {
+        key: value for key, value in protocol.items()
+        if not key.startswith("validated_")
+    }
+    if (_validate_detached(protocol_source, "K10 historical-audit protocol")
+            != PROTOCOL_DIGEST):
+        raise K10ContractError("K10 historical-audit protocol identity mismatch")
     audit = protocol.get("historical_unseen_audit")
     if not isinstance(audit, Mapping):
         raise K10ContractError("K10 historical-unseen audit declaration is missing")
@@ -555,11 +576,17 @@ def audit_historical_submissions(
             or len(exposure.get("cells", [])) != 7):
         raise K10ContractError("K6 disclosed engineering exposure metadata changed")
     sources = audit.get("disclosed_source_bindings")
-    if not isinstance(sources, Mapping) or len(sources) != 6:
+    if not isinstance(sources, Mapping) or set(sources) != _DISCLOSED_SOURCE_PATHS:
         raise K10ContractError("K10 disclosed-source audit bindings are incomplete")
+    revision = protocol.get("subject_runtime_semantic_reference")
+    if revision != SUBJECT_RUNTIME_REFERENCE:
+        raise K10ContractError("K10 frozen source revision identity mismatch")
+    reader = source_reader or _read_frozen_source_blob
     for relative, declaration in sources.items():
-        path = ROOT / relative
-        if (not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()
+        relative = _validate_frozen_source_path(relative)
+        if (not isinstance(declaration, Mapping)
+                or re.fullmatch(r"[0-9a-f]{64}", str(declaration.get("sha256", ""))) is None
+                or hashlib.sha256(reader(revision, relative)).hexdigest()
                 != declaration.get("sha256")):
             raise K10ContractError(f"K10 disclosed submission source changed: {relative}")
         source_digests = {"sha256:" + value for value in declaration.get("request_content_digests", [])}
