@@ -21,8 +21,17 @@ import os
 import random
 import re
 import platform
+from urllib.parse import urlsplit
 from model.ollama_config import load_agent_api_key_list
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+from env.minecraft_bridge_diagnostics import (
+    BoundedDiagnosticRecorder,
+    CORRELATION_HEADER,
+    artifact_projection,
+    classify_request_exception,
+    new_correlation_id,
+    stable_process_start_ticks,
+)
 
 from env.runtime_execution import RuntimeExecution
 
@@ -35,7 +44,8 @@ class ToolActionBlockedError(RuntimeError):
 
 
 class MinecraftToolTimeoutError(TimeoutError):
-    def __init__(self, message: str, *, agent: str | None = None, tool: str | None = None):
+    def __init__(self, message: str, *, agent: str | None = None, tool: str | None = None,
+                 request_id: str | None = None, timeout_type: str | None = None):
         super().__init__(message)
         self.failure_detail = {
             "reason": "minecraft_tool_timeout",
@@ -47,6 +57,10 @@ class MinecraftToolTimeoutError(TimeoutError):
             self.failure_detail["agent"] = agent
         if tool is not None:
             self.failure_detail["tool"] = tool
+        if request_id is not None:
+            self.failure_detail["request_id"] = request_id
+        if timeout_type is not None:
+            self.failure_detail["timeout_type"] = timeout_type
 
 
 class MinecraftActionLogError(RuntimeError):
@@ -74,27 +88,103 @@ DEFAULT_BRIDGE_TERMINATE_GRACE_SECONDS = 2.0
 DEFAULT_BRIDGE_KILL_GRACE_SECONDS = 1.0
 
 
+def _request_monotonic_ns() -> int:
+    return time.monotonic_ns()
+
+
 def _minecraft_request(method: str, url: str, **kwargs):
+    diagnostic_kind = kwargs.pop("_diagnostic_kind", None)
     timeout = kwargs.pop("timeout", None) or (
         Agent.minecraft_connect_timeout_seconds,
         Agent.minecraft_read_timeout_seconds,
     )
+    connect_timeout, read_timeout = (
+        timeout if isinstance(timeout, tuple) else (float(timeout), float(timeout))
+    )
+    actor_name = Agent.agent_name_for_url(url)
+    route = urlsplit(url).path or "/"
+    tool_name = route.rstrip("/").rsplit("/", 1)[-1]
+    correlation_id = new_correlation_id()
+    headers = dict(kwargs.pop("headers", {}) or {})
+    headers[CORRELATION_HEADER] = correlation_id
+    started = _request_monotonic_ns()
+    common = {
+        "correlation_id": correlation_id,
+        "actor": actor_name,
+        "method": method,
+        "route": route,
+        "endpoint_identity": f"actor:{actor_name or 'unknown'}",
+        "started_monotonic_ns": started,
+    }
+    Agent.record_bridge_diagnostic(
+        actor_name, "caller_request_started", **common,
+        configured_connect_timeout_s=connect_timeout,
+        configured_read_timeout_s=read_timeout,
+        outcome_certainty="unknown", retry_safe=False,
+    )
+    if diagnostic_kind == "ping":
+        Agent.record_bridge_diagnostic(actor_name, "ping_started", **common)
     try:
-        return requests.request(method, url, timeout=timeout, **kwargs)
-    except requests.Timeout as exc:
-        tool_name = url.rstrip("/").rsplit("/", 1)[-1]
-        agent_name = Agent.agent_name_for_url(url)
-        Agent.last_tool_timeout = {
-            "agent": agent_name,
-            "tool": tool_name,
+        response = requests.request(method, url, timeout=timeout, headers=headers, **kwargs)
+    except requests.RequestException as exc:
+        completed = _request_monotonic_ns()
+        timeout_type = classify_request_exception(exc)
+        terminal = "caller_request_timed_out" if timeout_type.endswith("timeout") else "caller_request_failed"
+        terminal_fields = {
+            **common,
+            "completed_monotonic_ns": completed,
+            "elapsed_ns": max(0, completed - started),
+            "configured_connect_timeout_s": connect_timeout,
+            "configured_read_timeout_s": read_timeout,
+            "timeout_type": timeout_type,
+            "error_class": type(exc).__name__,
             "outcome_certainty": "unknown",
             "retry_safe": False,
         }
-        raise MinecraftToolTimeoutError(
-            f"Minecraft tool request timed out: {tool_name}",
-            agent=agent_name,
-            tool=tool_name,
-        ) from exc
+        Agent.record_bridge_diagnostic(actor_name, terminal, **terminal_fields)
+        if diagnostic_kind == "ping":
+            Agent.record_bridge_diagnostic(
+                actor_name,
+                "ping_timed_out" if timeout_type.endswith("timeout") else "ping_failed",
+                **terminal_fields,
+            )
+        if isinstance(exc, requests.Timeout):
+            Agent.last_tool_timeout = {
+                "agent": actor_name,
+                "tool": tool_name,
+                "outcome_certainty": "unknown",
+                "retry_safe": False,
+            }
+            raise MinecraftToolTimeoutError(
+                f"Minecraft tool request timed out: {tool_name}",
+                agent=actor_name,
+                tool=tool_name,
+                request_id=correlation_id,
+                timeout_type=timeout_type,
+            ) from exc
+        raise
+    completed = _request_monotonic_ns()
+    completed_fields = {
+        **common,
+        "completed_monotonic_ns": completed,
+        "elapsed_ns": max(0, completed - started),
+        "status_code": getattr(response, "status_code", None),
+    }
+    Agent.record_bridge_diagnostic(
+        actor_name, "caller_request_completed", **completed_fields,
+        configured_connect_timeout_s=connect_timeout,
+        configured_read_timeout_s=read_timeout,
+        outcome_certainty="known", retry_safe=False,
+    )
+    if diagnostic_kind == "ping":
+        Agent.record_bridge_diagnostic(
+            actor_name, "caller_ping_transport_completed", **completed_fields,
+        )
+        try:
+            response._villager_ping_diagnostic = completed_fields
+        except Exception:
+            pass
+    return response
 
 
 def filter_emoji(text: str) -> str:
@@ -361,6 +451,106 @@ class Agent():
     minecraft_connect_timeout_seconds = DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS
     minecraft_read_timeout_seconds = DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS
     last_tool_timeout = None
+    _bridge_diagnostic_recorders: dict[str, BoundedDiagnosticRecorder] = {}
+    _bridge_diagnostic_lock = threading.Lock()
+    last_bridge_diagnostics: dict | None = None
+
+    @classmethod
+    def _caller_diagnostic_recorder(cls, actor_name: str | None):
+        if not actor_name or actor_name not in cls.runtime_paths_by_name:
+            return None
+        path = cls.runtime_paths_by_name[actor_name].minecraft_bridge_caller_diagnostics
+        key = str(path)
+        with cls._bridge_diagnostic_lock:
+            recorder = cls._bridge_diagnostic_recorders.get(key)
+            if recorder is None:
+                recorder = BoundedDiagnosticRecorder(path, producer="caller")
+                cls._bridge_diagnostic_recorders[key] = recorder
+            return recorder
+
+    @classmethod
+    def record_bridge_diagnostic(cls, actor_name: str | None, event_type: str, **fields) -> bool:
+        recorder = cls._caller_diagnostic_recorder(actor_name)
+        return recorder.record(event_type, **fields) if recorder is not None else False
+
+    @classmethod
+    def _close_bridge_diagnostic_recorders(cls) -> None:
+        with cls._bridge_diagnostic_lock:
+            recorders = list(cls._bridge_diagnostic_recorders.values())
+            cls._bridge_diagnostic_recorders.clear()
+        for recorder in recorders:
+            recorder.close()
+
+    @classmethod
+    def bridge_diagnostics_summary(cls, paths_by_name=None) -> dict:
+        selected = dict(paths_by_name or cls.runtime_paths_by_name)
+        with cls._bridge_diagnostic_lock:
+            recorders = list(cls._bridge_diagnostic_recorders.values())
+        for recorder in recorders:
+            recorder.flush()
+        artifacts = {}
+        actors = {}
+        errors = []
+        caller_paths = sorted({
+            str(paths.minecraft_bridge_caller_diagnostics): paths
+            for paths in selected.values()
+        }.items())
+        caller_projections = {}
+        caller_artifact_keys = {}
+        for index, (caller_path, paths) in enumerate(caller_paths):
+            artifact_key = "caller" if len(caller_paths) == 1 else f"caller:{index}"
+            projection = artifact_projection(caller_path, runtime_root=paths.root)
+            caller_projections[caller_path] = projection
+            caller_artifact_keys[caller_path] = artifact_key
+            artifacts[artifact_key] = projection
+        for actor_name, paths in sorted(selected.items()):
+            actor_artifacts = {}
+            caller_path = paths.minecraft_bridge_caller_diagnostics
+            caller_key = str(caller_path)
+            caller_projection = caller_projections[caller_key]
+            bridge_projection = artifact_projection(
+                paths.minecraft_bridge_actor_diagnostics(actor_name), runtime_root=paths.root,
+            )
+            artifacts[f"bridge:{actor_name}"] = bridge_projection
+            actor_artifacts["caller"] = caller_projection.get("state")
+            actor_artifacts["caller_artifact"] = caller_artifact_keys[caller_key]
+            actor_artifacts["bridge"] = bridge_projection.get("state")
+            caller_events = (
+                caller_projection.get("snapshot", {}).get("events", [])
+                if caller_projection.get("state") == "valid" else []
+            )
+            bridge_events = (
+                bridge_projection.get("snapshot", {}).get("events", [])
+                if bridge_projection.get("state") == "valid" else []
+            )
+            actor_caller = [event for event in caller_events if event.get("actor") == actor_name]
+            actors[actor_name] = {
+                "artifacts": actor_artifacts,
+                "last_request": next((event for event in reversed(actor_caller)
+                                      if event.get("event_type", "").startswith("caller_request_")), None),
+                "last_ping": next((event for event in reversed(actor_caller)
+                                   if event.get("event_type", "").startswith("ping_")), None),
+                "process_lifecycle": [event for event in actor_caller
+                                      if event.get("event_type", "").startswith("bridge_process_")],
+                "listener_lifecycle": [event for event in bridge_events
+                                       if event.get("event_type", "").startswith("listener_")],
+                "mineflayer_lifecycle": [event for event in bridge_events
+                                         if event.get("event_type", "").startswith("mineflayer_")],
+                "last_bridge_request": next((event for event in reversed(bridge_events)
+                                             if event.get("event_type", "").startswith("request_")), None),
+            }
+            for projection in (caller_projection, bridge_projection):
+                if projection.get("state") != "valid":
+                    errors.append({
+                        "actor": actor_name,
+                        "error": projection.get("error") or "diagnostic_artifact_absent",
+                    })
+        return {
+            "schema_version": "minecraft-bridge-diagnostics-summary/1",
+            "actors": actors,
+            "artifacts": artifacts,
+            "diagnostic_collection_error": errors or None,
+        }
 
     @classmethod
     def tool_runtime_context(cls) -> dict:
@@ -370,6 +560,11 @@ class Agent():
                 "read": cls.minecraft_read_timeout_seconds,
             },
             "last_tool_timeout": cls.last_tool_timeout,
+            "bridge_diagnostics": (
+                cls.last_bridge_diagnostics
+                if cls.last_bridge_diagnostics is not None
+                else cls.bridge_diagnostics_summary()
+            ),
         }
 
     @staticmethod
@@ -539,19 +734,56 @@ class Agent():
     
     def ping(player_name: str):
         """Ping the Server"""
+        response = None
+
+        def record_response_failure(error):
+            diagnostic = (
+                getattr(response, "_villager_ping_diagnostic", {})
+                if response is not None else {}
+            )
+            ping_fields = dict(diagnostic)
+            ping_fields.setdefault("actor", player_name)
+            ping_fields.setdefault("endpoint_identity", f"actor:{player_name}")
+            Agent.record_bridge_diagnostic(
+                player_name, "ping_failed", **ping_fields,
+                error_class=type(error).__name__, result="invalid_response",
+            )
+
         try:
             url = Agent.get_agent_url(player_name) + "/post_ping"
-            response = _minecraft_request("GET", url)
-            return response.json()
+            response = _minecraft_request("GET", url, _diagnostic_kind="ping")
+            result = response.json()
+            diagnostic = getattr(response, "_villager_ping_diagnostic", {})
+            succeeded = (
+                isinstance(result, dict) and result.get("status") is True
+                and isinstance(getattr(response, "status_code", None), int)
+                and 200 <= response.status_code < 300
+            )
+            ping_fields = dict(diagnostic)
+            ping_fields.setdefault("actor", player_name)
+            ping_fields.setdefault("endpoint_identity", f"actor:{player_name}")
+            Agent.record_bridge_diagnostic(
+                player_name, "ping_succeeded" if succeeded else "ping_failed",
+                **ping_fields,
+                result="healthy" if succeeded else "unhealthy",
+            )
+            return result
         except MinecraftToolTimeoutError:
-            raise
+            return {'message': 'Exception', 'status': False}
+        except requests.RequestException as e:
+            if response is not None:
+                record_response_failure(e)
+            return {'message': 'Exception', 'status': False}
         except Exception as e:
+            record_response_failure(e)
             return {'message': 'Exception', 'status': False}
 
     @staticmethod
     def launch(host="10.21.31.18", port=25565, world="world", verbose=False, ignore_name=[], debug=False, fast=False, runtime_paths: RuntimePaths | None = None, runtime_execution=None):
         Agent.port = port
         Agent.last_bridge_cleanup = None
+        Agent.last_bridge_diagnostics = None
+        Agent._close_bridge_diagnostic_recorders()
         runtime_paths = runtime_paths or RuntimePaths.legacy()
         if runtime_execution is None:
             runtime_execution = RuntimeExecution.resolve()
@@ -566,7 +798,22 @@ class Agent():
                     "-W", world, "-D", str(debug))
             command = runtime_execution.python_command(entrypoint, *args)
             child = runtime_execution.child_kwargs(runtime_paths, base=env)
-            Agent.agent_process[key] = subprocess.Popen(command, shell=False, **child)
+            try:
+                process = subprocess.Popen(command, shell=False, **child)
+            except BaseException as error:
+                Agent.record_bridge_diagnostic(
+                    key, "bridge_process_spawn_failed", actor=key,
+                    endpoint_identity=f"actor:{key}", expected_local_port=value,
+                    entrypoint=entrypoint, error_class=type(error).__name__,
+                )
+                raise
+            Agent.agent_process[key] = process
+            Agent.record_bridge_diagnostic(
+                key, "bridge_process_spawned", actor=key,
+                endpoint_identity=f"actor:{key}", pid=getattr(process, "pid", None),
+                process_start_ticks=stable_process_start_ticks(getattr(process, "pid", None)),
+                expected_local_port=value, entrypoint=entrypoint,
+            )
             print(runtime_execution.public_command(entrypoint, *args))
             time.sleep(10 if fast else 2)
         if verbose:
@@ -587,6 +834,7 @@ class Agent():
         ):
             return cls.last_bridge_cleanup
         process_results = {}
+        paths_snapshot = dict(cls.runtime_paths_by_name)
         for name, process in tuple(cls.agent_process.items()):
             metadata = {
                 "pid": getattr(process, "pid", None),
@@ -597,16 +845,32 @@ class Agent():
             if process.poll() is None:
                 process.terminate()
                 metadata["terminated"] = True
+                cls.record_bridge_diagnostic(
+                    name, "bridge_process_terminate_sent", actor=name,
+                    endpoint_identity=f"actor:{name}", pid=getattr(process, "pid", None),
+                )
                 try:
                     process.wait(timeout=terminate_grace_seconds)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     metadata["killed"] = True
+                    cls.record_bridge_diagnostic(
+                        name, "bridge_process_kill_sent", actor=name,
+                        endpoint_identity=f"actor:{name}", pid=getattr(process, "pid", None),
+                    )
                     try:
                         process.wait(timeout=kill_grace_seconds)
                     except subprocess.TimeoutExpired:
                         pass
             metadata["alive_after_kill"] = process.poll() is None
+            cls.record_bridge_diagnostic(
+                name,
+                "bridge_process_still_alive" if metadata["alive_after_kill"]
+                else "bridge_process_exited",
+                actor=name, endpoint_identity=f"actor:{name}",
+                pid=getattr(process, "pid", None), exit_code=process.poll(),
+                result="alive" if metadata["alive_after_kill"] else "exited",
+            )
             process_results[name] = metadata
 
         cleanup_result = {
@@ -616,6 +880,7 @@ class Agent():
             ),
         }
         cls.last_bridge_cleanup = cleanup_result
+        cls.last_bridge_diagnostics = cls.bridge_diagnostics_summary(paths_snapshot)
         if not cleanup_result["cleanup_complete"]:
             raise MinecraftBridgeCleanupError(
                 "Minecraft bridge subprocess cleanup did not complete",
@@ -629,6 +894,7 @@ class Agent():
             cls.agent_process.clear()
         with cls._action_log_locks_guard:
             cls._action_log_locks.clear()
+        cls._close_bridge_diagnostic_recorders()
         cls.last_tool_timeout = None
         return cleanup_result
 

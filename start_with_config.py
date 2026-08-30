@@ -105,6 +105,24 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
         )
         if item is not None
     ]
+    try:
+        bridge_diagnostics = (
+            env.get_minecraft_bridge_diagnostics()
+            if env is not None and hasattr(env, "get_minecraft_bridge_diagnostics")
+            else {
+                "schema_version": "minecraft-bridge-diagnostics-summary/1",
+                "actors": {}, "artifacts": {}, "diagnostic_collection_error": None,
+            }
+        )
+    except Exception as diagnostic_error:
+        bridge_diagnostics = {
+            "schema_version": "minecraft-bridge-diagnostics-summary/1",
+            "actors": {},
+            "artifacts": {},
+            "diagnostic_collection_error": [{
+                "error_type": type(diagnostic_error).__name__,
+            }],
+        }
     return {
         "score": score,
         "attempt_id": attempt_id,
@@ -133,6 +151,7 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
             else {"configured": False, "read_only_projection": True}
         ),
         "bridge_cleanup": dict(getattr(env, "bridge_cleanup_result", {}) or {}),
+        "minecraft_bridge_diagnostics": bridge_diagnostics,
         "collection_errors": collection_errors,
         "error": error,
         "error_type": error_type,
@@ -141,6 +160,18 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
 
 def _runtime_checkpoint_result(env=None, tm=None, controller=None, *, attempt_id: str | None = None, task_name: str | None = None) -> dict:
     result = _runtime_result(None, tm, controller, attempt_id=attempt_id, task_name=task_name)
+    if env is not None and hasattr(env, "get_minecraft_bridge_diagnostics"):
+        try:
+            result["minecraft_bridge_diagnostics"] = env.get_minecraft_bridge_diagnostics()
+        except Exception as diagnostic_error:
+            result["minecraft_bridge_diagnostics"] = {
+                "schema_version": "minecraft-bridge-diagnostics-summary/1",
+                "actors": {},
+                "artifacts": {},
+                "diagnostic_collection_error": [{
+                    "error_type": type(diagnostic_error).__name__,
+                }],
+            }
     if env is not None and hasattr(env, "get_action_log"):
         action_log, action_error = _safe_collect(
             env.get_action_log,
@@ -629,6 +660,16 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
         result["bridge_cleanup"] = dict(
             getattr(env, "bridge_cleanup_result", {}) or {}
         )
+        try:
+            result["minecraft_bridge_diagnostics"] = env.get_minecraft_bridge_diagnostics()
+        except Exception as diagnostic_error:
+            result["minecraft_bridge_diagnostics"] = {
+                "schema_version": "minecraft-bridge-diagnostics-summary/1",
+                "actors": {}, "artifacts": {},
+                "diagnostic_collection_error": [{
+                    "error_type": type(diagnostic_error).__name__,
+                }],
+            }
         _write_runtime_result(runtime_result_path, result)
         return result
     except Exception as exc:

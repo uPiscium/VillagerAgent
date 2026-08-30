@@ -2,6 +2,7 @@
 # This file still need to be tested, and it is not finished yet.
 
 import argparse
+import sys
 import time
 from math import floor
 import names
@@ -18,10 +19,20 @@ from pathlib import Path
 
 try:
     from env.runtime_paths import RuntimePaths, read_json_artifact
+    from env.minecraft_bridge_diagnostics import (
+        BoundedDiagnosticRecorder,
+        install_fastapi_request_diagnostics,
+        safe_error_class,
+    )
     from benchmarks.minecraft.position_contract import resolve_position_convention
     from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
 except ImportError:
     from runtime_paths import RuntimePaths, read_json_artifact
+    from minecraft_bridge_diagnostics import (
+        BoundedDiagnosticRecorder,
+        install_fastapi_request_diagnostics,
+        safe_error_class,
+    )
     from benchmarks.minecraft.position_contract import resolve_position_convention
     from world_initialization import PRESERVE_RESTORED_SNAPSHOT
 
@@ -50,6 +61,35 @@ parser.add_argument('-LP', '--local_port', type=int, default=5000)
 parser.add_argument('-D', '--debug', type=bool, default=False)
 args = parser.parse_args()
 local_port = args.local_port
+bridge_diagnostics = BoundedDiagnosticRecorder(
+    runtime_paths.minecraft_bridge_actor_diagnostics(args.username),
+    producer="bridge", actor=args.username,
+)
+install_fastapi_request_diagnostics(app, bridge_diagnostics, actor=args.username)
+bridge_diagnostics.record(
+    "listener_starting", actor=args.username,
+    endpoint_identity=f"actor:{args.username}", expected_local_port=local_port,
+)
+
+
+def record_listener_failure(error):
+    bridge_diagnostics.record_once(
+        "listener_failed", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", expected_local_port=local_port,
+        error_class=safe_error_class(error),
+    )
+    bridge_diagnostics.flush()
+
+
+_original_excepthook = sys.excepthook
+
+
+def diagnostic_excepthook(error_type, error, traceback):
+    record_listener_failure(error)
+    _original_excepthook(error_type, error, traceback)
+
+
+sys.excepthook = diagnostic_excepthook
 print(f"Agent {args.username} login {args.worldname} at {args.host}:{args.port}")
 # VIEW_PORT = 3000
 mineflayer = require('mineflayer')
@@ -67,19 +107,92 @@ if platform.system().lower() == 'linux':
 else:
     minecraftHawkEye = require("minecrafthawkeye")
 # print(mcData.itemsByName['yellow_carpet'])
-bot = mineflayer.createBot({
-    "host": args.host,
-    "port": args.port,
-    'username': args.username.replace(' ', '_'),
-    'checkTimeoutInterval': 600000,
-    'auth': 'offline',
-    'version': '1.19.2',
-})
+try:
+    bot = mineflayer.createBot({
+        "host": args.host,
+        "port": args.port,
+        'username': args.username.replace(' ', '_'),
+        'checkTimeoutInterval': 600000,
+        'auth': 'offline',
+        'version': '1.19.2',
+    })
+except BaseException as error:
+    bridge_diagnostics.record(
+        "mineflayer_connection_error", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", connection_state="connection_error",
+        error_class=safe_error_class(error),
+    )
+    bridge_diagnostics.flush()
+    raise
+bridge_diagnostics.record(
+    "mineflayer_bot_created", actor=args.username,
+    endpoint_identity=f"actor:{args.username}", connection_state="created",
+)
+
+
+@On(bot, "login")
+def diagnostic_login(*unused):
+    bridge_diagnostics.record(
+        "mineflayer_connected", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", connection_state="connected",
+    )
+
+
+@On(bot, "spawn")
+def diagnostic_spawn(*unused):
+    bridge_diagnostics.record(
+        "mineflayer_ready", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", connection_state="ready",
+    )
+
+
+@On(bot, "end")
+def diagnostic_end(*unused):
+    bridge_diagnostics.record(
+        "mineflayer_disconnected", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", connection_state="disconnected",
+    )
+
+
+@On(bot, "kicked")
+def diagnostic_kicked(*unused):
+    bridge_diagnostics.record(
+        "mineflayer_disconnected", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", connection_state="kicked",
+    )
+
+
+@On(bot, "error")
+def diagnostic_error(unused_this=None, error=None, *unused):
+    bridge_diagnostics.record(
+        "mineflayer_connection_error", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", connection_state="connection_error",
+        error_class=safe_error_class(error) if error is not None else "unknown",
+    )
+
+
 time.sleep(3)
 bot.loadPlugin(pathfinder.pathfinder)
 bot.loadPlugin(collectBlock.plugin)
 bot.loadPlugin(pvp)
 bot.loadPlugin(minecraftHawkEye)
+
+
+@app.on_event("startup")
+async def diagnostic_startup():
+    bridge_diagnostics.record(
+        "listener_startup_completed", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", expected_local_port=local_port,
+    )
+
+
+@app.on_event("shutdown")
+async def diagnostic_shutdown():
+    bridge_diagnostics.record(
+        "listener_shutdown", actor=args.username,
+        endpoint_identity=f"actor:{args.username}", expected_local_port=local_port,
+    )
+    bridge_diagnostics.flush()
 
 
 def timeout(seconds: float):
@@ -874,11 +987,25 @@ def handle(this, entity, *args):
 
 async def main():
     # 配置 Uvicorn 服务器
-    config = uvicorn.Config("minecraft_server_fast:app", port=local_port)
+    config = uvicorn.Config(app, port=local_port)
     server = uvicorn.Server(config)
 
     # 启动服务器
-    await server.serve()
+    serve_task = asyncio.create_task(server.serve())
+    try:
+        while not serve_task.done() and not server.started:
+            await asyncio.sleep(0.01)
+        if server.started:
+            bridge_diagnostics.record_once(
+                "listener_ready", actor=args.username,
+                endpoint_identity=f"actor:{args.username}", expected_local_port=local_port,
+            )
+        await serve_task
+        if not server.started:
+            record_listener_failure(RuntimeError("listener_not_started"))
+    except BaseException as error:
+        record_listener_failure(error)
+        raise
     
 # The entry point for starting the application
 if __name__ == "__main__":
@@ -891,4 +1018,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     else:
         # An event loop is running, we should configure and start the server directly
-        uvicorn.run(app="minecraft_server_fast:app", port=local_port)
+        uvicorn.run(app=app, port=local_port)

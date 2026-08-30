@@ -413,14 +413,22 @@ class VillagerBench:
         return guarded_tool
 
     def launch(self, debug: bool = False, fast_api=False):
-        Agent.launch(
-            host=self.host,
-            port=self.port,
-            debug=debug,
-            fast=fast_api,
-            runtime_paths=self.runtime_paths,
-            runtime_execution=self.runtime_execution,
-        )
+        try:
+            Agent.launch(
+                host=self.host,
+                port=self.port,
+                debug=debug,
+                fast=fast_api,
+                runtime_paths=self.runtime_paths,
+                runtime_execution=self.runtime_execution,
+            )
+        except BaseException:
+            try:
+                self.bridge_cleanup_result = Agent.kill()
+            except MinecraftBridgeCleanupError as cleanup_error:
+                self.bridge_cleanup_result = cleanup_error.cleanup_result
+                self.bridge_cleanup_error = cleanup_error
+            raise
         self.running = True
         self.reset()
 
@@ -642,6 +650,13 @@ class VillagerBench:
 
     def get_tool_runtime_context(self) -> dict:
         return Agent.tool_runtime_context()
+
+    def get_minecraft_bridge_diagnostics(self) -> dict:
+        return (
+            Agent.last_bridge_diagnostics
+            if Agent.last_bridge_diagnostics is not None
+            else Agent.bridge_diagnostics_summary()
+        )
 
     def is_task_complete(self):
         if self.env_type != env_type.meta:

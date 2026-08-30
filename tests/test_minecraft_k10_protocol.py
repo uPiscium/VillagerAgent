@@ -8,6 +8,7 @@ import pytest
 
 from benchmarks.common.eac import ActionRef, ExactRequest
 from benchmarks.common.eac.canonical import canonical_bytes
+from benchmarks.minecraft import k10_protocol as k10_protocol_module
 from benchmarks.minecraft.k10_protocol import (
     CANDIDATE_POOL_DIGEST,
     CONDITIONS,
@@ -15,6 +16,8 @@ from benchmarks.minecraft.k10_protocol import (
     EXPECTED_SELECTED,
     SELECTION_MANIFEST_DIGEST,
     K10ContractError,
+    SUBJECT_RUNTIME_REFERENCE,
+    _validate_frozen_protected_content,
     aggregate_k10_results,
     audit_historical_submissions,
     build_k10_cells,
@@ -25,6 +28,7 @@ from benchmarks.minecraft.k10_protocol import (
     load_k10_protocol,
     trace_pairing_digest,
     validate_k10_trace,
+    validate_live_k10_checkout,
 )
 
 
@@ -310,6 +314,109 @@ def test_protocol_freezes_zero_exposure_protected_content_and_reporting_separati
     _write_detached(path, changed)
     with pytest.raises(K10ContractError, match="protocol identity|protected runtime content"):
         load_k10_protocol(path)
+
+
+def test_historical_validation_passes_while_modified_live_checkout_fails():
+    protocol = load_k10_protocol()
+
+    _validate_frozen_protected_content(protocol)
+    with pytest.raises(K10ContractError, match="protected runtime content mismatch"):
+        validate_live_k10_checkout(protocol)
+
+
+def test_frozen_source_blob_mismatch_and_unavailable_object_fail_closed():
+    protocol = load_k10_protocol()
+
+    with pytest.raises(K10ContractError, match="frozen protected source mismatch"):
+        _validate_frozen_protected_content(
+            protocol, source_reader=lambda _revision, _path: b"tampered",
+        )
+
+    def unavailable(_revision, _path):
+        raise K10ContractError("K10 frozen source object unavailable")
+
+    with pytest.raises(K10ContractError, match="frozen source object unavailable"):
+        _validate_frozen_protected_content(protocol, source_reader=unavailable)
+
+
+def test_frozen_source_revision_and_protected_path_tamper_fail_before_object_read():
+    protocol = copy.deepcopy(load_k10_protocol())
+    protocol["subject_runtime_semantic_reference"] = "0" * 40
+    with pytest.raises(K10ContractError, match="revision identity mismatch"):
+        _validate_frozen_protected_content(protocol, source_reader=lambda *_args: b"")
+
+    protocol["subject_runtime_semantic_reference"] = SUBJECT_RUNTIME_REFERENCE
+    bindings = protocol["protected_runtime_content_bindings"]
+    expected = bindings.pop(next(iter(bindings)))
+    bindings["../outside"] = expected
+    called = False
+
+    def reader(*_args):
+        nonlocal called
+        called = True
+        return b""
+
+    with pytest.raises(K10ContractError, match="path is invalid"):
+        _validate_frozen_protected_content(protocol, source_reader=reader)
+    assert called is False
+
+
+def test_protocol_loader_returns_detached_copy_of_cached_historical_validation():
+    first = load_k10_protocol()
+    original = first["protected_runtime_content_bindings"]["env/minecraft_client.py"]
+    first["protected_runtime_content_bindings"]["env/minecraft_client.py"] = "0" * 64
+
+    second = load_k10_protocol()
+
+    assert second["protected_runtime_content_bindings"]["env/minecraft_client.py"] == original
+
+
+def test_historical_loader_does_not_call_live_k6_loaders(monkeypatch):
+    k10_protocol_module._load_k10_protocol_cached.cache_clear()
+    k10_protocol_module._load_k10_candidate_pool_cached.cache_clear()
+    k10_protocol_module.load_k10_inventory.cache_clear()
+    monkeypatch.setattr(
+        k10_protocol_module.k6, "load_k6_protocol",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("live K6 protocol read")),
+    )
+    monkeypatch.setattr(
+        k10_protocol_module.k6, "load_k6_inventory",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("live K6 inventory read")),
+    )
+
+    assert load_k10_protocol()["subject_runtime_semantic_reference"] == SUBJECT_RUNTIME_REFERENCE
+
+
+def test_candidate_pool_loader_returns_detached_nested_data():
+    first = load_k10_candidate_pool()
+    original = first[0]["descriptor"]["arguments"].copy()
+    first[0]["descriptor"]["arguments"]["x"] = 999
+
+    second = load_k10_candidate_pool()
+
+    assert second[0]["descriptor"]["arguments"] == original
+
+
+def test_frozen_source_git_reader_disables_lazy_fetch(monkeypatch):
+    relative = "env/minecraft_client.py"
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "ls-tree" in command:
+            stdout = b"100644 blob " + b"a" * 40 + b"\t" + relative.encode() + b"\0"
+        else:
+            stdout = b"frozen bytes"
+        return type("Result", (), {"returncode": 0, "stdout": stdout})()
+
+    monkeypatch.setattr(k10_protocol_module.subprocess, "run", run)
+
+    assert k10_protocol_module._read_frozen_source_blob(
+        SUBJECT_RUNTIME_REFERENCE, relative,
+    ) == b"frozen bytes"
+    assert len(calls) == 2
+    assert all(call[1]["env"]["GIT_NO_LAZY_FETCH"] == "1" for call in calls)
+    assert all(call[1]["env"]["GIT_TERMINAL_PROMPT"] == "0" for call in calls)
 
 
 def test_census_has_exact_cells_families_and_sixty_pairs():
