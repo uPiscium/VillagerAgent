@@ -267,7 +267,15 @@ async def find(request: Request):
     if name == "":
         return JSONResponse({'message': "can not find anything match", 'status': False, 'data':[]})
     observation = ""
-    name, pos_list_raw = find_everything_(bot, get_envs_info(bot, 128), mcData, name, distance, count)
+    name, pos_list_raw = find_everything_(
+        bot=bot,
+        Vec3=Vec3,
+        envs_info=get_envs_info(bot, 128),
+        mcData=mcData,
+        name=name,
+        distance=distance,
+        count=count,
+    )
     # remove duplicate
     pos_list = []
     for pos in pos_list_raw:
