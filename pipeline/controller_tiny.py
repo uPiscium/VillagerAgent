@@ -187,6 +187,7 @@ class GlobalController:
         self._judger_terminal_reconciled = False
         self.controller_state = self.STATE_RUNNING
         self.shutdown_complete = False
+        self.movement_shutdown_result = None
         self.shutdown_context = None
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
@@ -1124,8 +1125,12 @@ class GlobalController:
 
         self._request_shutdown()
         self.controller_state = self.STATE_SHUTDOWN
-        self.executor.shutdown(wait=False, cancel_futures=True)
         deadline = time.monotonic() + self.shutdown_grace_period
+        movement_cancel_budget = max(0.0, self.shutdown_grace_period / 2.0)
+        self.movement_shutdown_result = self._cancel_active_movements_for_shutdown(
+            timeout_seconds=movement_cancel_budget,
+        )
+        self.executor.shutdown(wait=False, cancel_futures=True)
         executor_threads = list(getattr(self.executor, "_threads", ()))
         for thread in [*started_threads, *executor_threads]:
             remaining = deadline - time.monotonic()
@@ -1150,6 +1155,7 @@ class GlobalController:
             and not active_task_ids
             and not incomplete_submission_task_ids
             and not undrained_queues
+            and self.movement_shutdown_result.get("terminal") is True
         )
         self.shutdown_complete = shutdown_complete
         self.shutdown_context = {
@@ -1162,6 +1168,7 @@ class GlobalController:
             "active_agent_ids": active_agent_ids,
             "incomplete_submission_task_ids": incomplete_submission_task_ids,
             "terminal_barrier": self._terminal_barrier_context(),
+            "movement_cancellation": self.movement_shutdown_result,
             "tool_runtime": self._tool_runtime_context(),
         }
         if not shutdown_complete or interrupted_task_ids:
@@ -1181,6 +1188,7 @@ class GlobalController:
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
                 "terminal_barrier": self._terminal_barrier_context(),
+                "movement_cancellation": self.movement_shutdown_result,
                 "tool_runtime": self._tool_runtime_context(),
             })
             setattr(self._first_failure[0], "controller_shutdown_context", {
@@ -1192,6 +1200,7 @@ class GlobalController:
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
                 "terminal_barrier": self._terminal_barrier_context(),
+                "movement_cancellation": self.movement_shutdown_result,
                 "tool_runtime": self._tool_runtime_context(),
             })
 
@@ -1221,6 +1230,24 @@ class GlobalController:
                 payload=failure,
             )
         raise exc.with_traceback(exc_traceback)
+
+    def _cancel_active_movements_for_shutdown(self, *, timeout_seconds: float) -> dict:
+        cancel = getattr(getattr(self, "env", None), "cancel_active_movements", None)
+        if not callable(cancel):
+            return {"state": "not_supported", "terminal": True}
+        try:
+            result = cancel(
+                reason="controller_shutdown", timeout_seconds=timeout_seconds,
+            )
+        except Exception as error:
+            return {
+                "state": "request_failed",
+                "terminal": False,
+                "error_class": type(error).__name__,
+            }
+        if not isinstance(result, dict):
+            return {"state": "invalid_result", "terminal": False}
+        return result
 
     def _terminal_barrier_context(self) -> dict:
         with self._tool_action_condition:

@@ -668,6 +668,40 @@ def test_lifecycle_milestones_survive_more_than_256_routine_events(tmp_path):
     }
 
 
+def test_movement_deadline_diagnostics_are_retained_and_metadata_only(tmp_path):
+    recorder = BoundedDiagnosticRecorder(tmp_path / "bridge.json", producer="bridge")
+    correlation_id = "f" * 32
+    recorder.record(
+        "movement_started", correlation_id=correlation_id, actor="Alice",
+        movement_id="e" * 32, operation="move_to_pos", target_identity="block:1:2:3",
+        started_monotonic_ns=10, configured_movement_deadline_s=9.0,
+        movement_started=True, request_body="secret-value",
+    )
+    recorder.record(
+        "movement_terminal", correlation_id=correlation_id, actor="Alice",
+        movement_id="e" * 32, operation="move_to_pos", target_identity="block:1:2:3",
+        completed_monotonic_ns=20, terminal_reason="deadline", movement_terminal=True,
+        movement_deadline=True, configured_movement_deadline_s=9.0,
+        initial_distance=12.0, final_distance=12.0, movement_elapsed_s=9.0,
+        goal_clear_attempted=True, goal_clear_succeeded=True,
+        raw_exception="secret-value",
+    )
+    _record_routine_requests(recorder)
+
+    snapshot = recorder.snapshot()
+    terminal = next(event for event in snapshot["critical_events"]
+                    if event.get("correlation_id") == correlation_id)
+    summary = next(item for item in snapshot["correlations"]
+                   if item["correlation_id"] == correlation_id)
+
+    assert terminal["terminal_reason"] == "deadline"
+    assert terminal["goal_clear_succeeded"] is True
+    assert summary["movement_started"] is True
+    assert summary["movement_deadline"] is True
+    assert summary["configured_movement_deadline_s"] == 9.0
+    assert "secret-value" not in json.dumps(snapshot)
+
+
 def test_retention_lane_overflow_is_independent_and_explicit(tmp_path):
     recorder = BoundedDiagnosticRecorder(
         tmp_path / "bounded.json", producer="caller", max_events=1,
@@ -923,3 +957,58 @@ def test_diagnostics_do_not_change_timeout_or_retry_semantics():
     )
     assert error.failure_detail["outcome_certainty"] == "unknown"
     assert error.failure_detail["retry_safe"] is False
+
+
+def test_controller_movement_cancellation_uses_bounded_no_retry_request(monkeypatch):
+    calls = []
+
+    def request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"terminal": True, "cancel_requested": True},
+        )
+
+    monkeypatch.setattr(Agent, "name2port", {"Alice": 5000})
+    monkeypatch.setattr(Agent, "bridge_entrypoint_by_name", {"Alice": "bridge_fast"})
+    monkeypatch.setattr(Agent, "get_agent_url", lambda _name: "http://localhost:5000")
+    monkeypatch.setattr("env.minecraft_client.requests.request", request)
+
+    result = Agent.cancel_active_movements(reason="controller_shutdown")
+
+    assert result["terminal"] is True
+    assert result["actors"]["Alice"] == {
+        "state": "terminal", "terminal": True, "status_code": 200,
+        "cancel_requested": True,
+    }
+    assert len(calls) == 1
+    assert calls[0][0:2] == ("POST", "http://localhost:5000/post_cancel_movement")
+    assert calls[0][2]["timeout"] == (0.5, 2.0)
+    assert calls[0][2]["json"] == {"reason": "controller_shutdown"}
+
+
+def test_controller_movement_cancellation_shares_one_multi_actor_budget(monkeypatch):
+    timeouts = []
+
+    def request(_method, _url, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"terminal": True, "cancel_requested": True},
+        )
+
+    monkeypatch.setattr(Agent, "name2port", {"Alice": 5000, "Bob": 5001})
+    monkeypatch.setattr(
+        Agent, "bridge_entrypoint_by_name",
+        {"Alice": "bridge_fast", "Bob": "bridge_fast"},
+    )
+    monkeypatch.setattr(Agent, "get_agent_url", lambda name: f"http://localhost/{name}")
+    monkeypatch.setattr("env.minecraft_client.requests.request", request)
+
+    result = Agent.cancel_active_movements(
+        reason="controller_shutdown", total_timeout_seconds=2.5,
+    )
+
+    assert result["terminal"] is True
+    assert timeouts == [(0.25, 1.0), (0.25, 1.0)]
+    assert sum(connect + read for connect, read in timeouts) == 2.5

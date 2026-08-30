@@ -86,6 +86,8 @@ DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS = 30.0
 DEFAULT_BRIDGE_TERMINATE_GRACE_SECONDS = 2.0
 DEFAULT_BRIDGE_KILL_GRACE_SECONDS = 1.0
+DEFAULT_MOVEMENT_CANCEL_CONNECT_TIMEOUT_SECONDS = 0.5
+DEFAULT_MOVEMENT_CANCEL_READ_TIMEOUT_SECONDS = 2.0
 
 
 def _request_monotonic_ns() -> int:
@@ -441,6 +443,7 @@ class Agent():
     verbose = True
 
     name2port = {}
+    bridge_entrypoint_by_name = {}
     agent_process = {}
     url_prefix = {}
     runtime_paths_by_name: dict[str, RuntimePaths] = {}
@@ -886,6 +889,7 @@ class Agent():
                 )
                 raise
             Agent.agent_process[key] = process
+            Agent.bridge_entrypoint_by_name[key] = entrypoint
             Agent.record_bridge_diagnostic(
                 key, "bridge_process_spawned", actor=key,
                 endpoint_identity=f"actor:{key}", pid=getattr(process, "pid", None),
@@ -896,6 +900,72 @@ class Agent():
             time.sleep(10 if fast else 2)
         if verbose:
             print("launch done.")
+
+    @classmethod
+    def cancel_active_movements(
+        cls,
+        actor_names=None,
+        *,
+        reason="controller_shutdown",
+        timeout=(DEFAULT_MOVEMENT_CANCEL_CONNECT_TIMEOUT_SECONDS,
+                  DEFAULT_MOVEMENT_CANCEL_READ_TIMEOUT_SECONDS),
+        total_timeout_seconds=None,
+    ) -> dict:
+        """Request bounded bridge-side movement cancellation without retry."""
+        selected = list(cls.name2port if actor_names is None else actor_names)
+        fast_actor_count = sum(
+            cls.bridge_entrypoint_by_name.get(name) == "bridge_fast"
+            for name in selected
+        )
+        base_timeout_total = float(timeout[0]) + float(timeout[1])
+        total_budget = (
+            base_timeout_total if total_timeout_seconds is None
+            else max(0.0, float(total_timeout_seconds))
+        )
+        per_actor_budget = total_budget / fast_actor_count if fast_actor_count else 0.0
+        timeout_scale = per_actor_budget / base_timeout_total if base_timeout_total else 0.0
+        request_timeout = (
+            max(0.001, float(timeout[0]) * timeout_scale),
+            max(0.001, float(timeout[1]) * timeout_scale),
+        )
+        actors = {}
+        for name in selected:
+            if cls.bridge_entrypoint_by_name.get(name) != "bridge_fast":
+                actors[name] = {"state": "not_applicable", "terminal": True}
+                continue
+            correlation_id = new_correlation_id()
+            try:
+                response = requests.request(
+                    "POST", cls.get_agent_url(name) + "/post_cancel_movement",
+                    timeout=request_timeout,
+                    headers={**cls.headers, CORRELATION_HEADER: correlation_id},
+                    json={"reason": reason},
+                )
+                payload = response.json()
+                terminal = (
+                    isinstance(payload, dict) and payload.get("terminal") is True
+                    and 200 <= response.status_code < 300
+                )
+                actors[name] = {
+                    "state": "terminal" if terminal else "not_terminal",
+                    "terminal": terminal,
+                    "status_code": response.status_code,
+                    "cancel_requested": (
+                        payload.get("cancel_requested") is True
+                        if isinstance(payload, dict) else False
+                    ),
+                }
+            except Exception as error:
+                actors[name] = {
+                    "state": "request_failed",
+                    "terminal": False,
+                    "error_class": type(error).__name__,
+                }
+        return {
+            "reason": reason,
+            "actors": actors,
+            "terminal": all(item["terminal"] for item in actors.values()),
+        }
 
     @classmethod
     def kill(
@@ -969,6 +1039,7 @@ class Agent():
             for name in set(cls.runtime_paths_by_name) | set(cls.name2port):
                 cls.runtime_paths_by_name.pop(name, None)
                 cls.name2port.pop(name, None)
+                cls.bridge_entrypoint_by_name.pop(name, None)
             cls.agent_process.clear()
         with cls._action_log_locks_guard:
             cls._action_log_locks.clear()

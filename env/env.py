@@ -140,6 +140,12 @@ class VillagerBench:
         finally:
             self.running = False
 
+    def cancel_active_movements(self, actor_names=None, *, reason="controller_shutdown",
+                                timeout_seconds=None):
+        return Agent.cancel_active_movements(
+            actor_names, reason=reason, total_timeout_seconds=timeout_seconds,
+        )
+
     def virtual_env(name: str):
         env = {
             "I_held_item": {

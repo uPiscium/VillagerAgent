@@ -71,6 +71,56 @@ def test_normal_completion_stops_all_threads_executor_and_checkpoints():
     assert [event["event_type"] for event in sink.events] == ["run_completed"]
 
 
+def test_shutdown_cancels_active_movement_before_executor_join():
+    controller, checkpoints, sink = _controller()
+    release = threading.Event()
+    running = threading.Event()
+    order = []
+
+    def active_movement():
+        running.set()
+        assert release.wait(1)
+        order.append("movement_terminal")
+
+    controller.executor.submit(active_movement)
+    assert running.wait(1)
+
+    def cancel_active_movements(*, reason, timeout_seconds):
+        order.append(f"cancel:{reason}:{timeout_seconds}")
+        release.set()
+        return {"terminal": True, "actors": {"Alice": {"terminal": True}}}
+
+    controller.env = SimpleNamespace(cancel_active_movements=cancel_active_movements)
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    controller.run()
+
+    assert order == ["cancel:controller_shutdown:0.1", "movement_terminal"]
+    assert controller.shutdown_context["movement_cancellation"]["terminal"] is True
+    assert controller.shutdown_complete is True
+    assert checkpoints == ["checkpoint"]
+    assert [event["event_type"] for event in sink.events] == ["run_completed"]
+
+
+def test_nonterminal_movement_cleanup_prevents_successful_shutdown():
+    controller, checkpoints, sink = _controller()
+    controller.env = SimpleNamespace(cancel_active_movements=lambda **_kwargs: {
+        "terminal": False, "actors": {"Alice": {"terminal": False}},
+    })
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    with pytest.raises(ControllerShutdownError, match="shutdown incomplete"):
+        controller.run()
+
+    assert controller.shutdown_complete is False
+    assert checkpoints == ["checkpoint"]
+    assert [event["event_type"] for event in sink.events] == ["run_failed"]
+
+
 def test_should_shutdown_is_a_side_effect_free_query():
     controller, _, _ = _controller()
     controller.env = SimpleNamespace(

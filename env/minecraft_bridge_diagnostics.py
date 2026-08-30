@@ -43,17 +43,25 @@ _INTEGER_FIELDS = frozenset({
 _SIGNED_INTEGER_FIELDS = frozenset({"exit_code"})
 _FLOAT_FIELDS = frozenset({
     "configured_connect_timeout_s", "configured_read_timeout_s",
+    "configured_movement_deadline_s", "initial_distance", "final_distance",
+    "movement_elapsed_s",
 })
 _BOOLEAN_FIELDS = frozenset({
     "retry_safe", "caller_correlated", "caller_started", "caller_completed",
     "caller_failed", "caller_timed_out", "ping_started", "ping_succeeded",
     "ping_failed", "ping_timed_out", "bridge_received", "bridge_completed",
-    "bridge_failed",
+    "bridge_failed", "movement_started", "movement_completed", "movement_deadline",
+    "movement_cancelled", "movement_failed", "movement_overlap_rejected",
+    "goal_clear_attempted", "goal_clear_succeeded", "cleanup_completed",
+    "cancel_requested",
+    "movement_terminal",
 })
 _STRING_FIELDS = frozenset({
     "correlation_id", "actor", "method", "route", "endpoint_identity",
     "timeout_type", "outcome_certainty", "error_class", "entrypoint",
     "connection_state", "result",
+    "movement_id", "operation", "target_identity", "terminal_reason",
+    "cancellation_reason",
 })
 _CRITICAL_PRIORITY = {
     "caller_request_timed_out": 3,
@@ -66,6 +74,7 @@ _CRITICAL_PRIORITY = {
     "caller_request_failed": 2,
     "ping_failed": 2,
     "request_failed": 2,
+    "movement_overlap_rejected": 2,
 }
 _LIFECYCLE_MILESTONES = {
     "listener_starting": ("listener", "first_starting", "first"),
@@ -202,6 +211,8 @@ def critical_event_priority(event: Mapping[str, Any]) -> int:
             priority = max(priority, 1)
     if event_type == "bridge_process_exited" and event.get("exit_code") not in (None, 0):
         priority = max(priority, 2)
+    if event_type == "movement_terminal" and event.get("terminal_reason") != "reached":
+        priority = max(priority, 3)
     return priority
 
 
@@ -215,6 +226,8 @@ def _correlation_priority(summary: Mapping[str, Any]) -> int:
     status_code = summary.get("status_code")
     if (summary.get("caller_failed") or summary.get("ping_failed")
             or summary.get("bridge_failed")
+            or summary.get("movement_deadline") or summary.get("movement_cancelled")
+            or summary.get("movement_failed") or summary.get("movement_overlap_rejected")
             or (type(status_code) is int and status_code >= 500)):
         return 2
     if (type(status_code) is int and status_code >= 400):
@@ -414,6 +427,11 @@ class BoundedDiagnosticRecorder:
             "request_received": ("bridge_received", "bridge_start_ns", "started_monotonic_ns"),
             "request_completed": ("bridge_completed", "bridge_end_ns", "completed_monotonic_ns"),
             "request_failed": ("bridge_failed", "bridge_end_ns", "completed_monotonic_ns"),
+            "movement_started": ("movement_started", "bridge_start_ns", "started_monotonic_ns"),
+            "movement_terminal": ("movement_terminal", "bridge_end_ns", "completed_monotonic_ns"),
+            "movement_overlap_rejected": (
+                "movement_overlap_rejected", "bridge_end_ns", "completed_monotonic_ns",
+            ),
         }
         transition = transitions.get(event_type)
         if transition:
@@ -435,9 +453,21 @@ class BoundedDiagnosticRecorder:
         for key in (
             "status_code", "elapsed_ns", "timeout_type", "outcome_certainty", "retry_safe",
             "error_class", "configured_connect_timeout_s", "configured_read_timeout_s",
+            "movement_id", "operation", "target_identity", "terminal_reason",
+            "cancellation_reason", "configured_movement_deadline_s", "initial_distance",
+            "final_distance", "movement_elapsed_s", "goal_clear_attempted",
+            "goal_clear_succeeded", "cleanup_completed", "cancel_requested",
         ):
             if key in event:
                 summary[key] = event[key]
+        if event_type == "movement_terminal":
+            terminal_reason = event.get("terminal_reason")
+            summary["movement_completed"] = terminal_reason == "reached"
+            summary["movement_deadline"] = terminal_reason == "deadline"
+            summary["movement_cancelled"] = terminal_reason == "cancelled"
+            summary["movement_failed"] = terminal_reason not in {
+                None, "reached", "deadline", "cancelled",
+            }
         if correlation_id in self._correlations:
             self._correlations[correlation_id] = summary
             self._correlations.move_to_end(correlation_id)
