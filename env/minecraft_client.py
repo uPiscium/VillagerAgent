@@ -523,21 +523,96 @@ class Agent():
                 bridge_projection.get("snapshot", {}).get("events", [])
                 if bridge_projection.get("state") == "valid" else []
             )
+            caller_snapshot = (
+                caller_projection.get("snapshot", {})
+                if caller_projection.get("state") == "valid" else {}
+            )
+            bridge_snapshot = (
+                bridge_projection.get("snapshot", {})
+                if bridge_projection.get("state") == "valid" else {}
+            )
             actor_caller = [event for event in caller_events if event.get("actor") == actor_name]
+            caller_critical = [
+                event for event in caller_snapshot.get("critical_events", [])
+                if event.get("actor") == actor_name
+            ]
+            bridge_critical = [
+                event for event in bridge_snapshot.get("critical_events", [])
+                if event.get("actor") in (None, actor_name)
+            ]
+            correlations = {}
+            for summary in caller_snapshot.get("correlations", []):
+                if summary.get("actor") == actor_name:
+                    correlations[summary["correlation_id"]] = {
+                        "correlation_id": summary["correlation_id"],
+                        "caller": dict(summary),
+                        "bridge": None,
+                    }
+            for summary in bridge_snapshot.get("correlations", []):
+                if summary.get("actor") in (None, actor_name):
+                    correlation_id = summary["correlation_id"]
+                    merged = correlations.setdefault(correlation_id, {
+                        "correlation_id": correlation_id,
+                        "caller": None,
+                        "bridge": None,
+                    })
+                    merged["bridge"] = dict(summary)
+            caller_lifecycle = caller_snapshot.get("lifecycle", {}).get("actors", {}).get(
+                actor_name, {},
+            )
+            bridge_lifecycle = bridge_snapshot.get("lifecycle", {}).get("actors", {}).get(
+                actor_name, {},
+            )
+
+            def retained_lifecycle_events(source, category, recent, prefix):
+                retained = list(source.get(category, {}).values())
+                if retained:
+                    return sorted(
+                        retained,
+                        key=lambda event: event.get("timestamp_monotonic_ns", 0),
+                    )
+                return [event for event in recent
+                        if event.get("event_type", "").startswith(prefix)]
+
             actors[actor_name] = {
                 "artifacts": actor_artifacts,
                 "last_request": next((event for event in reversed(actor_caller)
                                       if event.get("event_type", "").startswith("caller_request_")), None),
                 "last_ping": next((event for event in reversed(actor_caller)
                                    if event.get("event_type", "").startswith("ping_")), None),
-                "process_lifecycle": [event for event in actor_caller
-                                      if event.get("event_type", "").startswith("bridge_process_")],
-                "listener_lifecycle": [event for event in bridge_events
-                                       if event.get("event_type", "").startswith("listener_")],
-                "mineflayer_lifecycle": [event for event in bridge_events
-                                         if event.get("event_type", "").startswith("mineflayer_")],
+                "process_lifecycle": retained_lifecycle_events(
+                    caller_lifecycle, "process", actor_caller, "bridge_process_",
+                ),
+                "listener_lifecycle": retained_lifecycle_events(
+                    bridge_lifecycle, "listener", bridge_events, "listener_",
+                ),
+                "mineflayer_lifecycle": retained_lifecycle_events(
+                    bridge_lifecycle, "mineflayer", bridge_events, "mineflayer_",
+                ),
                 "last_bridge_request": next((event for event in reversed(bridge_events)
-                                             if event.get("event_type", "").startswith("request_")), None),
+                                              if event.get("event_type", "").startswith("request_")), None),
+                "critical_events": {
+                    "caller": caller_critical,
+                    "bridge": bridge_critical,
+                },
+                "correlation_summaries": list(correlations.values()),
+                "unresolved_bridge_requests": [
+                    summary for summary in bridge_snapshot.get("unresolved_requests", [])
+                    if summary.get("actor") in (None, actor_name)
+                ],
+                "long_duration_bridge_requests": [
+                    summary for summary in bridge_snapshot.get("long_duration_requests", [])
+                    if summary.get("actor") in (None, actor_name)
+                ],
+                "lifecycle_milestones": {
+                    "process": caller_lifecycle.get("process", {}),
+                    "listener": bridge_lifecycle.get("listener", {}),
+                    "mineflayer": bridge_lifecycle.get("mineflayer", {}),
+                },
+                "retention": {
+                    "caller": caller_snapshot.get("retention"),
+                    "bridge": bridge_snapshot.get("retention"),
+                },
             }
             for projection in (caller_projection, bridge_projection):
                 if projection.get("state") != "valid":

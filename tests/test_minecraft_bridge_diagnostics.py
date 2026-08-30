@@ -1,5 +1,7 @@
 import json
 import subprocess
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +12,8 @@ from fastapi.testclient import TestClient
 from env.minecraft_bridge_diagnostics import (
     BoundedDiagnosticRecorder,
     CORRELATION_HEADER,
+    MAX_ARTIFACT_BYTES,
+    SCHEMA_VERSION,
     artifact_projection,
     classify_request_exception,
     install_fastapi_request_diagnostics,
@@ -28,6 +32,32 @@ from start_with_config import _runtime_checkpoint_result, _runtime_result
 def _flush_agent(actor="Alice"):
     recorder = Agent._caller_diagnostic_recorder(actor)
     assert recorder is not None and recorder.flush()
+
+
+def _record_routine_requests(recorder, count=150, *, actor="Alice", side="bridge"):
+    for index in range(count):
+        correlation_id = f"{index + 1000:032x}"
+        started = 10000 + index * 2
+        if side == "caller":
+            recorder.record(
+                "caller_request_started", actor=actor, route="/post_ping",
+                correlation_id=correlation_id, started_monotonic_ns=started,
+            )
+            recorder.record(
+                "caller_request_completed", actor=actor, route="/post_ping",
+                correlation_id=correlation_id, started_monotonic_ns=started,
+                completed_monotonic_ns=started + 1, elapsed_ns=1, status_code=200,
+            )
+        else:
+            recorder.record(
+                "request_received", actor=actor, route="/post_ping",
+                correlation_id=correlation_id, started_monotonic_ns=started,
+            )
+            recorder.record(
+                "request_completed", actor=actor, route="/post_ping",
+                correlation_id=correlation_id, started_monotonic_ns=started,
+                completed_monotonic_ns=started + 1, elapsed_ns=1, status_code=200,
+            )
 
 
 @pytest.fixture
@@ -308,6 +338,60 @@ def test_process_still_alive_is_not_recorded_as_exited(diagnostic_agent, monkeyp
     assert lifecycle[-1]["event_type"] == "bridge_process_still_alive"
 
 
+def test_runtime_summary_merges_retained_caller_and_bridge_correlation(diagnostic_agent):
+    correlation_id = "d" * 32
+    caller = Agent._caller_diagnostic_recorder("Alice")
+    caller.record(
+        "caller_request_started", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=1,
+    )
+    caller.record(
+        "caller_request_timed_out", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=1, completed_monotonic_ns=31,
+        elapsed_ns=30, timeout_type="read_timeout", outcome_certainty="unknown",
+        retry_safe=False,
+    )
+    _record_routine_requests(caller, side="caller")
+    bridge = BoundedDiagnosticRecorder(
+        diagnostic_agent.minecraft_bridge_actor_diagnostics("Alice"),
+        producer="bridge", actor="Alice",
+    )
+    bridge.record("listener_starting", actor="Alice")
+    bridge.record("listener_ready", actor="Alice")
+    bridge.record("mineflayer_connected", actor="Alice", connection_state="connected")
+    bridge.record("mineflayer_ready", actor="Alice", connection_state="ready")
+    bridge.record("mineflayer_disconnected", actor="Alice", connection_state="disconnected")
+    bridge.record(
+        "mineflayer_connection_error", actor="Alice", connection_state="error",
+        error_class="ConnectionError",
+    )
+    bridge.record(
+        "request_received", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=2,
+    )
+    _record_routine_requests(bridge)
+    assert bridge.flush()
+
+    actor_summary = Agent.bridge_diagnostics_summary()["actors"]["Alice"]
+
+    correlation = next(item for item in actor_summary["correlation_summaries"]
+                       if item["correlation_id"] == correlation_id)
+    assert correlation["caller"]["caller_timed_out"] is True
+    assert correlation["bridge"]["bridge_received"] is True
+    assert actor_summary["unresolved_bridge_requests"][0]["correlation_id"] == correlation_id
+    assert actor_summary["lifecycle_milestones"]["listener"]["first_starting"]
+    assert actor_summary["lifecycle_milestones"]["listener"]["first_ready"]
+    assert actor_summary["lifecycle_milestones"]["mineflayer"]["first_connected"]
+    assert actor_summary["lifecycle_milestones"]["mineflayer"]["first_ready"]
+    assert actor_summary["lifecycle_milestones"]["mineflayer"]["last_disconnected"]
+    assert actor_summary["lifecycle_milestones"]["mineflayer"]["last_connection_error"]
+    assert {event["event_type"] for event in actor_summary["mineflayer_lifecycle"]} >= {
+        "mineflayer_connected", "mineflayer_ready", "mineflayer_disconnected",
+        "mineflayer_connection_error",
+    }
+    assert bridge.close()
+
+
 def test_untrusted_artifact_fields_are_removed_from_projection(tmp_path):
     path = tmp_path / "bridge.json"
     secret = "never-retain-this-secret"
@@ -359,6 +443,358 @@ def test_diagnostics_are_bounded_and_do_not_record_payloads_or_secrets(tmp_path)
     assert "secret-value" not in serialized
     assert "payload" not in serialized
     assert "request_body" not in serialized
+
+
+def test_early_caller_read_timeout_survives_more_than_256_routine_events(tmp_path):
+    recorder = BoundedDiagnosticRecorder(tmp_path / "caller.json", producer="caller")
+    correlation_id = "1" * 32
+    recorder.record(
+        "caller_request_started", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=100,
+        configured_connect_timeout_s=5, configured_read_timeout_s=30,
+        outcome_certainty="unknown", retry_safe=False,
+    )
+    recorder.record(
+        "caller_request_timed_out", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=100,
+        completed_monotonic_ns=30100, elapsed_ns=30000, timeout_type="read_timeout",
+        configured_connect_timeout_s=5, configured_read_timeout_s=30,
+        outcome_certainty="unknown", retry_safe=False, error_class="ReadTimeout",
+    )
+    _record_routine_requests(recorder, side="caller")
+
+    snapshot = recorder.snapshot()
+
+    assert all(event.get("correlation_id") != correlation_id for event in snapshot["events"])
+    assert any(event.get("correlation_id") == correlation_id
+               for event in snapshot["critical_events"])
+    summary = next(item for item in snapshot["correlations"]
+                   if item["correlation_id"] == correlation_id)
+    assert summary == {
+        "correlation_id": correlation_id,
+        "actor": "Alice",
+        "route": "/post_move_to_pos",
+        "caller_started": True,
+        "caller_start_ns": 100,
+        "configured_connect_timeout_s": 5.0,
+        "configured_read_timeout_s": 30.0,
+        "outcome_certainty": "unknown",
+        "retry_safe": False,
+        "caller_timed_out": True,
+        "caller_end_ns": 30100,
+        "elapsed_ns": 30000,
+        "timeout_type": "read_timeout",
+        "error_class": "ReadTimeout",
+    }
+
+
+def test_early_inflight_bridge_request_survives_more_than_256_routine_events(tmp_path):
+    recorder = BoundedDiagnosticRecorder(tmp_path / "bridge.json", producer="bridge")
+    correlation_id = "2" * 32
+    recorder.record(
+        "request_received", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", method="POST", started_monotonic_ns=100,
+    )
+    _record_routine_requests(recorder)
+
+    snapshot = recorder.snapshot()
+
+    assert snapshot["unresolved_requests"] == [{
+        "correlation_id": correlation_id,
+        "bridge_received": True,
+        "bridge_start_ns": 100,
+        "actor": "Alice",
+        "method": "POST",
+        "route": "/post_move_to_pos",
+    }]
+
+
+def test_early_bridge_failure_survives_more_than_256_routine_events(tmp_path):
+    recorder = BoundedDiagnosticRecorder(tmp_path / "bridge.json", producer="bridge")
+    correlation_id = "3" * 32
+    recorder.record(
+        "request_received", correlation_id=correlation_id, actor="Alice",
+        route="/post_find", started_monotonic_ns=100,
+    )
+    recorder.record(
+        "request_failed", correlation_id=correlation_id, actor="Alice",
+        route="/post_find", started_monotonic_ns=100, completed_monotonic_ns=150,
+        elapsed_ns=50, error_class="AttributeError",
+    )
+    _record_routine_requests(recorder)
+
+    snapshot = recorder.snapshot()
+
+    assert snapshot["unresolved_requests"] == []
+    assert any(event.get("correlation_id") == correlation_id
+               for event in snapshot["critical_events"])
+    summary = next(item for item in snapshot["correlations"]
+                   if item["correlation_id"] == correlation_id)
+    assert summary["bridge_received"] is True
+    assert summary["bridge_failed"] is True
+    assert summary["error_class"] == "AttributeError"
+
+
+def test_early_long_bridge_completion_survives_later_request_churn(tmp_path):
+    recorder = BoundedDiagnosticRecorder(
+        tmp_path / "bridge.json", producer="bridge", max_correlations=2,
+        max_long_duration_requests=2,
+    )
+    correlation_id = "4" * 32
+    recorder.record(
+        "request_received", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=1,
+    )
+    recorder.record(
+        "request_completed", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=1,
+        completed_monotonic_ns=1001, elapsed_ns=1000, status_code=200,
+    )
+    for index in range(130):
+        routine_id = f"{index + 100:032x}"
+        recorder.record(
+            "request_received", correlation_id=routine_id, actor="Alice",
+            route="/post_ping", started_monotonic_ns=2000 + index * 2,
+        )
+        recorder.record(
+            "request_completed", correlation_id=routine_id, actor="Alice",
+            route="/post_ping", started_monotonic_ns=2000 + index * 2,
+            completed_monotonic_ns=2001 + index * 2, elapsed_ns=1, status_code=200,
+        )
+
+    snapshot = recorder.snapshot()
+
+    assert all(item["correlation_id"] != correlation_id for item in snapshot["correlations"])
+    retained = next(item for item in snapshot["long_duration_requests"]
+                    if item["correlation_id"] == correlation_id)
+    assert retained["bridge_received"] is True
+    assert retained["bridge_completed"] is True
+    assert retained["elapsed_ns"] == 1000
+    assert snapshot["retention"]["long_duration"]["truncated"] is True
+
+
+def test_lifecycle_milestones_survive_more_than_256_routine_events(tmp_path):
+    recorder = BoundedDiagnosticRecorder(tmp_path / "bridge.json", producer="bridge")
+    for event_type in (
+        "listener_starting", "listener_startup_completed", "listener_ready",
+        "listener_request_accepted", "mineflayer_bot_created", "mineflayer_connected",
+        "mineflayer_ready", "mineflayer_disconnected", "mineflayer_connection_error",
+        "listener_failed", "listener_shutdown",
+    ):
+        recorder.record(event_type, actor="Alice", connection_state="ready")
+    _record_routine_requests(recorder)
+
+    snapshot = recorder.snapshot()
+    milestones = snapshot["lifecycle"]["actors"]["Alice"]
+
+    assert set(milestones["listener"]) == {
+        "first_starting", "startup_completed", "first_ready", "first_request_accepted",
+        "last_failed", "shutdown",
+    }
+    assert set(milestones["mineflayer"]) == {
+        "first_bot_created", "first_connected", "first_ready", "last_disconnected",
+        "last_connection_error",
+    }
+    assert {event["event_type"] for event in snapshot["critical_events"]} >= {
+        "mineflayer_disconnected", "mineflayer_connection_error", "listener_failed",
+    }
+
+
+def test_retention_lane_overflow_is_independent_and_explicit(tmp_path):
+    recorder = BoundedDiagnosticRecorder(
+        tmp_path / "bounded.json", producer="caller", max_events=1,
+        max_critical_events=1, max_correlations=1, max_unresolved_requests=1,
+        max_long_duration_requests=1, max_lifecycle_actors=1,
+    )
+    for index in range(2):
+        correlation_id = f"{index + 1:032x}"
+        recorder.record(
+            "request_received", correlation_id=correlation_id, actor=f"Actor{index}",
+            started_monotonic_ns=index + 1,
+        )
+        recorder.record(
+            "request_completed", correlation_id=correlation_id, actor=f"Actor{index}",
+            started_monotonic_ns=index + 1, completed_monotonic_ns=index + 3,
+            elapsed_ns=index + 2, status_code=500,
+        )
+        recorder.record("listener_failed", actor=f"Actor{index}", error_class="OSError")
+    recorder.record(
+        "request_received", correlation_id="9" * 32, actor="Alice",
+        started_monotonic_ns=10,
+    )
+    recorder.record(
+        "request_received", correlation_id="8" * 32, actor="Bob",
+        started_monotonic_ns=11,
+    )
+
+    snapshot = recorder.snapshot()
+
+    for lane in ("recent", "critical", "correlations", "unresolved", "long_duration", "lifecycle"):
+        assert snapshot["retention"][lane]["truncated"] is True
+        assert snapshot["retention"][lane]["dropped_count"] > 0
+        assert snapshot["retention"][lane]["retained"] <= snapshot["retention"][lane]["capacity"]
+    assert recorder.flush()
+    sanitized, error = read_diagnostic_snapshot(tmp_path / "bounded.json")
+    assert error is None
+    assert all(sanitized["retention"][lane]["capacity"] == 1 for lane in snapshot["retention"])
+
+
+def test_long_completion_is_reconstructed_after_correlation_eviction(tmp_path):
+    recorder = BoundedDiagnosticRecorder(
+        tmp_path / "bridge.json", producer="bridge", max_correlations=1,
+    )
+    long_id = "6" * 32
+    recorder.record(
+        "request_received", correlation_id=long_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=10,
+    )
+    recorder.record(
+        "request_received", correlation_id="7" * 32, actor="Alice",
+        route="/post_ping", started_monotonic_ns=20,
+    )
+    recorder.record(
+        "request_completed", correlation_id=long_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=10,
+        completed_monotonic_ns=1010, elapsed_ns=1000, status_code=200,
+    )
+
+    snapshot = recorder.snapshot()
+
+    retained = snapshot["long_duration_requests"][0]
+    assert retained["correlation_id"] == long_id
+    assert retained["bridge_received"] is True
+    assert retained["bridge_completed"] is True
+    assert retained["bridge_start_ns"] == 10
+    assert retained["bridge_end_ns"] == 1010
+
+
+def test_ping_start_is_reconstructed_after_correlation_eviction(tmp_path):
+    recorder = BoundedDiagnosticRecorder(
+        tmp_path / "caller.json", producer="caller", max_correlations=1,
+    )
+    ping_id = "5" * 32
+    recorder.record(
+        "ping_started", correlation_id=ping_id, actor="Alice", started_monotonic_ns=10,
+    )
+    recorder.record(
+        "caller_request_started", correlation_id="6" * 32, actor="Bob",
+        started_monotonic_ns=20,
+    )
+    recorder.record(
+        "ping_timed_out", correlation_id=ping_id, actor="Alice",
+        started_monotonic_ns=10, completed_monotonic_ns=40,
+        elapsed_ns=30, timeout_type="read_timeout",
+    )
+
+    summary = recorder.snapshot()["correlations"][0]
+
+    assert summary["correlation_id"] == ping_id
+    assert summary["ping_started"] is True
+    assert summary["ping_timed_out"] is True
+    assert summary["caller_start_ns"] == 10
+
+
+def test_v2_retained_state_is_resanitized_and_bounded(tmp_path):
+    path = tmp_path / "untrusted.json"
+    secret = "never-retain-this-secret"
+    timeout = {
+        "event_type": "caller_request_timed_out", "correlation_id": "a" * 32,
+        "actor": "Alice", "timeout_type": "read_timeout", "payload": secret,
+    }
+    path.write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "producer": "caller",
+        "events": [
+            {"event_type": "routine_event", "elapsed_ns": index, "payload": secret}
+            for index in range(300)
+        ],
+        "critical_events": [timeout],
+        "correlations": [{
+            "correlation_id": "a" * 32, "actor": "Alice", "caller_timed_out": True,
+            "request_body": secret,
+        }],
+        "unresolved_requests": [],
+        "long_duration_requests": [],
+        "lifecycle": {"actors": {"Alice": {
+            "listener": {"last_failed": {
+                "event_type": "listener_failed", "actor": "Alice", "secret": secret,
+            }, "first_ready": {"event_type": "routine_event", "actor": "Alice"}},
+            "mineflayer": {}, "process": {},
+        }}},
+        "retention": {
+            "recent": {"capacity": 2},
+            "critical": {"dropped_count": 2},
+        },
+    }), encoding="utf-8")
+
+    snapshot, error = read_diagnostic_snapshot(path)
+
+    assert error is None
+    assert snapshot["critical_events"][0]["timeout_type"] == "read_timeout"
+    assert [event["elapsed_ns"] for event in snapshot["events"]] == [298, 299]
+    assert snapshot["retention"]["recent"]["dropped_count"] == 298
+    assert snapshot["correlations"][0]["caller_timed_out"] is True
+    assert snapshot["retention"]["critical"]["dropped_count"] == 2
+    assert "first_ready" not in snapshot["lifecycle"]["actors"]["Alice"]["listener"]
+    assert secret not in json.dumps(snapshot)
+
+
+def test_v1_artifact_remains_readable_and_oversized_artifact_is_rejected(tmp_path):
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({
+        "schema_version": "minecraft-bridge-diagnostics/1",
+        "producer": "bridge",
+        "events": [{"event_type": "listener_ready", "actor": "Alice"}],
+    }), encoding="utf-8")
+
+    snapshot, error = read_diagnostic_snapshot(legacy)
+
+    assert error is None
+    assert snapshot["schema_version"] == "minecraft-bridge-diagnostics/1"
+    assert snapshot["events"][0]["event_type"] == "listener_ready"
+
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b" " * (MAX_ARTIFACT_BYTES + 1))
+    assert read_diagnostic_snapshot(oversized) == (None, "diagnostic_artifact_too_large")
+    assert artifact_projection(oversized, runtime_root=tmp_path) == {
+        "state": "invalid", "error": "diagnostic_artifact_too_large",
+    }
+
+    nested = tmp_path / "nested.json"
+    nested.write_text("[" * 1100 + "0" + "]" * 1100, encoding="utf-8")
+    assert read_diagnostic_snapshot(nested) == (None, "invalid_diagnostic_artifact")
+    assert artifact_projection(nested, runtime_root=tmp_path) == {
+        "state": "invalid", "error": "invalid_diagnostic_artifact",
+    }
+
+    huge_integer = tmp_path / "huge-integer.json"
+    huge_integer.write_text('{"value":' + "1" * 5000 + "}", encoding="utf-8")
+    assert read_diagnostic_snapshot(huge_integer) == (None, "invalid_diagnostic_artifact")
+    assert artifact_projection(huge_integer, runtime_root=tmp_path) == {
+        "state": "invalid", "error": "invalid_diagnostic_artifact",
+    }
+
+
+def test_close_delivers_stop_signal_after_flush_timeout(tmp_path, monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_write(_path, _snapshot):
+        started.set()
+        release.wait(2)
+
+    monkeypatch.setattr("env.minecraft_bridge_diagnostics.atomic_write_json", blocked_write)
+    recorder = BoundedDiagnosticRecorder(tmp_path / "bridge.json", producer="bridge")
+    recorder.record("listener_starting", actor="Alice")
+    assert started.wait(1)
+    recorder.record("listener_ready", actor="Alice")
+
+    assert recorder.close(timeout=0) is False
+    release.set()
+    deadline = time.monotonic() + 1
+    while recorder._writer.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert recorder.close() is True
 
 
 def test_runtime_result_preserves_diagnostics_and_collection_failure_is_non_authoritative():
