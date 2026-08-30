@@ -504,6 +504,31 @@ def _read_frozen_source_blob(revision: str, relative: str, *, root: Path = ROOT)
     return blob.stdout
 
 
+def _load_frozen_json(
+    revision: str, relative: str, *, source_reader=None,
+) -> dict[str, Any]:
+    """Load one frozen Git blob as a duplicate-key-safe JSON object."""
+    relative = _validate_frozen_source_path(relative)
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in items:
+            if key in value:
+                raise K10ContractError(f"duplicate JSON key in frozen K10 source: {relative}")
+            value[key] = item
+        return value
+
+    reader = source_reader or _read_frozen_source_blob
+    try:
+        text = reader(revision, relative).decode("utf-8")
+        value = json.loads(text, object_pairs_hook=pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise K10ContractError(f"cannot load frozen K10 JSON source: {relative}") from exc
+    if not isinstance(value, dict):
+        raise K10ContractError(f"frozen K10 JSON source must be an object: {relative}")
+    return value
+
+
 def _validate_frozen_protected_content(
     protocol: Mapping[str, Any], *, source_reader=None,
 ) -> None:
@@ -534,7 +559,7 @@ def validate_live_k10_checkout(
 def audit_historical_submissions(
     protocol: Mapping[str, Any] | None = None,
     inventory: Iterable[K10InventoryItem] | None = None,
-    *, source_reader=None,
+    *, source_reader=None, frozen_json_loader=None,
 ) -> dict[str, Any]:
     """Fail closed unless selected requests are absent from all disclosed sources."""
     protocol = dict(protocol or _load_json(PROTOCOL_PATH))
@@ -570,7 +595,12 @@ def audit_historical_submissions(
     declared = {"sha256:" + value for value in audit.get("prior_request_content_digests", [])}
     if historical != declared or len(historical) != 5:
         raise K10ContractError("K8 historical request-content set changed")
-    k6_protocol = _load_json(ROOT / str(audit.get("k6_protocol_path", "")))
+    revision = protocol.get("subject_runtime_semantic_reference")
+    if revision != SUBJECT_RUNTIME_REFERENCE:
+        raise K10ContractError("K10 frozen source revision identity mismatch")
+    k6_protocol_path = _validate_frozen_source_path(audit.get("k6_protocol_path"))
+    json_loader = frozen_json_loader or _load_frozen_json
+    k6_protocol = json_loader(revision, k6_protocol_path)
     exposure = k6_protocol.get("pre_run_exposure", {}).get("representative_submission_validation")
     if (not isinstance(exposure, Mapping) or exposure.get("cell_count") != 7
             or len(exposure.get("cells", [])) != 7):
@@ -578,9 +608,6 @@ def audit_historical_submissions(
     sources = audit.get("disclosed_source_bindings")
     if not isinstance(sources, Mapping) or set(sources) != _DISCLOSED_SOURCE_PATHS:
         raise K10ContractError("K10 disclosed-source audit bindings are incomplete")
-    revision = protocol.get("subject_runtime_semantic_reference")
-    if revision != SUBJECT_RUNTIME_REFERENCE:
-        raise K10ContractError("K10 frozen source revision identity mismatch")
     reader = source_reader or _read_frozen_source_blob
     for relative, declaration in sources.items():
         relative = _validate_frozen_source_path(relative)

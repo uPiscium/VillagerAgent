@@ -301,15 +301,100 @@ def test_historical_unseen_audit_does_not_depend_on_current_disclosed_source(mon
         for relative in protocol["historical_unseen_audit"]["disclosed_source_bindings"]
     }
     original = Path.read_bytes
+    original_text = Path.read_text
+    current_k6_protocol = (
+        k10_protocol_module.ROOT
+        / protocol["historical_unseen_audit"]["k6_protocol_path"]
+    ).resolve()
 
     def reject_current_disclosed_source(path):
         if path.resolve() in disclosed:
             raise AssertionError("historical audit read current disclosed source")
         return original(path)
 
+    def reject_current_k6_protocol(path, *args, **kwargs):
+        if path.resolve() == current_k6_protocol:
+            raise AssertionError("historical audit read current K6 protocol")
+        return original_text(path, *args, **kwargs)
+
     monkeypatch.setattr(Path, "read_bytes", reject_current_disclosed_source)
+    monkeypatch.setattr(Path, "read_text", reject_current_k6_protocol)
 
     assert audit_historical_submissions(protocol)["selected_absent"] is True
+
+
+def test_historical_audit_valid_frozen_k6_protocol_passes():
+    protocol = load_k10_protocol()
+    path = protocol["historical_unseen_audit"]["k6_protocol_path"]
+    frozen = k10_protocol_module._load_frozen_json(SUBJECT_RUNTIME_REFERENCE, path)
+
+    result = audit_historical_submissions(
+        protocol, frozen_json_loader=lambda revision, relative: frozen,
+    )
+
+    assert result["selected_absent"] is True
+
+
+def test_frozen_k6_protocol_missing_and_malformed_objects_fail_closed():
+    protocol = load_k10_protocol()
+
+    def unavailable(_revision, _relative):
+        raise K10ContractError("K10 frozen source object unavailable")
+
+    with pytest.raises(K10ContractError, match="frozen source object unavailable"):
+        audit_historical_submissions(protocol, frozen_json_loader=unavailable)
+
+    def malformed(revision, relative):
+        return k10_protocol_module._load_frozen_json(
+            revision, relative, source_reader=lambda *_args: b"{not-json",
+        )
+
+    with pytest.raises(K10ContractError, match="cannot load frozen K10 JSON"):
+        audit_historical_submissions(protocol, frozen_json_loader=malformed)
+
+
+def test_frozen_k6_protocol_duplicate_key_and_non_object_fail_closed():
+    protocol = load_k10_protocol()
+
+    def duplicate(revision, relative):
+        return k10_protocol_module._load_frozen_json(
+            revision, relative, source_reader=lambda *_args: b'{"a": 1, "a": 2}',
+        )
+
+    with pytest.raises(K10ContractError, match="duplicate JSON key"):
+        audit_historical_submissions(protocol, frozen_json_loader=duplicate)
+
+    def non_object(revision, relative):
+        return k10_protocol_module._load_frozen_json(
+            revision, relative, source_reader=lambda *_args: b"[]",
+        )
+
+    with pytest.raises(K10ContractError, match="must be an object"):
+        audit_historical_submissions(protocol, frozen_json_loader=non_object)
+
+
+def test_frozen_k6_protocol_invalid_utf8_fails_closed():
+    protocol = load_k10_protocol()
+
+    def invalid_utf8(revision, relative):
+        return k10_protocol_module._load_frozen_json(
+            revision, relative, source_reader=lambda *_args: b"\xff",
+        )
+
+    with pytest.raises(K10ContractError, match="cannot load frozen K10 JSON"):
+        audit_historical_submissions(protocol, frozen_json_loader=invalid_utf8)
+
+
+def test_frozen_k6_protocol_exposure_metadata_tamper_fails():
+    protocol = load_k10_protocol()
+    path = protocol["historical_unseen_audit"]["k6_protocol_path"]
+    frozen = k10_protocol_module._load_frozen_json(SUBJECT_RUNTIME_REFERENCE, path)
+    frozen["pre_run_exposure"]["representative_submission_validation"]["cell_count"] = 8
+
+    with pytest.raises(K10ContractError, match="exposure metadata changed"):
+        audit_historical_submissions(
+            protocol, frozen_json_loader=lambda _revision, _relative: frozen,
+        )
 
 
 def test_historical_disclosed_source_blob_mismatch_and_missing_object_fail_closed():
