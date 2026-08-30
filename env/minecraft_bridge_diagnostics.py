@@ -13,6 +13,7 @@ from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 try:
@@ -90,6 +91,10 @@ _LIFECYCLE_EXPECTED = {
                _LIFECYCLE_MILESTONES.items() if candidate == category}
     for category in ("listener", "mineflayer", "process")
 }
+_LIFECYCLE_EXPECTED["mineflayer"].update({
+    "last_connected": "mineflayer_connected",
+    "last_ready": "mineflayer_ready",
+})
 
 
 def new_correlation_id() -> str:
@@ -102,6 +107,25 @@ def valid_correlation_id(value: object) -> bool:
 
 def safe_identifier(value: object, *, limit: int = 96) -> str:
     return _SAFE.sub("_", str(value))[:limit] or "unknown"
+
+
+def safe_route(value: object, *, limit: int = 96) -> str:
+    """Retain only a bounded path, never URL authority, query, or fragment."""
+    raw = str(value).strip()
+    if "\\" in raw or "%" in raw:
+        return "/"
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return "/"
+    if (parsed.scheme and not parsed.netloc) or (raw.startswith("//") and not parsed.netloc):
+        return "/"
+    path = parsed.path.split("?", 1)[0].split("#", 1)[0]
+    if not path.startswith("/"):
+        return "/"
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", path.lstrip("/")):
+        return "/"
+    return safe_identifier(path or "/", limit=limit)
 
 
 def safe_error_class(error: BaseException | object) -> str:
@@ -146,7 +170,12 @@ def _clean_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in fields.items():
         if value is None:
             continue
-        if key in _STRING_FIELDS:
+        if key == "correlation_id":
+            if valid_correlation_id(value):
+                clean[key] = value
+        elif key == "route":
+            clean[key] = safe_route(value)
+        elif key in _STRING_FIELDS:
             clean[key] = safe_identifier(value)
         elif key in _INTEGER_FIELDS and type(value) is int and value >= 0:
             clean[key] = value
@@ -498,9 +527,12 @@ class BoundedDiagnosticRecorder:
         self._lifecycle.move_to_end(actor)
         category, name, policy = milestone
         actor_lifecycle = self._lifecycle[actor][category]
-        if policy == "first" and name in actor_lifecycle:
-            return
-        actor_lifecycle[name] = event
+        if policy != "first" or name not in actor_lifecycle:
+            actor_lifecycle[name] = event
+        if event["event_type"] == "mineflayer_connected":
+            actor_lifecycle["last_connected"] = event
+        elif event["event_type"] == "mineflayer_ready":
+            actor_lifecycle["last_ready"] = event
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

@@ -341,17 +341,6 @@ def test_process_still_alive_is_not_recorded_as_exited(diagnostic_agent, monkeyp
 def test_runtime_summary_merges_retained_caller_and_bridge_correlation(diagnostic_agent):
     correlation_id = "d" * 32
     caller = Agent._caller_diagnostic_recorder("Alice")
-    caller.record(
-        "caller_request_started", correlation_id=correlation_id, actor="Alice",
-        route="/post_move_to_pos", started_monotonic_ns=1,
-    )
-    caller.record(
-        "caller_request_timed_out", correlation_id=correlation_id, actor="Alice",
-        route="/post_move_to_pos", started_monotonic_ns=1, completed_monotonic_ns=31,
-        elapsed_ns=30, timeout_type="read_timeout", outcome_certainty="unknown",
-        retry_safe=False,
-    )
-    _record_routine_requests(caller, side="caller")
     bridge = BoundedDiagnosticRecorder(
         diagnostic_agent.minecraft_bridge_actor_diagnostics("Alice"),
         producer="bridge", actor="Alice",
@@ -365,10 +354,23 @@ def test_runtime_summary_merges_retained_caller_and_bridge_correlation(diagnosti
         "mineflayer_connection_error", actor="Alice", connection_state="error",
         error_class="ConnectionError",
     )
+    bridge.record("mineflayer_connected", actor="Alice", connection_state="connected")
+    bridge.record("mineflayer_ready", actor="Alice", connection_state="ready")
     bridge.record(
         "request_received", correlation_id=correlation_id, actor="Alice",
         route="/post_move_to_pos", started_monotonic_ns=2,
     )
+    caller.record(
+        "caller_request_started", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=1,
+    )
+    caller.record(
+        "caller_request_timed_out", correlation_id=correlation_id, actor="Alice",
+        route="/post_move_to_pos", started_monotonic_ns=1, completed_monotonic_ns=31,
+        elapsed_ns=30, timeout_type="read_timeout", outcome_certainty="unknown",
+        retry_safe=False,
+    )
+    _record_routine_requests(caller, side="caller")
     _record_routine_requests(bridge)
     assert bridge.flush()
 
@@ -385,6 +387,18 @@ def test_runtime_summary_merges_retained_caller_and_bridge_correlation(diagnosti
     assert actor_summary["lifecycle_milestones"]["mineflayer"]["first_ready"]
     assert actor_summary["lifecycle_milestones"]["mineflayer"]["last_disconnected"]
     assert actor_summary["lifecycle_milestones"]["mineflayer"]["last_connection_error"]
+    assert actor_summary["lifecycle_milestones"]["mineflayer"]["last_connected"]
+    assert actor_summary["lifecycle_milestones"]["mineflayer"]["last_ready"]
+    milestones = actor_summary["lifecycle_milestones"]["mineflayer"]
+    assert milestones["first_ready"]["timestamp_monotonic_ns"] < (
+        milestones["last_disconnected"]["timestamp_monotonic_ns"]
+    )
+    assert milestones["last_connection_error"]["timestamp_monotonic_ns"] < (
+        milestones["last_connected"]["timestamp_monotonic_ns"]
+    ) < milestones["last_ready"]["timestamp_monotonic_ns"]
+    timeout = next(event for event in actor_summary["critical_events"]["caller"]
+                   if event["correlation_id"] == correlation_id)
+    assert milestones["last_ready"]["timestamp_monotonic_ns"] < timeout["timestamp_monotonic_ns"]
     assert {event["event_type"] for event in actor_summary["mineflayer_lifecycle"]} >= {
         "mineflayer_connected", "mineflayer_ready", "mineflayer_disconnected",
         "mineflayer_connection_error",
@@ -395,26 +409,64 @@ def test_runtime_summary_merges_retained_caller_and_bridge_correlation(diagnosti
 def test_untrusted_artifact_fields_are_removed_from_projection(tmp_path):
     path = tmp_path / "bridge.json"
     secret = "never-retain-this-secret"
+    query_secret = "never-retain-query-secret"
     path.write_text(json.dumps({
         "schema_version": "minecraft-bridge-diagnostics/1",
         "producer": "bridge",
         "actor": "Alice",
         "events": [{
             "event_type": "request_received",
-            "route": "/post_find",
+            "route": f"https://user:{secret}@example.invalid/post_find?token={query_secret}#private",
+            "correlation_id": f"invalid-{secret}",
             "payload": secret,
             "request_body": secret,
         }],
     }), encoding="utf-8")
 
+    snapshot, error = read_diagnostic_snapshot(path)
     projection = artifact_projection(path, runtime_root=tmp_path)
 
+    assert error is None
     assert projection["state"] == "valid"
-    assert projection["snapshot"]["events"] == [{
+    assert snapshot["events"] == projection["snapshot"]["events"] == [{
         "event_type": "request_received",
         "route": "/post_find",
     }]
     assert secret not in json.dumps(projection)
+    assert query_secret not in json.dumps(projection)
+
+
+@pytest.mark.parametrize("untrusted_route", [
+    "https:/user:route-secret@example.invalid/post_find?token=query-secret",
+    "https:\\user:route-secret@example.invalid\\post_find?token=query-secret",
+    "https%3A%2F%2Fuser%3Aroute-secret%40example.invalid%2Fpost_find",
+    "/https%3A%2F%2Fuser%3Aroute-secret%40example.invalid%2Fpost_find",
+    "/https:user:route-secret@example.invalid/post_find",
+    "///user:route-secret@example.invalid/post_find?token=query-secret",
+])
+def test_malformed_url_like_routes_are_rejected_without_secret_retention(
+    tmp_path, untrusted_route,
+):
+    path = tmp_path / "bridge.json"
+    recorder = BoundedDiagnosticRecorder(path, producer="bridge", actor="Alice")
+
+    recorder.record(
+        "request_received", actor="Alice", route=untrusted_route,
+        correlation_id="e" * 32,
+    )
+    assert recorder.flush()
+    snapshot, error = read_diagnostic_snapshot(path)
+    projection = artifact_projection(path, runtime_root=tmp_path)
+
+    assert error is None
+    assert snapshot["events"][0]["route"] == "/"
+    assert snapshot["correlations"][0]["route"] == "/"
+    assert snapshot["unresolved_requests"][0]["route"] == "/"
+    assert "route-secret" not in json.dumps(snapshot)
+    assert "query-secret" not in json.dumps(snapshot)
+    assert projection["state"] == "valid"
+    assert "route-secret" not in json.dumps(projection)
+    assert "query-secret" not in json.dumps(projection)
 
 
 def test_recorder_close_stops_writer_and_rejects_new_events(tmp_path):
@@ -431,7 +483,8 @@ def test_diagnostics_are_bounded_and_do_not_record_payloads_or_secrets(tmp_path)
     recorder = BoundedDiagnosticRecorder(path, producer="bridge", actor="Alice", max_events=2)
     for index in range(3):
         recorder.record(
-            "request_received", actor="Alice", route="/post_find",
+            "request_received", actor="Alice",
+            route="https://user:secret-value@example.invalid/post_find?token=secret-value",
             correlation_id=f"{index:032x}", payload={"api_key": "secret-value"},
             secret="secret-value", request_body="secret-value",
         )
@@ -443,6 +496,10 @@ def test_diagnostics_are_bounded_and_do_not_record_payloads_or_secrets(tmp_path)
     assert "secret-value" not in serialized
     assert "payload" not in serialized
     assert "request_body" not in serialized
+    assert all(event["route"] == "/post_find" for event in snapshot["events"])
+    assert all(summary["route"] == "/post_find" for summary in snapshot["correlations"])
+    assert all(summary["route"] == "/post_find"
+               for summary in snapshot["unresolved_requests"])
 
 
 def test_early_caller_read_timeout_survives_more_than_256_routine_events(tmp_path):
@@ -582,9 +639,13 @@ def test_lifecycle_milestones_survive_more_than_256_routine_events(tmp_path):
         "listener_failed", "listener_shutdown",
     ):
         recorder.record(event_type, actor="Alice", connection_state="ready")
+    recorder.record("mineflayer_connected", actor="Alice", connection_state="connected")
+    recorder.record("mineflayer_ready", actor="Alice", connection_state="ready")
     _record_routine_requests(recorder)
 
-    snapshot = recorder.snapshot()
+    assert recorder.flush()
+    snapshot, error = read_diagnostic_snapshot(tmp_path / "bridge.json")
+    assert error is None
     milestones = snapshot["lifecycle"]["actors"]["Alice"]
 
     assert set(milestones["listener"]) == {
@@ -593,8 +654,15 @@ def test_lifecycle_milestones_survive_more_than_256_routine_events(tmp_path):
     }
     assert set(milestones["mineflayer"]) == {
         "first_bot_created", "first_connected", "first_ready", "last_disconnected",
-        "last_connection_error",
+        "last_connection_error", "last_connected", "last_ready",
     }
+    mineflayer = milestones["mineflayer"]
+    assert mineflayer["first_ready"]["timestamp_monotonic_ns"] < (
+        mineflayer["last_disconnected"]["timestamp_monotonic_ns"]
+    )
+    assert mineflayer["last_connection_error"]["timestamp_monotonic_ns"] < (
+        mineflayer["last_connected"]["timestamp_monotonic_ns"]
+    ) < mineflayer["last_ready"]["timestamp_monotonic_ns"]
     assert {event["event_type"] for event in snapshot["critical_events"]} >= {
         "mineflayer_disconnected", "mineflayer_connection_error", "listener_failed",
     }
@@ -697,24 +765,34 @@ def test_ping_start_is_reconstructed_after_correlation_eviction(tmp_path):
 def test_v2_retained_state_is_resanitized_and_bounded(tmp_path):
     path = tmp_path / "untrusted.json"
     secret = "never-retain-this-secret"
+    query_secret = "never-retain-query-secret"
+    secret_url = f"https://user:{secret}@example.invalid/post_find?token={query_secret}#private"
     timeout = {
         "event_type": "caller_request_timed_out", "correlation_id": "a" * 32,
-        "actor": "Alice", "timeout_type": "read_timeout", "payload": secret,
+        "actor": "Alice", "route": secret_url,
+        "timeout_type": "read_timeout", "payload": secret,
     }
     path.write_text(json.dumps({
         "schema_version": SCHEMA_VERSION,
         "producer": "caller",
         "events": [
-            {"event_type": "routine_event", "elapsed_ns": index, "payload": secret}
+            {"event_type": "routine_event", "elapsed_ns": index, "route": secret_url,
+             "correlation_id": f"invalid-{secret}", "payload": secret}
             for index in range(300)
         ],
         "critical_events": [timeout],
         "correlations": [{
             "correlation_id": "a" * 32, "actor": "Alice", "caller_timed_out": True,
-            "request_body": secret,
+            "route": secret_url, "request_body": secret,
         }],
-        "unresolved_requests": [],
-        "long_duration_requests": [],
+        "unresolved_requests": [{
+            "correlation_id": "b" * 32, "actor": "Alice", "bridge_received": True,
+            "route": secret_url,
+        }],
+        "long_duration_requests": [{
+            "correlation_id": "c" * 32, "actor": "Alice", "bridge_completed": True,
+            "elapsed_ns": 10, "route": secret_url,
+        }],
         "lifecycle": {"actors": {"Alice": {
             "listener": {"last_failed": {
                 "event_type": "listener_failed", "actor": "Alice", "secret": secret,
@@ -732,11 +810,19 @@ def test_v2_retained_state_is_resanitized_and_bounded(tmp_path):
     assert error is None
     assert snapshot["critical_events"][0]["timeout_type"] == "read_timeout"
     assert [event["elapsed_ns"] for event in snapshot["events"]] == [298, 299]
+    assert all("correlation_id" not in event for event in snapshot["events"])
     assert snapshot["retention"]["recent"]["dropped_count"] == 298
     assert snapshot["correlations"][0]["caller_timed_out"] is True
+    assert snapshot["unresolved_requests"][0]["route"] == "/post_find"
+    assert snapshot["long_duration_requests"][0]["route"] == "/post_find"
     assert snapshot["retention"]["critical"]["dropped_count"] == 2
     assert "first_ready" not in snapshot["lifecycle"]["actors"]["Alice"]["listener"]
     assert secret not in json.dumps(snapshot)
+    assert query_secret not in json.dumps(snapshot)
+    projection = artifact_projection(path, runtime_root=tmp_path)
+    assert projection["state"] == "valid"
+    assert secret not in json.dumps(projection)
+    assert query_secret not in json.dumps(projection)
 
 
 def test_v1_artifact_remains_readable_and_oversized_artifact_is_rejected(tmp_path):

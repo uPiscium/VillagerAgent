@@ -565,10 +565,13 @@ class Agent():
             )
 
             def retained_lifecycle_events(source, category, recent, prefix):
-                retained = list(source.get(category, {}).values())
+                retained = {
+                    (event.get("event_type"), event.get("timestamp_monotonic_ns")): event
+                    for event in source.get(category, {}).values()
+                }
                 if retained:
                     return sorted(
-                        retained,
+                        retained.values(),
                         key=lambda event: event.get("timestamp_monotonic_ns", 0),
                     )
                 return [event for event in recent
