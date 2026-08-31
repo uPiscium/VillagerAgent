@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 SOURCE = Path("env/minecraft_server_fast.py")
+HTTP_CONTRACT_SOURCE = Path("env/movement_http_contract.py")
 
 
 def _function(tree, name):
@@ -33,6 +34,7 @@ def test_fast_bridge_has_explicit_movement_cancel_and_overlap_contract():
     assert '"movement already active"' in source
     assert "status_code=409" in source
     assert "AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS" in source
+    assert "MOVEMENT_REQUEST_DEADLINE_SECONDS" in source
 
 
 def test_ping_handler_remains_independent_of_movement_coordinator():
@@ -103,7 +105,7 @@ def test_shutdown_cancellation_closes_item_drop_movement_admission():
     )
 
 
-def test_coordinated_movement_routes_have_no_competing_ten_second_wrapper():
+def test_coordinated_movement_routes_share_authoritative_request_budget():
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
     movement_handlers = {
         "hand", "move_to_", "move_to_pos", "use_on", "sleep_", "dig", "place",
@@ -119,6 +121,11 @@ def test_coordinated_movement_routes_have_no_competing_ten_second_wrapper():
             and decorator.func.id == "timeout"
             for decorator in function.decorator_list
         )
+        assert any(
+            isinstance(decorator, ast.Name)
+            and decorator.id == "movement_request_budget"
+            for decorator in function.decorator_list
+        )
 
     wear = _function(tree, "wear")
     handlers = [node for node in ast.walk(wear) if isinstance(node, ast.ExceptHandler)]
@@ -127,3 +134,18 @@ def test_coordinated_movement_routes_have_no_competing_ten_second_wrapper():
         isinstance(node, ast.Name) and node.id == "CooperativeMovementError"
         for handler in handlers for node in ast.walk(handler.type)
     )
+
+
+def test_cleanup_nonterminal_uses_explicit_effect_unknown_http_contract():
+    source = SOURCE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    execute = _function(tree, "_execute_movement")
+
+    assert "cleanup_completed" in ast.unparse(execute)
+    assert "MovementEffectUnknownError" in ast.unparse(execute)
+    assert "app.add_exception_handler(MovementEffectUnknownError" in source
+    handler_source = HTTP_CONTRACT_SOURCE.read_text(encoding="utf-8")
+    assert "OUTCOME_CERTAINTY_HEADER" in handler_source
+    assert "RETRY_SAFE_HEADER" in handler_source
+    assert "MOVEMENT_TERMINAL_HEADER" in handler_source
+    assert "MOVEMENT_FAILURE_REASON_HEADER" in handler_source

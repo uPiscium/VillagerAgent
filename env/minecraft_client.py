@@ -27,6 +27,10 @@ from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifac
 from env.minecraft_bridge_diagnostics import (
     BoundedDiagnosticRecorder,
     CORRELATION_HEADER,
+    OUTCOME_CERTAINTY_HEADER,
+    RETRY_SAFE_HEADER,
+    MOVEMENT_TERMINAL_HEADER,
+    MOVEMENT_FAILURE_REASON_HEADER,
     artifact_projection,
     classify_request_exception,
     new_correlation_id,
@@ -61,6 +65,24 @@ class MinecraftToolTimeoutError(TimeoutError):
             self.failure_detail["request_id"] = request_id
         if timeout_type is not None:
             self.failure_detail["timeout_type"] = timeout_type
+
+
+class MinecraftToolEffectUnknownError(MinecraftToolTimeoutError):
+    def __init__(self, message: str, *, agent: str | None = None,
+                 tool: str | None = None, request_id: str | None = None,
+                 status_code: int | None = None, bridge_reason: str | None = None,
+                 coordinator_terminal: bool | None = None):
+        super().__init__(
+            message, agent=agent, tool=tool, request_id=request_id,
+            timeout_type="bridge_effect_unknown",
+        )
+        self.failure_detail["reason"] = "minecraft_tool_effect_unknown"
+        if status_code is not None:
+            self.failure_detail["status_code"] = status_code
+        if bridge_reason is not None:
+            self.failure_detail["bridge_reason"] = bridge_reason
+        if coordinator_terminal is not None:
+            self.failure_detail["coordinator_terminal"] = coordinator_terminal
 
 
 class MinecraftActionLogError(RuntimeError):
@@ -166,6 +188,44 @@ def _minecraft_request(method: str, url: str, **kwargs):
             ) from exc
         raise
     completed = _request_monotonic_ns()
+    response_headers = getattr(response, "headers", {}) or {}
+    effect_unknown = (
+        str(response_headers.get(OUTCOME_CERTAINTY_HEADER, "")).lower() == "unknown"
+        and str(response_headers.get(RETRY_SAFE_HEADER, "")).lower() == "false"
+    )
+    if effect_unknown:
+        status_code = getattr(response, "status_code", None)
+        terminal_header = str(
+            response_headers.get(MOVEMENT_TERMINAL_HEADER, "")
+        ).lower()
+        coordinator_terminal = (
+            True if terminal_header == "true"
+            else False if terminal_header == "false"
+            else None
+        )
+        bridge_reason = response_headers.get(MOVEMENT_FAILURE_REASON_HEADER)
+        Agent.record_bridge_diagnostic(
+            actor_name, "caller_request_failed", **common,
+            completed_monotonic_ns=completed,
+            elapsed_ns=max(0, completed - started),
+            status_code=status_code,
+            configured_connect_timeout_s=connect_timeout,
+            configured_read_timeout_s=read_timeout,
+            timeout_type="bridge_effect_unknown",
+            outcome_certainty="unknown", retry_safe=False,
+        )
+        Agent.last_tool_timeout = {
+            "agent": actor_name,
+            "tool": tool_name,
+            "outcome_certainty": "unknown",
+            "retry_safe": False,
+        }
+        raise MinecraftToolEffectUnknownError(
+            f"Minecraft tool outcome is unknown: {tool_name}",
+            agent=actor_name, tool=tool_name, request_id=correlation_id,
+            status_code=status_code, bridge_reason=bridge_reason,
+            coordinator_terminal=coordinator_terminal,
+        )
     completed_fields = {
         **common,
         "completed_monotonic_ns": completed,

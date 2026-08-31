@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from langchain.agents import tool
 
 from env.env import VillagerBench, env_type
@@ -16,12 +18,21 @@ from env.minecraft_client import (
     Agent as MinecraftAgent,
     MinecraftActionLogError,
     MinecraftBridgeCleanupError,
+    MinecraftToolEffectUnknownError,
     MinecraftToolTimeoutError,
     ToolActionBlockedError,
     _minecraft_request,
     timeit,
 )
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+from env.minecraft_bridge_diagnostics import (
+    MOVEMENT_FAILURE_REASON_HEADER,
+    MOVEMENT_TERMINAL_HEADER,
+    OUTCOME_CERTAINTY_HEADER,
+    RETRY_SAFE_HEADER,
+)
+from env.movement_http_contract import movement_effect_unknown_response
+from env.movement_runtime import MovementEffectUnknownError
 from pipeline.agent import BaseAgent
 from start_with_config import (
     RuntimeDocumentResolution,
@@ -858,6 +869,56 @@ def test_minecraft_request_passes_connect_and_read_timeout(monkeypatch):
     assert calls[0][1]["timeout"] == (5.0, 30.0)
 
 
+def test_minecraft_request_preserves_explicit_bridge_effect_unknown(tmp_path, monkeypatch):
+    paths = RuntimePaths.isolated(tmp_path / "attempt")
+    atomic_write_json(paths.url_prefix, {"Alice": "http://localhost:5000"})
+    monkeypatch.setattr(MinecraftAgent, "runtime_paths_by_name", {"Alice": paths})
+    app = FastAPI()
+    app.add_exception_handler(MovementEffectUnknownError, movement_effect_unknown_response)
+
+    @app.post("/post_move_to_pos")
+    async def cleanup_unknown():
+        raise MovementEffectUnknownError(
+            "movement cleanup did not complete", reason="cleanup_timeout",
+            status_code=503, terminal=False,
+        )
+
+    response = TestClient(app).post("/post_move_to_pos")
+    assert response.status_code == 503
+    assert response.headers[OUTCOME_CERTAINTY_HEADER] == "unknown"
+    assert response.headers[RETRY_SAFE_HEADER] == "false"
+    assert response.headers[MOVEMENT_TERMINAL_HEADER] == "false"
+    assert response.headers[MOVEMENT_FAILURE_REASON_HEADER] == "cleanup_timeout"
+    monkeypatch.setattr(
+        "env.minecraft_client.requests.request", lambda *_args, **_kwargs: response,
+    )
+
+    with pytest.raises(MinecraftToolEffectUnknownError) as captured:
+        _minecraft_request("POST", "http://localhost:5000/post_move_to_pos")
+
+    assert captured.value.failure_detail == {
+        "reason": "minecraft_tool_effect_unknown",
+        "outcome_certainty": "unknown",
+        "retry_safe": False,
+        "message": "Minecraft tool outcome is unknown: post_move_to_pos",
+        "agent": "Alice",
+        "tool": "post_move_to_pos",
+        "request_id": captured.value.failure_detail["request_id"],
+        "timeout_type": "bridge_effect_unknown",
+        "status_code": 503,
+        "bridge_reason": "cleanup_timeout",
+        "coordinator_terminal": False,
+    }
+    MinecraftAgent._caller_diagnostic_recorder("Alice").flush()
+    snapshot = read_json_artifact(paths.minecraft_bridge_caller_diagnostics).value
+    events = snapshot["events"] + snapshot["critical_events"]
+    matching = [event for event in events
+                if event.get("correlation_id") == captured.value.failure_detail["request_id"]]
+    assert any(event["event_type"] == "caller_request_failed" for event in matching)
+    assert not any(event["event_type"] == "caller_request_completed" for event in matching)
+    assert all(event.get("outcome_certainty", "unknown") == "unknown" for event in matching)
+
+
 def test_minecraft_client_has_no_direct_unbounded_http_calls():
     source = (Path(__file__).resolve().parents[1] / "env" / "minecraft_client.py").read_text(
         encoding="utf-8"
@@ -868,7 +929,11 @@ def test_minecraft_client_has_no_direct_unbounded_http_calls():
 
 
 @pytest.mark.parametrize("method_name", ["run", "step"])
-def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch, method_name):
+@pytest.mark.parametrize("error_type", [
+    MinecraftToolTimeoutError, MinecraftToolEffectUnknownError,
+])
+def test_minecraft_agent_does_not_retry_unknown_tool_outcome(monkeypatch, method_name,
+                                                             error_type):
     attempts = []
     agent = object.__new__(MinecraftAgent)
     agent.name = "Alice"
@@ -889,14 +954,14 @@ def test_minecraft_agent_does_not_retry_timed_out_tool(monkeypatch, method_name)
 
         def __call__(self, _input):
             attempts.append(True)
-            raise MinecraftToolTimeoutError("bridge timed out")
+            raise error_type("bridge outcome unknown")
 
     monkeypatch.setattr(
         "env.minecraft_client.initialize_agent",
         lambda **_kwargs: TimedOutExecutor(),
     )
 
-    with pytest.raises(MinecraftToolTimeoutError, match="bridge timed out"):
+    with pytest.raises(error_type, match="bridge outcome unknown"):
         getattr(agent, method_name)("move", max_try_turn=10)
     assert attempts == [True]
 

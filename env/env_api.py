@@ -15,6 +15,7 @@ try:
         evaluate_movement_completion,
         movement_status,
     )
+    from env.movement_runtime import CooperativeMovementError
 except ImportError:
     from movement_diagnostics import (
         EUCLIDEAN_DISTANCE,
@@ -22,6 +23,7 @@ except ImportError:
         evaluate_movement_completion,
         movement_status,
     )
+    from movement_runtime import CooperativeMovementError
 
 if not os.environ.get("PYTEST_CURRENT_TEST") and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf8')
@@ -31,14 +33,6 @@ update_time = 0
 update_interval = .5
 last_jump_time = 0
 
-
-class CooperativeMovementError(RuntimeError):
-    """Carries a coordinated movement failure through legacy helper layers."""
-
-    def __init__(self, message, *, reason, status_code):
-        super().__init__(message)
-        self.reason = reason
-        self.status_code = status_code
 
 def getBlock(bot, Vec3, x, y, z):
     while True:

@@ -702,6 +702,30 @@ def test_movement_deadline_diagnostics_are_retained_and_metadata_only(tmp_path):
     assert "secret-value" not in json.dumps(snapshot)
 
 
+def test_cleanup_timeout_is_retained_as_nonterminal(tmp_path):
+    recorder = BoundedDiagnosticRecorder(tmp_path / "bridge.json", producer="bridge")
+    correlation_id = "d" * 32
+    recorder.record(
+        "movement_nonterminal", correlation_id=correlation_id, actor="Alice",
+        movement_id="c" * 32, operation="move_to_pos",
+        target_identity="block:1:2:3", completed_monotonic_ns=20,
+        terminal_reason="cleanup_timeout", movement_terminal=False,
+        movement_nonterminal=True, movement_failed=True,
+        cleanup_completed=False, goal_clear_attempted=True,
+        goal_clear_succeeded=False,
+    )
+
+    snapshot = recorder.snapshot()
+    event = next(item for item in snapshot["critical_events"]
+                 if item.get("correlation_id") == correlation_id)
+    summary = next(item for item in snapshot["correlations"]
+                   if item["correlation_id"] == correlation_id)
+    assert event["movement_nonterminal"] is True
+    assert event["cleanup_completed"] is False
+    assert summary["movement_nonterminal"] is True
+    assert summary.get("movement_terminal") is not True
+
+
 def test_retention_lane_overflow_is_independent_and_explicit(tmp_path):
     recorder = BoundedDiagnosticRecorder(
         tmp_path / "bounded.json", producer="caller", max_events=1,

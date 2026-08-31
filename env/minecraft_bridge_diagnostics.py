@@ -25,6 +25,10 @@ except ImportError:
 SCHEMA_VERSION = "minecraft-bridge-diagnostics/2"
 LEGACY_SCHEMA_VERSION = "minecraft-bridge-diagnostics/1"
 CORRELATION_HEADER = "X-Villager-Request-ID"
+OUTCOME_CERTAINTY_HEADER = "X-Villager-Outcome-Certainty"
+RETRY_SAFE_HEADER = "X-Villager-Retry-Safe"
+MOVEMENT_TERMINAL_HEADER = "X-Villager-Movement-Terminal"
+MOVEMENT_FAILURE_REASON_HEADER = "X-Villager-Movement-Failure-Reason"
 MAX_EVENTS = 256
 MAX_CRITICAL_EVENTS = 64
 MAX_CORRELATIONS = 128
@@ -54,7 +58,7 @@ _BOOLEAN_FIELDS = frozenset({
     "movement_cancelled", "movement_failed", "movement_overlap_rejected",
     "goal_clear_attempted", "goal_clear_succeeded", "cleanup_completed",
     "cancel_requested",
-    "movement_terminal",
+    "movement_terminal", "movement_nonterminal",
 })
 _STRING_FIELDS = frozenset({
     "correlation_id", "actor", "method", "route", "endpoint_identity",
@@ -75,6 +79,7 @@ _CRITICAL_PRIORITY = {
     "ping_failed": 2,
     "request_failed": 2,
     "movement_overlap_rejected": 2,
+    "movement_nonterminal": 3,
 }
 _LIFECYCLE_MILESTONES = {
     "listener_starting": ("listener", "first_starting", "first"),
@@ -228,6 +233,7 @@ def _correlation_priority(summary: Mapping[str, Any]) -> int:
             or summary.get("bridge_failed")
             or summary.get("movement_deadline") or summary.get("movement_cancelled")
             or summary.get("movement_failed") or summary.get("movement_overlap_rejected")
+            or summary.get("movement_nonterminal")
             or (type(status_code) is int and status_code >= 500)):
         return 2
     if (type(status_code) is int and status_code >= 400):
@@ -429,6 +435,9 @@ class BoundedDiagnosticRecorder:
             "request_failed": ("bridge_failed", "bridge_end_ns", "completed_monotonic_ns"),
             "movement_started": ("movement_started", "bridge_start_ns", "started_monotonic_ns"),
             "movement_terminal": ("movement_terminal", "bridge_end_ns", "completed_monotonic_ns"),
+            "movement_nonterminal": (
+                "movement_nonterminal", "bridge_end_ns", "completed_monotonic_ns",
+            ),
             "movement_overlap_rejected": (
                 "movement_overlap_rejected", "bridge_end_ns", "completed_monotonic_ns",
             ),
@@ -460,7 +469,7 @@ class BoundedDiagnosticRecorder:
         ):
             if key in event:
                 summary[key] = event[key]
-        if event_type == "movement_terminal":
+        if event_type in {"movement_terminal", "movement_nonterminal"}:
             terminal_reason = event.get("terminal_reason")
             summary["movement_completed"] = terminal_reason == "reached"
             summary["movement_deadline"] = terminal_reason == "deadline"

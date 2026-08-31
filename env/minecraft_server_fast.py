@@ -31,10 +31,17 @@ try:
     )
     from env.movement_runtime import (
         AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS,
+        MOVEMENT_REQUEST_DEADLINE_SECONDS,
         MovementCoordinator,
+        MovementAdmissionClosedError,
+        MovementEffectUnknownError,
         MovementOverlapError,
+        MovementRequestDeadlineError,
+        movement_lease_deadline,
         reconcile_mineflayer_state,
+        run_with_movement_request_budget,
     )
+    from env.movement_http_contract import movement_effect_unknown_response
     from benchmarks.minecraft.position_contract import resolve_position_convention
     from env.world_initialization import PRESERVE_RESTORED_SNAPSHOT
 except ImportError:
@@ -49,10 +56,17 @@ except ImportError:
     )
     from movement_runtime import (
         AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS,
+        MOVEMENT_REQUEST_DEADLINE_SECONDS,
         MovementCoordinator,
+        MovementAdmissionClosedError,
+        MovementEffectUnknownError,
         MovementOverlapError,
+        MovementRequestDeadlineError,
+        movement_lease_deadline,
         reconcile_mineflayer_state,
+        run_with_movement_request_budget,
     )
+    from movement_http_contract import movement_effect_unknown_response
     from benchmarks.minecraft.position_contract import resolve_position_convention
     from world_initialization import PRESERVE_RESTORED_SNAPSHOT
 
@@ -221,6 +235,9 @@ async def cooperative_movement_error_response(_request, error):
     )
 
 
+app.add_exception_handler(MovementEffectUnknownError, movement_effect_unknown_response)
+
+
 def reconcile_current_mineflayer_state():
     state = reconcile_mineflayer_state(bot)
     if state["connected"]:
@@ -300,6 +317,30 @@ def timeout(seconds: float):
                 raise HTTPException(status_code=408, detail="Request timed out")
         return wrapper
     return decorator
+
+
+def movement_request_budget(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        global bridge_accepting_movement
+        try:
+            return await run_with_movement_request_budget(
+                func(*args, **kwargs),
+                timeout_seconds=MOVEMENT_REQUEST_DEADLINE_SECONDS,
+            )
+        except MovementRequestDeadlineError:
+            terminal = not movement_coordinator.admission_closed and not movement_coordinator.active
+            reason = (
+                "cleanup_timeout" if movement_coordinator.admission_closed
+                else "movement_request_deadline"
+            )
+            if movement_coordinator.admission_closed:
+                bridge_accepting_movement = False
+            raise MovementEffectUnknownError(
+                "movement request outcome is unknown",
+                reason=reason, status_code=504, terminal=terminal,
+            )
+    return wrapper
 
 
 async def _bounded_control_json(request: Request, limit=1024):
@@ -418,6 +459,7 @@ async def find(request: Request):
         return JSONResponse({'message': observation, 'status': done, 'data':[]})
     
 @app.post('/post_hand')
+@movement_request_budget
 async def hand(request: Request):
     """hand item to entity_name: hand item to entity_name."""
     data = await request.json()
@@ -466,6 +508,13 @@ def _movement_fields(result) -> dict:
 
 async def _execute_movement(request: Request | None, target, *, operation: str,
                             tolerance: float, completion_policy=EUCLIDEAN_DISTANCE):
+    global bridge_accepting_movement
+    if movement_coordinator.admission_closed:
+        bridge_accepting_movement = False
+        raise MovementEffectUnknownError(
+            "movement cleanup remains unconfirmed",
+            reason="cleanup_timeout", status_code=503, terminal=False,
+        )
     if not bridge_accepting_movement:
         return None, JSONResponse(
             {"message": "bridge is shutting down", "status": False,
@@ -497,6 +546,13 @@ async def _execute_movement(request: Request | None, target, *, operation: str,
         started_monotonic_ns=started,
         configured_movement_deadline_s=AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS,
     )
+    lease_deadline = movement_lease_deadline(
+        AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS,
+    )
+    if lease_deadline <= 0:
+        raise MovementRequestDeadlineError(
+            "movement request budget exhausted before lease admission"
+        )
     try:
         result = await movement_coordinator.move(
             target,
@@ -510,15 +566,19 @@ async def _execute_movement(request: Request | None, target, *, operation: str,
             movement_id=movement_id,
             target_identity=target_identity,
             operation=operation,
+            deadline_seconds=lease_deadline,
         )
     except asyncio.CancelledError:
         cancelled_result = movement_coordinator.last_result
         if (cancelled_result is not None
                 and cancelled_result.metadata.get("movement_id") == movement_id):
+            terminal = bool(cancelled_result.metadata.get("cleanup_completed"))
             bridge_diagnostics.record(
-                "movement_terminal", correlation_id=correlation_id,
+                "movement_terminal" if terminal else "movement_nonterminal",
+                correlation_id=correlation_id,
                 actor=args.username, endpoint_identity=f"actor:{args.username}",
-                completed_monotonic_ns=time.monotonic_ns(), movement_terminal=True,
+                completed_monotonic_ns=time.monotonic_ns(), movement_terminal=terminal,
+                movement_nonterminal=not terminal,
                 movement_completed=False,
                 movement_deadline=cancelled_result.reason == "deadline",
                 movement_cancelled=cancelled_result.reason == "cancelled",
@@ -527,6 +587,8 @@ async def _execute_movement(request: Request | None, target, *, operation: str,
                 },
                 **_movement_fields(cancelled_result),
             )
+            if not terminal:
+                bridge_accepting_movement = False
         raise
     except MovementOverlapError:
         completed = time.monotonic_ns()
@@ -542,21 +604,34 @@ async def _execute_movement(request: Request | None, target, *, operation: str,
              "reason": "movement_in_progress"},
             status_code=409,
         )
+    except MovementAdmissionClosedError:
+        bridge_accepting_movement = False
+        raise MovementEffectUnknownError(
+            "movement cleanup remains unconfirmed",
+            reason="cleanup_timeout", status_code=503, terminal=False,
+        )
     completed = time.monotonic_ns()
+    terminal = bool(result.metadata.get("cleanup_completed"))
     bridge_diagnostics.record(
-        "movement_terminal", correlation_id=correlation_id, actor=args.username,
+        "movement_terminal" if terminal else "movement_nonterminal",
+        correlation_id=correlation_id, actor=args.username,
         endpoint_identity=f"actor:{args.username}", completed_monotonic_ns=completed,
-        movement_terminal=True, movement_completed=result.reason == "reached",
+        movement_terminal=terminal, movement_nonterminal=not terminal,
+        movement_completed=terminal and result.reason == "reached",
         movement_deadline=result.reason == "deadline",
         movement_cancelled=result.reason == "cancelled",
         movement_failed=result.reason not in {"reached", "deadline", "cancelled"},
         **_movement_fields(result),
     )
+    if not terminal:
+        bridge_accepting_movement = False
+        raise MovementEffectUnknownError(
+            result.message, reason=result.reason, status_code=503, terminal=False,
+        )
     status_code = {
         "deadline": 408,
         "cancelled": 409,
         "pathfinder_error": 500,
-        "cleanup_timeout": 500,
     }.get(result.reason, 200)
     return result, status_code
 
@@ -583,6 +658,7 @@ def _movement_runner(request: Request, operation: str):
 
 
 @app.post('/post_move_to')
+@movement_request_budget
 async def move_to_(request: Request):
     """move_to name: move to the entity by name or postion x y z."""
     data = await request.json()
@@ -605,6 +681,7 @@ async def move_to_(request: Request):
 
 
 @app.post('/post_move_to_pos')
+@movement_request_budget
 async def move_to_pos(request: Request):
     """move_to_pos x y z: move to the position x y z."""
     data = await request.json()
@@ -669,6 +746,7 @@ async def cancel_movement(request: Request):
 
 
 @app.post('/post_use_on')
+@movement_request_budget
 async def use_on(request: Request):
     """use_on item_name entity_name: For example, you can use shears on sheep, use bucket on cow."""
     data = await request.json()
@@ -688,6 +766,7 @@ async def use_on(request: Request):
 
 
 @app.post('/post_sleep')
+@movement_request_budget
 async def sleep_(request: Request):
     """sleep: to sleep."""
     beds = BlocksSearch(bot, Vec3, mcData, 16, 'bed', count=1)
@@ -711,6 +790,7 @@ async def wake_():
 
 
 @app.post('/post_dig')
+@movement_request_budget
 async def dig(request: Request):
     """dig x y z: dig block at x y z."""
     data = await request.json()
@@ -723,6 +803,7 @@ async def dig(request: Request):
 
 
 @app.post('/post_place')
+@movement_request_budget
 async def place(request: Request):
     """place item_name x y z facing: place item at x y z, facing is one of [W, E, S, N, x, y, z]."""
     data = await request.json()
@@ -851,6 +932,7 @@ async def entity(request: Request):
 
 
 @app.post('/post_get')
+@movement_request_budget
 async def get(request: Request):
     """get item_name count:  to get item from one chest, container, etc."""
     data = await request.json()
@@ -865,6 +947,7 @@ async def get(request: Request):
 
 
 @app.post('/post_put')
+@movement_request_budget
 async def put(request: Request):
     """put item_name count:  to put item to one chest, container, etc."""
     data = await request.json()
@@ -879,6 +962,7 @@ async def put(request: Request):
 
 
 @app.post('/post_smelt')
+@movement_request_budget
 async def smelt(request: Request):
     """smelt item_name item_count material:  to smelt item in the furnace. fuel_item is one of [wood, coal, charcoal, lava_bucket, etc]."""
     data = await request.json()
@@ -893,6 +977,7 @@ async def smelt(request: Request):
 
 
 @app.post('/post_craft')
+@movement_request_budget
 async def craft(request: Request):
     """craft item_name count:  to craft item in the crafting_table."""
     data = await request.json()
@@ -907,6 +992,7 @@ async def craft(request: Request):
 
 
 @app.post('/post_enchant')
+@movement_request_budget
 async def enchant(request: Request):
     """enchant item_name count:  to enchant item in the enchanting_table."""
     data = await request.json()
@@ -921,6 +1007,7 @@ async def enchant(request: Request):
 
 
 @app.post('/post_trade')
+@movement_request_budget
 async def trade(request: Request):
     """trade item_name count:  to trade item with the entity."""
     data = await request.json()
@@ -935,6 +1022,7 @@ async def trade(request: Request):
 
 
 @app.post('/post_repair')
+@movement_request_budget
 async def repair(request: Request):
     """repair item_name material:  to repair item in the anvil. material is one of [wood, stone, iron, diamond, gold]."""
     data = await request.json()
@@ -949,6 +1037,7 @@ async def repair(request: Request):
 
 
 @app.post('/post_eat')
+@movement_request_budget
 async def eat(request: Request):
     """eat item_name:  to eat item."""
     data = await request.json()
@@ -962,6 +1051,7 @@ async def eat(request: Request):
 
 
 @app.post('/post_drink')
+@movement_request_budget
 async def drink(request: Request):
     """drink item_name count:  to drink item."""
     data = await request.json()
@@ -975,6 +1065,7 @@ async def drink(request: Request):
 
 
 @app.post('/post_wear')
+@movement_request_budget
 async def wear(request: Request):
     """wear slot item_name:  to wear item on head,torso,legs,feet,off-hand."""
     data = await request.json()
@@ -1011,6 +1102,7 @@ async def find_inventory(request: Request):
 
 
 @app.post('/post_open')
+@movement_request_budget
 async def open_(request: Request):
     """open item_name:  to open the door, gate, fence_gate, trapdoor, chest, etc, return the items names if open chest"""
     data = await request.json()
@@ -1024,6 +1116,7 @@ async def open_(request: Request):
 
 
 @app.post('/post_close')
+@movement_request_budget
 async def close_(request: Request):
     """close item_name:  to close the door, gate, fence_gate, trapdoor, chest, etc."""
     data = await request.json()
@@ -1040,6 +1133,7 @@ async def close_(request: Request):
 
 
 @app.post('/post_activate')
+@movement_request_budget
 async def activate(request: Request):
     """activate item_name:  to activate the button, lever, pressure_plate, etc."""
     data = await request.json()

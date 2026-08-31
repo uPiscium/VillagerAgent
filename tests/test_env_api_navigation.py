@@ -1,7 +1,15 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from env.movement_diagnostics import STRICT_PER_AXIS
+from env.movement_runtime import (
+    MovementCoordinator,
+    MovementEffectUnknownError,
+    MovementRequestDeadlineError,
+    run_with_movement_request_budget,
+)
 
 
 class Position:
@@ -158,3 +166,124 @@ def test_use_on_disallows_legacy_fallback_after_cooperative_selection(monkeypatc
 
     assert success is False
     assert message == "cannot reach sheep"
+
+
+def test_dig_retry_movements_share_request_budget_and_cleanup(monkeypatch):
+    from env.env_api import dig_at_cooperative
+
+    async def exercise():
+        bot = FakeBot(Position(0, 0, 0))
+        bot.chat = lambda *_args: None
+        polls = 0
+
+        async def movement_poll(_interval):
+            nonlocal polls
+            polls += 1
+            if polls == 1:
+                bot.entity.position = runtime._target
+                await asyncio.sleep(0)
+                return
+            await asyncio.Event().wait()
+
+        runtime = MovementCoordinator(
+            bot, FakePathfinderModule, sleep=movement_poll,
+        )
+        async def run_movement(target, tolerance):
+            return await runtime.move(target, tolerance=tolerance)
+        monkeypatch.setattr("env.env_api.random.randint", lambda *_args: 4)
+
+        with pytest.raises(MovementRequestDeadlineError):
+            await run_with_movement_request_budget(
+                dig_at_cooperative(
+                    bot, FakePathfinderModule, Position, (0, 0, 0), run_movement,
+                ),
+                timeout_seconds=.05,
+            )
+
+        assert runtime.active is False
+        assert runtime.last_result.reason == "cancelled"
+        assert runtime.last_result.metadata["cleanup_completed"] is True
+        assert bot.pathfinder.goals.count(None) == 3
+
+    asyncio.run(exercise())
+
+
+def test_place_candidate_movements_share_request_budget_and_cleanup(monkeypatch):
+    from env.env_api import place_axis
+
+    async def exercise():
+        bot = FakeBot(Position(0, 0, 0))
+        bot.heldItem = SimpleNamespace(name="stone")
+        bot.dig = lambda *_args: None
+        bot.blockAt = lambda position: {
+            "name": "stone" if position.y < 0 else "air",
+        }
+        polls = 0
+
+        async def movement_poll(_interval):
+            nonlocal polls
+            polls += 1
+            if polls <= 2:
+                bot.entity.position = runtime._target
+                await asyncio.sleep(0)
+                return
+            await asyncio.Event().wait()
+
+        async def placement_fails(*_args, **_kwargs):
+            return False
+
+        runtime = MovementCoordinator(
+            bot, FakePathfinderModule, sleep=movement_poll,
+        )
+        async def run_movement(target, tolerance):
+            return await runtime.move(target, tolerance=tolerance)
+        monkeypatch.setattr("env.env_api.place_block", placement_fails)
+
+        with pytest.raises(MovementRequestDeadlineError):
+            await run_with_movement_request_budget(
+                place_axis(
+                    bot, SimpleNamespace(), FakePathfinderModule, Position,
+                    "stone", (0, 0, 0), "A", movement_runner=run_movement,
+                ),
+                timeout_seconds=.05,
+            )
+
+        assert runtime.active is False
+        assert runtime.last_result.reason == "cancelled"
+        assert runtime.last_result.metadata["cleanup_completed"] is True
+        assert bot.pathfinder.goals.count(None) >= 3
+
+    asyncio.run(exercise())
+
+
+def test_place_propagates_effect_unknown_without_trying_another_candidate(monkeypatch):
+    from env.env_api import place_axis
+
+    async def exercise():
+        bot = FakeBot(Position(0, 0, 0))
+        bot.heldItem = SimpleNamespace(name="stone")
+        bot.dig = lambda *_args: None
+        bot.blockAt = lambda position: {
+            "name": "stone" if position.y < 0 else "air",
+        }
+        calls = 0
+
+        async def movement_unknown(_target, _tolerance):
+            nonlocal calls
+            calls += 1
+            raise MovementEffectUnknownError(
+                "cleanup unknown", reason="cleanup_timeout",
+                status_code=503, terminal=False,
+            )
+
+        monkeypatch.setattr(
+            "env.env_api.place_block", lambda *_args, **_kwargs: None,
+        )
+        with pytest.raises(MovementEffectUnknownError):
+            await place_axis(
+                bot, SimpleNamespace(), FakePathfinderModule, Position,
+                "stone", (0, 0, 0), "A", movement_runner=movement_unknown,
+            )
+        assert calls == 1
+
+    asyncio.run(exercise())

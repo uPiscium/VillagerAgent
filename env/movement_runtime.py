@@ -6,6 +6,7 @@ when :meth:`move` returns.
 """
 
 import asyncio
+import contextvars
 import inspect
 import math
 import time
@@ -30,10 +31,74 @@ except ImportError:
 AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS = 9.0
 MOVEMENT_DEADLINE_SECONDS = AUTHORITATIVE_MOVEMENT_DEADLINE_SECONDS
 CLEANUP_DEADLINE_SECONDS = 0.5
+MOVEMENT_REQUEST_DEADLINE_SECONDS = 10.0
+_MOVEMENT_REQUEST_DEADLINE = contextvars.ContextVar(
+    "movement_request_deadline", default=None,
+)
 
 
 class MovementOverlapError(RuntimeError):
     """Raised when a coordinator already has an active movement lease."""
+
+
+class MovementAdmissionClosedError(RuntimeError):
+    """Raised after cleanup uncertainty permanently closes local admission."""
+
+
+class MovementRequestDeadlineError(TimeoutError):
+    """Raised after the authoritative whole-request movement budget expires."""
+
+
+class CooperativeMovementError(RuntimeError):
+    """Carries a coordinated movement failure through legacy helper layers."""
+
+    def __init__(self, message, *, reason, status_code):
+        super().__init__(message)
+        self.reason = reason
+        self.status_code = int(status_code)
+
+
+class MovementEffectUnknownError(CooperativeMovementError):
+    """Carries an explicit retry-unsafe HTTP effect boundary."""
+
+    def __init__(self, message: str, *, reason: str, status_code: int,
+                 terminal: bool):
+        super().__init__(message, reason=reason, status_code=status_code)
+        self.terminal = bool(terminal)
+
+
+def movement_request_remaining(clock: Callable[[], float] = time.monotonic) -> Optional[float]:
+    deadline = _MOVEMENT_REQUEST_DEADLINE.get()
+    if deadline is None:
+        return None
+    return max(0.0, float(deadline) - float(clock()))
+
+
+def movement_lease_deadline(default_seconds: float, *,
+                            cleanup_reserve_seconds: float = CLEANUP_DEADLINE_SECONDS,
+                            clock: Callable[[], float] = time.monotonic) -> float:
+    remaining = movement_request_remaining(clock)
+    if remaining is None:
+        return max(0.0, float(default_seconds))
+    return max(0.0, min(
+        float(default_seconds), remaining - float(cleanup_reserve_seconds),
+    ))
+
+
+async def run_with_movement_request_budget(awaitable, *,
+                                           timeout_seconds: float = MOVEMENT_REQUEST_DEADLINE_SECONDS,
+                                           clock: Callable[[], float] = time.monotonic):
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    token = _MOVEMENT_REQUEST_DEADLINE.set(float(clock()) + timeout_seconds)
+    try:
+        try:
+            return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+        except asyncio.TimeoutError as error:
+            raise MovementRequestDeadlineError(
+                "movement-capable request deadline exceeded"
+            ) from error
+    finally:
+        _MOVEMENT_REQUEST_DEADLINE.reset(token)
 
 
 @dataclass
@@ -97,10 +162,16 @@ class MovementCoordinator:
         self._active_metadata: Optional[dict] = None
         self._cleanup_complete: Optional[asyncio.Event] = None
         self._last_result: Optional[MovementResult] = None
+        self._admission_closed = False
+        self._admission_closed_reason: Optional[str] = None
 
     @property
     def active(self) -> bool:
         return self._active_task is not None and not self._active_task.done()
+
+    @property
+    def admission_closed(self) -> bool:
+        return self._admission_closed
 
     def request_cancel(self, reason: str = "cancelled") -> bool:
         if self._cancel_event is None or not self.active:
@@ -115,6 +186,10 @@ class MovementCoordinator:
         metadata = self._active_metadata or {}
         return {
             "active": self.active,
+            "admission_closed": self._admission_closed,
+            "terminal": not self._admission_closed and not self.active,
+            **({"admission_closed_reason": self._admission_closed_reason}
+               if self._admission_closed_reason else {}),
             **{key: metadata[key] for key in (
                 "movement_id", "correlation_id", "operation", "target_identity",
             ) if key in metadata},
@@ -129,7 +204,12 @@ class MovementCoordinator:
         """Request cancellation and wait a bounded time for owned work to end."""
         task = self._active_task
         if task is None:
-            return {"active": False, "cancel_requested": False, "terminal": True}
+            return {
+                "active": False,
+                "cancel_requested": False,
+                "terminal": not self._admission_closed,
+                "admission_closed": self._admission_closed,
+            }
         cleanup_complete = self._cleanup_complete
         self.request_cancel(reason)
         try:
@@ -168,6 +248,8 @@ class MovementCoordinator:
     ) -> MovementResult:
         if self.active:
             raise MovementOverlapError("movement already active")
+        if self._admission_closed:
+            raise MovementAdmissionClosedError("movement admission is closed")
         self._cancel_event = cancel_event or asyncio.Event()
         self._cancel_reason = None
         self._cleanup_complete = asyncio.Event()
@@ -263,10 +345,15 @@ class MovementCoordinator:
                 cleanup_task.cancel()
                 await asyncio.gather(cleanup_task, return_exceptions=True)
                 reason = "cleanup_timeout"
+                self._admission_closed = True
+                self._admission_closed_reason = "cleanup_timeout"
             except asyncio.CancelledError:
                 cleanup_task.cancel()
                 await asyncio.gather(cleanup_task, return_exceptions=True)
-                raise
+                reason = "cleanup_timeout"
+                self._admission_closed = True
+                self._admission_closed_reason = "cleanup_timeout"
+                external_cancelled = external_cancelled or self._cancel_reason is None
             finally:
                 if metadata["cleanup_completed"] and self._cleanup_complete is not None:
                     self._cleanup_complete.set()
