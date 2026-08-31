@@ -38,6 +38,15 @@ class ProviderCallTerminationError(TimeoutError):
     """A timed-out provider call whose worker could not be stopped cooperatively."""
 
 
+class ProviderCallCancellationError(InterruptedError):
+    """A provider call interrupted by its caller, with bounded-stop evidence."""
+
+    def __init__(self, message, *, provider_termination_confirmed, close_failure_diagnostics=None):
+        super().__init__(message)
+        self.provider_termination_confirmed = bool(provider_termination_confirmed)
+        self.close_failure_diagnostics = close_failure_diagnostics or {}
+        self.diagnostics = self.close_failure_diagnostics
+
 def _contains_tag(content: str, tag: str) -> bool:
     def normalize(value: str) -> str:
         return " ".join(value.casefold().replace("_", " ").replace("-", " ").split())
@@ -167,7 +176,13 @@ class OpenAILanguageModel(AbstractLanguageModel):
             with path.open("a", encoding="utf-8") as output:
                 output.write(json.dumps(value, ensure_ascii=True, sort_keys=True) + "\n")
 
-    def _bounded_provider_call(self, callback, provider_client):
+    def _bounded_provider_call(self, callback, provider_client, cancellation_event=None):
+        if cancellation_event is not None and cancellation_event.is_set():
+            raise ProviderCallCancellationError(
+                "OpenAI provider call was cancelled before start",
+                provider_termination_confirmed=True,
+                close_failure_diagnostics={"phase": "before_start"},
+            )
         outcome = queue.Queue(maxsize=1)
 
         def invoke():
@@ -178,9 +193,56 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
         worker = threading.Thread(target=invoke, name="openai-provider-call", daemon=True)
         worker.start()
-        try:
-            succeeded, value = outcome.get(timeout=self.request_timeout_seconds)
-        except queue.Empty:
+        deadline = time.monotonic() + self.request_timeout_seconds
+        succeeded = None
+        value = None
+        while True:
+            if cancellation_event is not None and cancellation_event.is_set():
+                cancel_deadline = time.monotonic() + 1.0
+                diagnostics = {}
+                close = getattr(provider_client, "close", None)
+                if callable(close):
+                    close_done = threading.Event()
+                    close_error = []
+
+                    def close_provider():
+                        try:
+                            close()
+                        except BaseException as exc:  # diagnostics must not mask cancellation
+                            close_error.append(exc)
+                        finally:
+                            close_done.set()
+
+                    threading.Thread(target=close_provider, name="openai-provider-close", daemon=True).start()
+                    remaining = max(0.0, cancel_deadline - time.monotonic())
+                    close_done.wait(remaining)
+                    if close_error:
+                        diagnostics["close_error_type"] = type(close_error[0]).__name__
+                    elif not close_done.is_set():
+                        diagnostics["close_pending"] = True
+                remaining = max(0.0, cancel_deadline - time.monotonic())
+                worker.join(remaining)
+                if worker.is_alive():
+                    diagnostics["worker_pending"] = True
+                confirmed = (
+                    not worker.is_alive()
+                    and not diagnostics.get("close_pending")
+                    and "close_error_type" not in diagnostics
+                )
+                raise ProviderCallCancellationError(
+                    "OpenAI provider call was cancelled",
+                    provider_termination_confirmed=confirmed,
+                    close_failure_diagnostics=diagnostics,
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                succeeded, value = outcome.get(timeout=min(remaining, 0.05))
+                break
+            except queue.Empty:
+                continue
+        if succeeded is None:
             close = getattr(provider_client, "close", None)
             if callable(close):
                 close()
@@ -298,7 +360,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
     def gpt_api(self, messages: list, model: str, temperature: float,
                 max_tokens: int | None = None, provider_client=None,
-                reasoning_effort: str | None = None):
+                reasoning_effort: str | None = None, cancellation_event=None):
         """为提供的对话消息创建新的回答
 
         Args:
@@ -320,7 +382,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 max_tokens=max_tokens, extra_body=extra_body,
             )
 
-        completion = self._bounded_provider_call(complete, provider_client)
+        completion = self._bounded_provider_call(complete, provider_client, cancellation_event)
         choice = completion.choices[0]
         content = choice.message.content or ""
         reasoning = (
@@ -342,7 +404,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
     
     def gpt_api_stream(self, messages: list, model: str, temperature: float,
                        max_tokens: int | None = None, provider_client=None,
-                       reasoning_effort: str | None = None):
+                       reasoning_effort: str | None = None, cancellation_event=None):
         """为提供的对话消息创建新的回答 (流式传输)
 
         Args:
@@ -397,7 +459,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 "finish_reason": finish_reason,
             }
 
-        content, response_metadata = self._bounded_provider_call(consume_stream, provider_client)
+        content, response_metadata = self._bounded_provider_call(consume_stream, provider_client, cancellation_event)
         self._response_metadata.value = response_metadata
         logger.debug(f"Time taken: {time.monotonic() - start_time}")
         return content
@@ -414,7 +476,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
     def few_shot_generate_thoughts(self, system_prompt: str = "", example_prompt: [str] or str = [], max_tokens=1024,
                                    temperature=0.0, k=1, stop=None, cache_enabled=False, api_model="", check_tags=[],
-                                   json_check=False, stream=True, reasoning_effort: str | None = None):
+                                   json_check=False, stream=True, reasoning_effort: str | None = None,
+                                   cancellation_event=None):
         if api_model == "":
             api_model = self.api_model
         if type(example_prompt) == str:
@@ -423,10 +486,33 @@ class OpenAILanguageModel(AbstractLanguageModel):
         assert len(example_prompt) % 2 == 1 or len(example_prompt) == 0, "example prompt should be odd number or empty"
 
         prompt = str(system_prompt) + "\n" + "\n".join(example_prompt)
+        if cancellation_event is not None and cancellation_event.is_set():
+            raise ProviderCallCancellationError(
+                "OpenAI provider call was cancelled before start",
+                provider_termination_confirmed=True,
+                close_failure_diagnostics={"phase": "before_start"},
+            )
         if cache_enabled:
             content = self.cache_api_call_handler(prompt, max_tokens, temperature, k, stop)
             if content is not None:
                 return content
+
+        def record_cancellation(error, *, attempt, start_time, stream):
+            diagnostic = self._diagnostic_base(
+                attempt=attempt, model=api_model, stream=stream,
+            )
+            diagnostic.update({
+                "outcome": "cancelled",
+                "error_type": type(error).__name__,
+                "provider_termination_confirmed": (
+                    error.provider_termination_confirmed
+                ),
+                "close_failure_diagnostics": error.close_failure_diagnostics,
+                "duration_ms": round(
+                    (time.monotonic() - start_time) * 1000, 3,
+                ),
+            })
+            self._write_diagnostic(diagnostic)
 
         for attempt in range(1, self.model_call_attempts + 1):
             start_time = time.monotonic()
@@ -443,17 +529,23 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     messages.append({"role": "assistant", "content": example_prompt[i]})
 
             try:
+                cancellation_kwargs = (
+                    {"cancellation_event": cancellation_event}
+                    if cancellation_event is not None else {}
+                )
                 if stream:
                     content = self.gpt_api_stream(
                         messages, api_model, temperature, max_tokens=max_tokens,
                         provider_client=provider_client,
                         reasoning_effort=selected_reasoning_effort,
+                        **cancellation_kwargs,
                     )
                 else:
                     response = self.gpt_api(
                         messages, api_model, temperature, max_tokens=max_tokens,
                         provider_client=provider_client,
                         reasoning_effort=selected_reasoning_effort,
+                        **cancellation_kwargs,
                     )
                     content = response.choices[0].message.content or ""
             except Exception as exc:
@@ -464,14 +556,52 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 diagnostic["duration_ms"] = round(
                     (time.monotonic() - start_time) * 1000, 3,
                 )
-                self._write_diagnostic(diagnostic)
-                if isinstance(exc, ProviderCallTerminationError) or attempt >= self.model_call_attempts:
+                if isinstance(exc, ProviderCallCancellationError):
+                    record_cancellation(
+                        exc,
+                        attempt=attempt,
+                        start_time=start_time,
+                        stream=stream,
+                    )
                     raise
-                time.sleep(self.retry_delay_seconds * attempt)
+                if isinstance(exc, ProviderCallTerminationError) or attempt >= self.model_call_attempts:
+                    self._write_diagnostic(diagnostic)
+                    raise
+                delay = self.retry_delay_seconds * attempt
+                if cancellation_event is not None:
+                    if cancellation_event.wait(delay):
+                        error = ProviderCallCancellationError(
+                            "OpenAI provider call was cancelled during retry delay",
+                            provider_termination_confirmed=True,
+                            close_failure_diagnostics={"phase": "retry_delay"},
+                        )
+                        record_cancellation(
+                            error,
+                            attempt=attempt,
+                            start_time=start_time,
+                            stream=stream,
+                        )
+                        raise error
+                elif delay:
+                    time.sleep(delay)
+                self._write_diagnostic(diagnostic)
                 continue
 
             content = self.filter_emoji(content)
             response_metadata = dict(getattr(self._response_metadata, "value", {}))
+            if cancellation_event is not None and cancellation_event.is_set():
+                error = ProviderCallCancellationError(
+                    "OpenAI provider call was cancelled before result commit",
+                    provider_termination_confirmed=True,
+                    close_failure_diagnostics={"phase": "before_commit"},
+                )
+                record_cancellation(
+                    error,
+                    attempt=attempt,
+                    start_time=start_time,
+                    stream=stream,
+                )
+                raise error
             missing_tags = [tag for tag in check_tags if not _contains_tag(content, tag)]
             parsed_count = len(extract_info(content)) if json_check and content else 0
             category = None
@@ -496,16 +626,34 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 "missing_tag_count": len(missing_tags),
                 "json_object_count": parsed_count,
             })
-            self._write_diagnostic(diagnostic)
             if category:
                 if attempt >= self.model_call_attempts:
+                    self._write_diagnostic(diagnostic)
                     raise ModelOutputContractError(
                         category,
                         f"model output contract failed: {category}",
                     )
-                time.sleep(self.retry_delay_seconds * attempt)
+                delay = self.retry_delay_seconds * attempt
+                if cancellation_event is not None:
+                    if cancellation_event.wait(delay):
+                        error = ProviderCallCancellationError(
+                            "OpenAI provider call was cancelled during retry delay",
+                            provider_termination_confirmed=True,
+                            close_failure_diagnostics={"phase": "retry_delay"},
+                        )
+                        record_cancellation(
+                            error,
+                            attempt=attempt,
+                            start_time=start_time,
+                            stream=stream,
+                        )
+                        raise error
+                elif delay:
+                    time.sleep(delay)
+                self._write_diagnostic(diagnostic)
                 continue
 
+            self._write_diagnostic(diagnostic)
             if cache_enabled:
                 self.save_cache(prompt, content)
             if self.prompt_logging_enabled:

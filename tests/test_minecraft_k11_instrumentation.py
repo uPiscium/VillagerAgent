@@ -10,7 +10,7 @@ from benchmarks.minecraft.k11_instrumentation import (
 )
 from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
 from env.runtime_paths import RuntimePaths
-from model.openai_models import OpenAILanguageModel
+from model.openai_models import OpenAILanguageModel, ProviderCallCancellationError
 from env.minecraft_client import LLMHandler
 
 
@@ -235,6 +235,30 @@ def test_k11_instruments_direct_openai_failure_in_actor_scope(monkeypatch) -> No
     assert starts[0]["payload"]["model_call_id"] == failed[0]["payload"]["model_call_id"]
     assert failed[0]["payload"]["error_type"] == "RuntimeError"
     assert "provider failed" not in str(events)
+
+
+def test_k11_instruments_provider_cancellation_as_one_terminal_failure(monkeypatch) -> None:
+    def provider_call(unused_self, messages, model, temperature, **kwargs):
+        raise ProviderCallCancellationError(
+            "cancelled", provider_termination_confirmed=False,
+            close_failure_diagnostics={"phase": "provider"},
+        )
+
+    monkeypatch.setattr(OpenAILanguageModel, "gpt_api_stream", provider_call)
+    trace = K11TraceRecorder("k11-cancelled-openai")
+    scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice", agent_step_id="step-1",
+    )
+    with K11ProcessInstrumentation(trace), use_scope(scope):
+        with pytest.raises(ProviderCallCancellationError):
+            _model().gpt_api_stream([], "gemma4:12b", 0, cancellation_event=threading.Event())
+
+    events = trace.artifact()["events"]
+    starts = [event for event in events if event["event_type"] == "k11.model_call_started"]
+    terminals = [event for event in events if event["event_type"] == "k11.model_call_failed"]
+    assert len(starts) == len(terminals) == 1
+    assert starts[0]["payload"]["model_call_id"] == terminals[0]["payload"]["model_call_id"]
+    assert terminals[0]["payload"]["error_type"] == "ProviderCallCancellationError"
 
 
 def test_k11_does_not_count_openai_cache_hit_as_provider_call(tmp_path, monkeypatch) -> None:

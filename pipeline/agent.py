@@ -5,7 +5,7 @@ from env.env import VillagerBench
 from type_define.graph import Task
 from pipeline.data_manager import DataManager
 from pipeline.utils import *
-from model.openai_models import OpenAILanguageModel
+from model.openai_models import OpenAILanguageModel, ProviderCallCancellationError
 from model.vllm_model import VLLMLanguageModel
 from random import random, randint, choice, sample
 from pipeline.agent_prompt import *
@@ -40,7 +40,27 @@ class AgentFeedback:
             "status": self.status,
         }
 
-        
+
+class ReflectionInterruptedError(InterruptedError):
+    """Reflection was cancelled before its result could be committed."""
+
+    def __init__(self, message, *, provider_termination_confirmed, diagnostics=None):
+        super().__init__(message)
+        self.provider_termination_confirmed = bool(provider_termination_confirmed)
+        self.diagnostics = diagnostics or {}
+
+
+class ReflectionOutcome:
+    """A reflection result whose agent-side commit completed atomically."""
+
+    def __init__(self, success: bool):
+        self.success = bool(success)
+        self.committed = True
+
+    def __bool__(self):
+        return self.success
+
+
 
 class BaseAgent:
     '''
@@ -803,11 +823,30 @@ class BaseAgent:
                 continue
         return ''.join(ret_str)
 
-    def reflect(self, task: Task, detail) -> bool:
+    def reflect(self, task: Task, detail, cancellation_token=None, commit_lock=None) -> bool:
         '''
         Reflect on the task and return the result
         '''
-        # print("in reflect")
+        def is_cancelled():
+            if cancellation_token is None:
+                return False
+            if callable(cancellation_token):
+                return bool(cancellation_token())
+            is_set = getattr(cancellation_token, "is_set", None)
+            if not callable(is_set):
+                raise TypeError("cancellation_token must be callable or expose is_set()")
+            return bool(is_set())
+
+        def interrupted(diagnostics=None, confirmed=True):
+            raise ReflectionInterruptedError(
+                "Agent reflection was cancelled",
+                provider_termination_confirmed=confirmed,
+                diagnostics=diagnostics,
+            )
+
+        if is_cancelled():
+            interrupted({"phase": "before_start"})
+
         task_description = task.description
         milestone_description = task.milestones
         action_history = detail["action_list"]
@@ -823,7 +862,13 @@ class BaseAgent:
                                    })
             prompt = self.filter_emoji(prompt)
             # print("before response")
-            response = self.llm.few_shot_generate_thoughts(reflect_system_prompt, prompt, cache_enabled=False, max_tokens=256, json_check=True)
+            try:
+                response = self.llm.few_shot_generate_thoughts(
+                    reflect_system_prompt, prompt, cache_enabled=False, max_tokens=256,
+                    json_check=True, cancellation_event=cancellation_token,
+                )
+            except ProviderCallCancellationError as error:
+                interrupted(error.close_failure_diagnostics, error.provider_termination_confirmed)
         else:
             prompt = format_string(reflect_user_prompt,
                                    {
@@ -834,22 +879,37 @@ class BaseAgent:
                                    })
             prompt = self.filter_emoji(prompt)
             # print("before response")
-            response = self.llm.few_shot_generate_thoughts(reflect_system_prompt, prompt, cache_enabled=False, max_tokens=256, json_check=False)
-        # print(response)
-        # print("before filter emoji")
+            try:
+                call_kwargs = {"cache_enabled": False, "max_tokens": 256, "json_check": False}
+                if cancellation_token is not None and isinstance(self.llm, OpenAILanguageModel):
+                    call_kwargs["cancellation_event"] = cancellation_token
+                response = self.llm.few_shot_generate_thoughts(reflect_system_prompt, prompt, **call_kwargs)
+            except ProviderCallCancellationError as error:
+                interrupted(error.close_failure_diagnostics, error.provider_termination_confirmed)
+        if is_cancelled():
+            interrupted({"phase": "after_provider"})
         response = self.filter_emoji(response)
-        self.update_reflect(reflect_system_prompt, prompt, response)
         result = extract_info(response)[0]
-        task.reflect = result
-        if "summary" in result.keys():
-            task._summary.append(result["summary"])
-        else:
-            task._summary.append(str(result))
 
-        # add the action to the history
-        self.history_action_list = [self.action_format(action) for action in action_history]
-        # print("before return ")
-        return result.get("task_status", False)
+        def commit_result():
+            if is_cancelled():
+                interrupted({"phase": "before_commit"})
+            self.update_reflect(reflect_system_prompt, prompt, response)
+            task.reflect = result
+            if "summary" in result.keys():
+                task._summary.append(result["summary"])
+            else:
+                task._summary.append(str(result))
+            self.history_action_list = [
+                self.action_format(action) for action in action_history
+            ]
+
+        if commit_lock is None:
+            commit_result()
+        else:
+            with commit_lock:
+                commit_result()
+        return ReflectionOutcome(result.get("task_status", False))
         # return result["task_status"]
     
     def to_json(self) -> dict:

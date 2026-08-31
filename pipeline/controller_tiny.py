@@ -1,6 +1,8 @@
 import threading
 import time
 import traceback
+import inspect
+import queue
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -9,7 +11,7 @@ from model.init_model import init_language_model
 from type_define.graph import Task
 from pipeline.task_manager import TaskManager
 from pipeline.data_manager import DataManager
-from pipeline.agent import BaseAgent
+from pipeline.agent import BaseAgent, ReflectionInterruptedError, ReflectionOutcome
 from pipeline.utils import *
 from pipeline.controller_prompt import *
 from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_event
@@ -40,6 +42,18 @@ class TaskExecutionGroup:
     shutdown_escalated: set[str] = field(default_factory=set)
     timeout_details: dict[str, dict] = field(default_factory=dict)
     timeout_checkpoint_persisted: bool = False
+    post_processing_claim_token: object | None = None
+    post_processing_started: bool = False
+    post_processing_interrupted: bool = False
+    post_processing_interruption: dict = field(default_factory=dict)
+    post_processing_results: dict[str, dict] = field(default_factory=dict)
+    reflection_started: set[str] = field(default_factory=set)
+    reflection_completed: set[str] = field(default_factory=set)
+    reflection_committed: set[str] = field(default_factory=set)
+    reflection_workers: dict[str, threading.Thread] = field(default_factory=dict)
+    shutdown_reconciled: bool = False
+    assignments_released: bool = False
+    feedback_persisted: bool = False
 
 
 class ControllerShutdownError(RuntimeError):
@@ -172,12 +186,14 @@ class GlobalController:
         self.max_task_time = 60 * 30 # 3min
 
         self.shutdown_event = threading.Event()
+        self._post_processing_cancel_event = threading.Event()
         self._failure_lock = threading.Lock()
         self._first_failure = None
         self._controller_threads = []
         self.shutdown_grace_period = 5.0
         self.judger_drain_grace_period = 120.0
         self.cancellation_grace_period = 5.0
+        self.reflection_cancellation_grace_period = 1.5
         self._run_started = False
         self._judger_terminal_payload = None
         self._judger_terminal_detected_at = None
@@ -189,6 +205,9 @@ class GlobalController:
         self.shutdown_complete = False
         self.movement_shutdown_result = None
         self.shutdown_context = None
+        self._result_claim_cursor = 0
+        self._post_processing_interruption_ledger = {}
+        self._provider_termination_unconfirmed_task_ids = []
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
         self.emit_terminal_events = emit_terminal_events
@@ -198,7 +217,15 @@ class GlobalController:
         safe_emit_runtime_event(getattr(self, "event_sink", NoOpRuntimeEventSink()), event_type, entity_id=entity_id, source=source, payload=payload)
 
     def _request_shutdown(self):
-        self.shutdown_event.set()
+        with self._execution_state_lock:
+            self._post_processing_cancellation_token().set()
+            self.shutdown_event.set()
+
+    def _post_processing_cancellation_token(self):
+        token = getattr(self, "_post_processing_cancel_event", None)
+        if token is None:
+            token = self._post_processing_cancel_event = threading.Event()
+        return token
 
     def _record_failure(self, name, exc):
         failure = {
@@ -243,6 +270,7 @@ class GlobalController:
             self._validate_judger_payload_ownership(payload)
             self._judger_terminal_payload = dict(payload)
             self._judger_terminal_pending = True
+            self._post_processing_cancellation_token().set()
             self._judger_terminal_detected_at = time.monotonic()
             self.controller_state = self.STATE_JUDGER_TERMINAL_PENDING
             self._tool_action_condition.notify_all()
@@ -454,6 +482,111 @@ class GlobalController:
             self.start_execution_group(group, enqueue=False)
             return True
 
+    def _admit_group_post_processing(self, group: TaskExecutionGroup) -> bool:
+        """Linearize optional reflection admission against controller shutdown."""
+        with self._execution_state_lock:
+            if self._execution_admission_closed():
+                self._mark_post_processing_interrupted(
+                    group,
+                    reason="reflection_admission_closed",
+                    provider_termination_confirmed=True,
+                    diagnostics={"phase": "before_reflection"},
+                )
+                return False
+            group.post_processing_started = True
+            return True
+
+    def _reflect_agent(self, agent, task, detail):
+        try:
+            parameters = inspect.signature(agent.reflect).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+        names = {parameter.name for parameter in parameters}
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        kwargs = {}
+        if "cancellation_token" in names or accepts_kwargs:
+            kwargs["cancellation_token"] = self._post_processing_cancellation_token()
+        if "commit_lock" in names or accepts_kwargs:
+            kwargs["commit_lock"] = self._execution_state_lock
+        return agent.reflect(task, detail, **kwargs)
+
+    def _reflect_agent_bounded(self, group, agent, detail):
+        outcome = queue.Queue(maxsize=1)
+
+        def invoke():
+            try:
+                outcome.put((True, self._reflect_agent(agent, group.task, detail)))
+            except BaseException as exc:
+                outcome.put((False, exc))
+
+        worker = threading.Thread(
+            target=invoke,
+            name=f"controller-reflection-{agent.name}",
+            daemon=True,
+        )
+        group.reflection_workers[agent.name] = worker
+        with self._execution_state_lock:
+            if self._execution_admission_closed():
+                raise ReflectionInterruptedError(
+                    "Reflection admission closed before worker start",
+                    provider_termination_confirmed=True,
+                    diagnostics={"phase": "before_reflection_worker_start"},
+                )
+            worker.start()
+        cancellation_deadline = None
+        while True:
+            try:
+                succeeded, value = outcome.get(timeout=0.05)
+            except queue.Empty:
+                if not self._post_processing_cancellation_token().is_set():
+                    continue
+                if cancellation_deadline is None:
+                    cancellation_deadline = time.monotonic() + getattr(
+                        self, "reflection_cancellation_grace_period", 1.5,
+                    )
+                if time.monotonic() < cancellation_deadline:
+                    continue
+                raise ReflectionInterruptedError(
+                    "Reflection worker termination was not confirmed",
+                    provider_termination_confirmed=False,
+                    diagnostics={
+                        "phase": "reflection_worker_join",
+                        "reflection_worker_alive": worker.is_alive(),
+                    },
+                )
+            if succeeded:
+                return value
+            raise value
+
+    def _mark_post_processing_interrupted(
+        self,
+        group: TaskExecutionGroup,
+        *,
+        reason: str,
+        provider_termination_confirmed: bool,
+        diagnostics: dict | None = None,
+        agent_name: str | None = None,
+    ) -> None:
+        group.post_processing_interrupted = True
+        if agent_name:
+            group.reflection_started.add(agent_name)
+        previous_confirmation = group.post_processing_interruption.get(
+            "provider_termination_confirmed", True,
+        )
+        group.post_processing_interruption = {
+            "reason": reason,
+            "provider_termination_confirmed": bool(
+                previous_confirmation and provider_termination_confirmed
+            ),
+            "agent": agent_name,
+            "diagnostics": dict(diagnostics or {}),
+            "reflection_started": sorted(group.reflection_started),
+            "reflection_completed": sorted(group.reflection_completed),
+        }
+
     def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
         if group.completed:
             return True
@@ -549,9 +682,27 @@ class GlobalController:
             if any(not snapshot["done"] for snapshot in future_snapshots.values()):
                 return False
 
-        agent_results = {}
+        agent_results = group.post_processing_results
         group_succeeded = not group.timeout_detected
+        reflection_candidates = []
         for agent in group.agents:
+            if agent.name in group.timeout_detected or agent.name in agent_results:
+                continue
+            snapshot = future_snapshots[agent.name]
+            if snapshot["exception"] is not None:
+                continue
+            _, detail = snapshot["result"]
+            if not (isinstance(detail, dict) and "failure" in detail):
+                reflection_candidates.append(agent.name)
+        if reflection_candidates and not group.post_processing_started:
+            if not self._admit_group_post_processing(group):
+                return False
+
+        for agent in group.agents:
+            if agent.name in agent_results:
+                if agent_results[agent.name].get("status") != "success":
+                    group_succeeded = False
+                continue
             snapshot = future_snapshots[agent.name]
             if agent.name in group.timeout_detected:
                 agent_results[agent.name] = dict(group.timeout_details[agent.name])
@@ -562,7 +713,54 @@ class GlobalController:
                     raise snapshot["exception"]
                 _, detail = snapshot["result"]
                 explicit_failure = isinstance(detail, dict) and "failure" in detail
-                reflected_success = False if explicit_failure else bool(agent.reflect(group.task, detail))
+                if explicit_failure:
+                    reflected_success = False
+                else:
+                    if self._post_processing_cancellation_token().is_set():
+                        self._mark_post_processing_interrupted(
+                            group,
+                            reason="controller_shutdown_before_reflection",
+                            provider_termination_confirmed=True,
+                            diagnostics={"phase": "before_reflection"},
+                            agent_name=agent.name,
+                        )
+                        return False
+                    group.reflection_started.add(agent.name)
+                    try:
+                        reflection_outcome = self._reflect_agent_bounded(
+                            group, agent, detail,
+                        )
+                    except ReflectionInterruptedError as exc:
+                        self._mark_post_processing_interrupted(
+                            group,
+                            reason="reflection_interrupted",
+                            provider_termination_confirmed=(
+                                exc.provider_termination_confirmed
+                            ),
+                            diagnostics=exc.diagnostics,
+                            agent_name=agent.name,
+                        )
+                        return False
+                    reflection_committed = (
+                        isinstance(reflection_outcome, ReflectionOutcome)
+                        and reflection_outcome.committed
+                    )
+                    if (
+                        self._post_processing_cancellation_token().is_set()
+                        and not reflection_committed
+                    ):
+                        self._mark_post_processing_interrupted(
+                            group,
+                            reason="controller_shutdown_during_reflection",
+                            provider_termination_confirmed=True,
+                            diagnostics={"phase": "after_reflection"},
+                            agent_name=agent.name,
+                        )
+                        return False
+                    reflected_success = bool(reflection_outcome)
+                    if reflection_committed:
+                        group.reflection_committed.add(agent.name)
+                    group.reflection_completed.add(agent.name)
                 agent_results[agent.name] = {
                     "status": "success" if reflected_success else "failure",
                     "detail": detail,
@@ -593,9 +791,29 @@ class GlobalController:
             )
         else:
             feedback = {"agent_results": agent_results}
-        self.set_task_status(group.task.id, status, feedback)
-        group.task.status = status
-        group.terminal_state_persisted = True
+        with self._execution_state_lock:
+            uncommitted_reflections = (
+                group.reflection_started - group.reflection_committed
+            )
+            if (
+                self._post_processing_cancellation_token().is_set()
+                and uncommitted_reflections
+            ):
+                self._mark_post_processing_interrupted(
+                    group,
+                    reason="controller_shutdown_before_terminal_commit",
+                    provider_termination_confirmed=True,
+                    diagnostics={
+                        "phase": "before_terminal_commit",
+                        "uncommitted_reflections": sorted(
+                            uncommitted_reflections
+                        ),
+                    },
+                )
+                return False
+            self.set_task_status(group.task.id, status, feedback)
+            group.task.status = status
+            group.terminal_state_persisted = True
         self._complete_execution_group(group)
         return True
 
@@ -627,13 +845,17 @@ class GlobalController:
         )
 
     def _complete_execution_group(self, group: TaskExecutionGroup) -> None:
-        for agent in self.agent_list:
-            if self.assignment.get(agent.name) == group.task.id:
-                self.assignment.pop(agent.name)
-        self.logger.info(
-            f"task {group.task.description} has been executed, the result is {group.task.status}"
-        )
-        self.task_manager.feedback_task(self.get_task_by_id(group.task.id))
+        if not group.assignments_released:
+            for agent in self.agent_list:
+                if self.assignment.get(agent.name) == group.task.id:
+                    self.assignment.pop(agent.name)
+            group.assignments_released = True
+            self.logger.info(
+                f"task {group.task.description} has been executed, the result is {group.task.status}"
+            )
+        if not group.feedback_persisted:
+            self.task_manager.feedback_task(self.get_task_by_id(group.task.id))
+            group.feedback_persisted = True
         group.post_processing_complete = True
         group.completed = True
 
@@ -941,6 +1163,51 @@ class GlobalController:
         self.task_manager.feedback_task(self.get_task_by_id(task.id))
 
         return
+
+    def _claim_next_result_group(self):
+        """Claim one group fairly without removing or copying concurrent appends."""
+        with self.result_list_lock:
+            queue_size = len(self.result_queue)
+            if queue_size == 0:
+                return None, None
+            start = getattr(self, "_result_claim_cursor", 0) % queue_size
+            for offset in range(queue_size):
+                index = (start + offset) % queue_size
+                group = self.result_queue[index]
+                if (
+                    group.completed
+                    or group.shutdown_reconciled
+                    or group.post_processing_claim_token is not None
+                ):
+                    continue
+                token = object()
+                group.post_processing_claim_token = token
+                self._result_claim_cursor = (index + 1) % queue_size
+                return group, token
+            return None, None
+
+    def _finish_result_group_claim(
+        self,
+        group: TaskExecutionGroup,
+        token,
+        *,
+        remove: bool,
+    ) -> None:
+        with self.result_list_lock:
+            if group.post_processing_claim_token is not token:
+                raise ControllerShutdownError(
+                    f"Task {group.task.description} result claim ownership changed"
+                )
+            if remove:
+                for index, queued_group in enumerate(self.result_queue):
+                    if queued_group is group:
+                        self.result_queue.pop(index)
+                        break
+                else:
+                    raise ControllerShutdownError(
+                        f"Task {group.task.description} disappeared from result_queue"
+                    )
+            group.post_processing_claim_token = None
         
 
     def process_completed_tasks(self):
@@ -957,19 +1224,20 @@ class GlobalController:
             if self.env.agents_ping()["status"] == False:
                 raise ControllerShutdownError("Some agents are offline")
 
-            with self.result_list_lock:
-                result_list_copy = []
-                for index, group in enumerate(self.result_queue):
-
-                    if self.should_shutdown():
-                        result_list_copy.extend(self.result_queue[index:])
-                        break
-                    if self.finalize_execution_group(group):
-                        self.logger.info(f"Task {group.task.description} finished!")
-                    else:
-                        result_list_copy.append(group)
-                    self.shutdown_event.wait(self.query_interval)
-                self.result_queue = result_list_copy
+            group, claim_token = self._claim_next_result_group()
+            if group is None:
+                self.shutdown_event.wait(self.query_interval)
+                continue
+            completed = False
+            try:
+                completed = self.finalize_execution_group(group)
+                if completed:
+                    self.logger.info(f"Task {group.task.description} finished!")
+            finally:
+                self._finish_result_group_claim(
+                    group, claim_token, remove=completed,
+                )
+            self.shutdown_event.wait(self.query_interval)
 
                 
     def check_task_list_available(self):
@@ -1098,6 +1366,9 @@ class GlobalController:
             raise ControllerShutdownError("Controller instances cannot be reused after run() starts")
         self._run_started = True
         self.shutdown_event.clear()
+        if not hasattr(self, "_post_processing_cancel_event"):
+            self._post_processing_cancel_event = threading.Event()
+        self._post_processing_cancel_event.clear()
         self._first_failure = None
         self.controller_state = self.STATE_RUNNING
         self.shutdown_complete = False
@@ -1155,6 +1426,9 @@ class GlobalController:
             and not active_task_ids
             and not incomplete_submission_task_ids
             and not undrained_queues
+            and not getattr(
+                self, "_provider_termination_unconfirmed_task_ids", [],
+            )
             and self.movement_shutdown_result.get("terminal") is True
         )
         self.shutdown_complete = shutdown_complete
@@ -1167,6 +1441,12 @@ class GlobalController:
             "active_task_ids": active_task_ids,
             "active_agent_ids": active_agent_ids,
             "incomplete_submission_task_ids": incomplete_submission_task_ids,
+            "post_processing_interrupted": list(
+                getattr(self, "_post_processing_interruption_ledger", {}).values()
+            ),
+            "provider_termination_unconfirmed_task_ids": list(
+                getattr(self, "_provider_termination_unconfirmed_task_ids", [])
+            ),
             "terminal_barrier": self._terminal_barrier_context(),
             "movement_cancellation": self.movement_shutdown_result,
             "tool_runtime": self._tool_runtime_context(),
@@ -1187,6 +1467,12 @@ class GlobalController:
                 "active_task_ids": active_task_ids,
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
+                "post_processing_interrupted": list(
+                    getattr(self, "_post_processing_interruption_ledger", {}).values()
+                ),
+                "provider_termination_unconfirmed_task_ids": list(
+                    getattr(self, "_provider_termination_unconfirmed_task_ids", [])
+                ),
                 "terminal_barrier": self._terminal_barrier_context(),
                 "movement_cancellation": self.movement_shutdown_result,
                 "tool_runtime": self._tool_runtime_context(),
@@ -1199,6 +1485,12 @@ class GlobalController:
                 "active_task_ids": active_task_ids,
                 "active_agent_ids": active_agent_ids,
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
+                "post_processing_interrupted": list(
+                    getattr(self, "_post_processing_interruption_ledger", {}).values()
+                ),
+                "provider_termination_unconfirmed_task_ids": list(
+                    getattr(self, "_provider_termination_unconfirmed_task_ids", [])
+                ),
                 "terminal_barrier": self._terminal_barrier_context(),
                 "movement_cancellation": self.movement_shutdown_result,
                 "tool_runtime": self._tool_runtime_context(),
@@ -1295,6 +1587,62 @@ class GlobalController:
         for queue_name, group in groups:
             if group.completed or group.terminal_state_persisted:
                 continue
+            if group.post_processing_claim_token is not None:
+                if queue_name not in undrained_queues:
+                    undrained_queues.append(queue_name)
+                active_task_ids.append(group.task.id)
+                active_agent_ids.extend(agent.name for agent in group.agents)
+                continue
+            if group.post_processing_interrupted:
+                interruption = dict(group.post_processing_interruption)
+                termination_confirmed = interruption.get(
+                    "provider_termination_confirmed"
+                ) is True
+                feedback = {
+                    "reason": "post_processing_interrupted",
+                    "completed_agent_execution": all(
+                        future.done() for future in group.futures.values()
+                    ),
+                    "reflection_incomplete": True,
+                    "reflection_started": sorted(group.reflection_started),
+                    "reflection_completed": sorted(group.reflection_completed),
+                    "provider_termination_confirmed": termination_confirmed,
+                    "interruption": interruption,
+                    "agent_reuse_blocked": True,
+                    "requires_agent_reconciliation": True,
+                }
+                try:
+                    self.task_manager.mark_task_status(
+                        group.task.id,
+                        Task.running,
+                        feedback,
+                    )
+                except BaseException as exc:
+                    if queue_name not in undrained_queues:
+                        undrained_queues.append(queue_name)
+                    self._record_failure("run.finalize_shutdown", exc)
+                    continue
+                group.shutdown_reconciled = True
+                ledger = getattr(
+                    self, "_post_processing_interruption_ledger", None,
+                )
+                if ledger is None:
+                    ledger = self._post_processing_interruption_ledger = {}
+                ledger[group.task.id] = {
+                    "task_id": group.task.id,
+                    **feedback,
+                }
+                if not termination_confirmed:
+                    unconfirmed = getattr(
+                        self, "_provider_termination_unconfirmed_task_ids", None,
+                    )
+                    if unconfirmed is None:
+                        unconfirmed = self._provider_termination_unconfirmed_task_ids = []
+                    if group.task.id not in unconfirmed:
+                        unconfirmed.append(group.task.id)
+                    active_task_ids.append(group.task.id)
+                    active_agent_ids.extend(agent.name for agent in group.agents)
+                continue
             try:
                 execution_may_still_be_active = any(
                     future.running() for future in group.futures.values()
@@ -1350,6 +1698,10 @@ class GlobalController:
                 if queue_name not in undrained_queues:
                     undrained_queues.append(queue_name)
                 self._record_failure("run.finalize_shutdown", exc)
+        with self.result_list_lock:
+            for index in range(len(self.result_queue) - 1, -1, -1):
+                if self.result_queue[index].shutdown_reconciled:
+                    self.result_queue.pop(index)
         return (
             interrupted_task_ids,
             active_task_ids,

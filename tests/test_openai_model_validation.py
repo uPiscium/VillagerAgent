@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -7,7 +8,12 @@ import pytest
 
 from env.runtime_paths import RuntimePaths
 from model.init_model import init_language_model
-from model.openai_models import ModelOutputContractError, OpenAILanguageModel, _contains_tag
+from model.openai_models import (
+    ModelOutputContractError,
+    OpenAILanguageModel,
+    ProviderCallCancellationError,
+    _contains_tag,
+)
 
 
 def test_required_tag_accepts_json_underscore_variant():
@@ -313,6 +319,133 @@ def test_openai_valid_contract_response_passes_unchanged_without_prompt_log(
     diagnostic = json.loads(paths.openai_diagnostics.read_text(encoding="utf-8"))
     assert diagnostic["outcome"] == "success"
     assert diagnostic["validation_category"] is None
+
+
+def test_openai_cancellation_before_provider_start_is_terminal_and_does_not_retry(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path),
+        model_call_attempts=3, retry_delay_seconds=0,
+    )
+    cancellation = threading.Event()
+    cancellation.set()
+    calls = []
+    monkeypatch.setattr(model, "gpt_api_stream", lambda *a, **k: calls.append(1))
+
+    with pytest.raises(ProviderCallCancellationError) as raised:
+        model.few_shot_generate_thoughts("system", "user", cancellation_event=cancellation)
+
+    assert calls == []
+    assert raised.value.provider_termination_confirmed is True
+    assert not model.runtime_paths.openai_diagnostics.exists()
+
+
+def test_openai_blocked_provider_is_closed_and_joined_on_cancellation(tmp_path, monkeypatch):
+    closed, release = threading.Event(), threading.Event()
+    entered = threading.Event()
+
+    class Client:
+        def __init__(self):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_: self.stream())
+            )
+
+        def stream(self):
+            entered.set()
+            release.wait(1)
+            return iter(())
+
+        def close(self):
+            closed.set()
+            release.set()
+
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: Client())
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path),
+        request_timeout_seconds=1, model_call_attempts=1,
+    )
+    cancellation = threading.Event()
+    error = []
+    thread = threading.Thread(target=lambda: _call_catching(model, cancellation, error))
+    thread.start()
+    assert entered.wait(.5)
+    cancellation.set()
+    thread.join(1)
+    try:
+        assert not thread.is_alive()
+        assert closed.is_set()
+        assert isinstance(error[0], ProviderCallCancellationError)
+        assert error[0].provider_termination_confirmed is True
+    finally:
+        release.set()
+        thread.join(1)
+
+
+def _call_catching(model, cancellation, errors):
+    try:
+        model.few_shot_generate_thoughts("system", "user", cancellation_event=cancellation)
+    except BaseException as exc:
+        errors.append(exc)
+
+
+def test_openai_surviving_provider_is_reported_unconfirmed(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    class Client:
+        def __init__(self):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_: self.stream())
+            )
+
+        def stream(self):
+            entered.set()
+            release.wait(3)
+            return iter(())
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: Client())
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path),
+        request_timeout_seconds=1, model_call_attempts=1,
+    )
+    cancellation = threading.Event()
+    error = []
+    thread = threading.Thread(target=lambda: _call_catching(model, cancellation, error))
+    thread.start()
+    try:
+        assert entered.wait(.5)
+        cancellation.set()
+        thread.join(1.5)
+        assert isinstance(error[0], ProviderCallCancellationError)
+        assert error[0].provider_termination_confirmed is False
+        assert error[0].diagnostics.get("worker_pending") is True
+    finally:
+        release.set()
+        thread.join(1)
+
+
+def test_openai_cancellation_aware_retry_delay_prevents_second_attempt(tmp_path, monkeypatch):
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
+    model = OpenAILanguageModel(
+        api_key="test-key", runtime_paths=RuntimePaths.isolated(tmp_path),
+        model_call_attempts=3, retry_delay_seconds=1,
+    )
+    cancellation = threading.Event()
+    calls = []
+
+    def fail(*_args, **_kwargs):
+        calls.append(1)
+        cancellation.set()
+        raise RuntimeError("transport")
+
+    monkeypatch.setattr(model, "gpt_api_stream", fail)
+    with pytest.raises(ProviderCallCancellationError, match="retry delay"):
+        model.few_shot_generate_thoughts("system", "user", cancellation_event=cancellation)
+    assert calls == [1]
 
 
 def test_openai_stream_forwards_documented_reasoning_effort(tmp_path, monkeypatch):
