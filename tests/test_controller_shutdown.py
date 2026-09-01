@@ -603,6 +603,10 @@ def test_active_future_is_interrupted_without_releasing_agent_for_reuse():
         "submission_complete": True,
         "agent_reuse_blocked": True,
         "requires_agent_reconciliation": True,
+        "cancellation_requested": [],
+        "cancellation_acknowledged": [],
+        "cancellation_phases": {},
+        "blocking_operation_termination": "unconfirmed",
     })]
     next_task = Task("Must not be reassigned", {})
     next_task.candidate_list = ["Alice"]
@@ -613,6 +617,57 @@ def test_active_future_is_interrupted_without_releasing_agent_for_reuse():
     assert checkpoints == ["checkpoint"]
     assert sink.events[0]["payload"]["shutdown_complete"] is False
     assert sink.events[0]["payload"]["active_task_ids"] == [task.id]
+
+
+def test_shutdown_cancels_two_cooperative_agents_once_and_preserves_running_task_state():
+    controller, checkpoints, sink = _controller()
+    old_executor = controller.executor
+    old_executor.shutdown(wait=True)
+    controller.executor = ThreadPoolExecutor(max_workers=2)
+    task = Task("Two-agent cancellation", {})
+    task.candidate_list = ["Alice", "Bob"]
+    task.number = 2
+    agents = []
+
+    class CooperativeAgent:
+        def __init__(self, name):
+            self.name = name
+
+        def supports_cooperative_cancellation(self):
+            return True
+
+        def step(self, _task, cancellation_token=None, phase_callback=None):
+            cancellation_token.wait(1)
+            return {"status": False}, {
+                "failure": {
+                    "reason": "cancelled",
+                    "cancellation_acknowledged": True,
+                },
+            }
+
+    agents[:] = [CooperativeAgent("Alice"), CooperativeAgent("Bob")]
+    task.status = Task.running
+    controller.agent_list = agents
+    controller.task_list = [task]
+    controller.assignment = {agent.name: task.id for agent in agents}
+    group = TaskExecutionGroup(task=task, agents=agents)
+    controller.start_execution_group(group)
+
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+    controller.run()
+
+    assert all(not thread.is_alive() for thread in controller.executor._threads)
+    assert controller.shutdown_complete is True
+    assert group.cancellation_requested == {"Alice", "Bob"}
+    assert group.cancellation_acknowledged == {"Alice", "Bob"}
+    assert group.task.status == Task.running
+    assert len(controller.task_manager.status_updates) == 1
+    assert controller.task_manager.status_updates[0][1] == Task.running
+    assert controller.result_queue == []
+    assert checkpoints == ["checkpoint"]
+    assert [event["event_type"] for event in sink.events] == ["run_completed"]
 
 
 def test_queued_group_is_checkpointed_as_interrupted():
@@ -642,6 +697,10 @@ def test_queued_group_is_checkpointed_as_interrupted():
         "submission_complete": False,
         "agent_reuse_blocked": True,
         "requires_agent_reconciliation": True,
+        "cancellation_requested": [],
+        "cancellation_acknowledged": [],
+        "cancellation_phases": {},
+        "blocking_operation_termination": "not_active",
     })]
     assert len(controller.task_queue) == 1
     assert checkpoints == ["checkpoint"]
@@ -786,6 +845,10 @@ def test_worker_retains_group_when_shutdown_interrupts_second_submit():
         "submission_complete": False,
         "agent_reuse_blocked": True,
         "requires_agent_reconciliation": True,
+        "cancellation_requested": [],
+        "cancellation_acknowledged": [],
+        "cancellation_phases": {},
+        "blocking_operation_termination": "unconfirmed",
     }
     assert sink.events[0]["payload"]["active_task_ids"] == [task.id]
     assert sink.events[0]["payload"]["active_agent_ids"] == ["Alice"]
@@ -886,6 +949,8 @@ def test_non_cooperative_timeout_run_checkpoints_running_lifecycle():
         "cancellation_requested": [],
         "cancellation_acknowledged": [],
         "cancellation_forced": [],
+        "cancellation_phases": {},
+        "blocking_operation_termination": "unconfirmed",
         "timeout_details": {
             "Alice": {
                 "status": "timeout",
@@ -896,6 +961,7 @@ def test_non_cooperative_timeout_run_checkpoints_running_lifecycle():
                 "cancellation_requested": False,
                 "cancellation_acknowledged": False,
                 "cancellation_forced": False,
+                "phase": "unknown",
             },
         },
     }

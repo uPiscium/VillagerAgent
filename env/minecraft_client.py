@@ -5,8 +5,8 @@ from langchain.agents import tool, initialize_agent, AgentType
 from langchain.callbacks import get_openai_callback
 from langchain.chat_models import ChatOpenAI
 from langchain.load.dump import dumps
-from langchain_core.callbacks.base import BaseCallbackManager
 from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.manager import CallbackManager
 from langchain_core.outputs import LLMResult
 
 import json
@@ -45,6 +45,57 @@ env["PYTHONIOENCODING"] = "utf-8"
 
 class ToolActionBlockedError(RuntimeError):
     pass
+
+
+class AgentExecutionCancelledError(RuntimeError):
+    """Cooperative cancellation reached a deterministic agent boundary."""
+
+    def __init__(self, message="Agent execution was cancelled.", *, phase="unknown",
+                 blocking_operation_termination="not_active"):
+        super().__init__(message)
+        self.phase = phase
+        self.failure_detail = {
+            "reason": "cancelled",
+            "message": message,
+            "cancellation_acknowledged": True,
+            "phase": phase,
+            "blocking_operation_termination": blocking_operation_termination,
+        }
+
+
+def check_agent_cancellation(cancellation_token, *, phase="unknown"):
+    """Raise the canonical error when a cooperative cancellation is requested."""
+    if cancellation_token is None:
+        return
+    is_set = getattr(cancellation_token, "is_set", None)
+    if callable(is_set):
+        cancelled = bool(is_set())
+    elif callable(cancellation_token):
+        cancelled = bool(cancellation_token())
+    else:
+        raise TypeError("cancellation_token must be callable or expose is_set()")
+    if cancelled:
+        terminated = "confirmed" if any(marker in phase for marker in
+                                         ("after", "_end", "return")) else "not_active"
+        raise AgentExecutionCancelledError(
+            phase=phase, blocking_operation_termination=terminated,
+        )
+
+
+def wait_for_agent_cancellation(cancellation_token, timeout):
+    if cancellation_token is None:
+        time.sleep(timeout)
+        return False
+    wait = getattr(cancellation_token, "wait", None)
+    if callable(wait):
+        return bool(wait(timeout))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        check_agent_cancellation(cancellation_token, phase="retry_wait")
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.05, remaining))
+    return False
 
 
 class MinecraftToolTimeoutError(TimeoutError):
@@ -482,6 +533,33 @@ class LLMHandler(BaseCallbackHandler):
             except UnicodeEncodeError:
                 # 如果仍有编码问题，强制UTF-8编码
                 self.llm_out.append(llm_result.llm_output.encode('utf-8', errors='replace').decode('utf-8'))
+
+
+class CancellationCallbackHandler(BaseCallbackHandler):
+    raise_error = True
+
+    def __init__(self, cancellation_token, phase_callback=None):
+        self.cancellation_token = cancellation_token
+        self.phase_callback = phase_callback
+
+    def _check(self, phase, *, completion=False):
+        if completion and callable(self.phase_callback):
+            self.phase_callback(phase)
+        check_agent_cancellation(self.cancellation_token, phase=phase)
+        if not completion and callable(self.phase_callback):
+            self.phase_callback(phase)
+
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        self._check("model_start")
+
+    def on_llm_end(self, response, **kwargs):
+        self._check("model_end", completion=True)
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        self._check("tool_start")
+
+    def on_tool_end(self, output, **kwargs):
+        self._check("tool_end", completion=True)
         
 
 class Agent():
@@ -1807,7 +1885,7 @@ class Agent():
                 return_intermediate_steps=True,
                 max_execution_time=120,  # seconds
                 max_iterations=1,  # 决定了最大的迭代次数
-                callback_manager=BaseCallbackManager(handlers=[llmhandler]),
+                callback_manager=CallbackManager(handlers=[llmhandler]),
             )
             agent.handle_parsing_errors = True
             response = None
@@ -1828,9 +1906,8 @@ class Agent():
             except ConnectionRefusedError as e:
                 logging.info(filter_emoji(str(e)))
                 raise ConnectionRefusedError
-            except ToolActionBlockedError:
-                raise
-            except MinecraftToolTimeoutError:
+            except (AgentExecutionCancelledError, ToolActionBlockedError,
+                    MinecraftToolEffectUnknownError, MinecraftToolTimeoutError):
                 raise
             except Exception as e:
                 print(filter_emoji(str(e)))
@@ -1861,7 +1938,8 @@ class Agent():
         action = action_list[0]
         return (action['action'], action["feedback"]), {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
 
-    def run(self, instruction: str, player_name_list=[], max_try_turn=10, max_iterations=5, tools=[]):
+    def run(self, instruction: str, player_name_list=[], max_try_turn=10, max_iterations=5, tools=[],
+            cancellation_token=None, phase_callback=None):
         # print(f"Your name is {self.name}. \n{instruction}")
         if not self.api_key_list:
             raise RuntimeError(
@@ -1898,9 +1976,16 @@ class Agent():
                 "or a qwen, default, instruct-gpt, gpt, NAS, llama, gemini, glm, or deepseek model"
             )
         # 这个地方是定义的agent的类型，初始化位置的agent没有被使用
+        if callable(phase_callback):
+            phase_callback("before_agent_invocation")
+        check_agent_cancellation(cancellation_token, phase="before_agent_invocation")
         while max_try_turn > 0:
+            if callable(phase_callback):
+                phase_callback("before_retry")
+            check_agent_cancellation(cancellation_token, phase="before_retry")
             random.shuffle(self.tools)
             llmhandler = LLMHandler()
+            cancellation_handler = CancellationCallbackHandler(cancellation_token, phase_callback)
             agent = initialize_agent(
                 tools=self.tools if len(tools) == 0 else tools,
                 llm=self.llm,
@@ -1909,7 +1994,7 @@ class Agent():
                 return_intermediate_steps=True,
                 max_execution_time=120,  # seconds
                 max_iterations=max_iterations,  # 决定了最大的迭代次数
-                callback_manager=BaseCallbackManager(handlers=[llmhandler]),
+                callback_manager=CallbackManager(handlers=[llmhandler, cancellation_handler]),
             )
             agent.handle_parsing_errors = True
             response = None
@@ -1922,6 +2007,9 @@ class Agent():
                     else:
                         task = f"You should control {player_name_list} work together. \n{instruction}"
                         response = agent({"input": filter_emoji(task)})
+                    if callable(phase_callback):
+                        phase_callback("after_agent_invocation")
+                    check_agent_cancellation(cancellation_token, phase="after_agent_invocation")
                     # print(llmhandler.chain_input)
                     # print(llmhandler.seralized_input)
 
@@ -1958,14 +2046,15 @@ class Agent():
             except ConnectionRefusedError as e:
                 logging.info(filter_emoji(str(e)))
                 raise ConnectionRefusedError
-            except ToolActionBlockedError:
-                raise
-            except MinecraftToolTimeoutError:
+            except (AgentExecutionCancelledError, ToolActionBlockedError,
+                    MinecraftToolEffectUnknownError, MinecraftToolTimeoutError,
+                    MinecraftActionLogError):
                 raise
             except Exception as e:
                 print(filter_emoji(str(e)))
                 print("retrying...")
-                time.sleep(1)
+                wait_for_agent_cancellation(cancellation_token, 1)
+                check_agent_cancellation(cancellation_token, phase="retry_wait")
                 max_try_turn -= 1
         response = filter_emoji_from_dict(response)
         if max_try_turn < 0 or response is None:
@@ -1990,6 +2079,7 @@ class Agent():
         #     print("-" * 40)
         # print("========= End ========")
 
+        check_agent_cancellation(cancellation_token, phase="before_history_persistence")
         self._save_interaction_history(response, action_list, final_answer)
         self.update_history({"input": response["input"], "action_list": action_list, "final_answer": final_answer})
         return final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}

@@ -1,5 +1,6 @@
 from env.minecraft_client import (
     Agent,
+    check_agent_cancellation,
     MinecraftActionLogError,
     MinecraftBridgeCleanupError,
 )
@@ -14,6 +15,7 @@ import time
 import os
 from env.utils import init_logger
 import logging
+import inspect
 from pathlib import Path
 from langchain_core.pydantic_v1 import BaseModel
 
@@ -418,6 +420,31 @@ class VillagerBench:
         self._set_tool_func(guarded_tool, guarded)
         return guarded_tool
 
+    def _cancellation_tools(self, tools, cancellation_token, phase_callback):
+        """Make invocation-local gates without replacing the authoritative guards."""
+        if cancellation_token is None:
+            return tools
+        wrapped = []
+        for tool in tools:
+            invocation_tool = self._copy_tool_for_guard(tool)
+            original = getattr(tool, "func", None)
+            if not callable(original):
+                wrapped.append(invocation_tool)
+                continue
+            @wraps(original)
+            def gated(*args, _original=original, **kwargs):
+                check_agent_cancellation(cancellation_token, phase="before_tool_guard")
+                if callable(phase_callback):
+                    phase_callback("tool_start")
+                result = _original(*args, **kwargs)
+                if callable(phase_callback):
+                    phase_callback("tool_end")
+                check_agent_cancellation(cancellation_token, phase="after_tool_return")
+                return result
+            self._set_tool_func(invocation_tool, gated)
+            wrapped.append(invocation_tool)
+        return wrapped
+
     def launch(self, debug: bool = False, fast_api=False):
         try:
             Agent.launch(
@@ -597,7 +624,8 @@ class VillagerBench:
         else:
             return {"message": "env not running", "status": False}
 
-    def step(self, agent_name: str, action: str, max_turn: int = 7):
+    def step(self, agent_name: str, action: str, max_turn: int = 7,
+             cancellation_token=None, phase_callback=None):
         '''
         final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
         '''
@@ -608,7 +636,21 @@ class VillagerBench:
         find_agent = False
         for agent in self.agent_pool:
             if agent.name == agent_name:
-                feedback, detail = agent.run(action, max_iterations=max_turn)
+                check_agent_cancellation(cancellation_token, phase="before_env_step")
+                tools = self._cancellation_tools(agent.tools, cancellation_token, phase_callback)
+                run_kwargs = {"max_iterations": max_turn, "tools": tools,
+                              "cancellation_token": cancellation_token,
+                              "phase_callback": phase_callback}
+                try:
+                    parameters = inspect.signature(agent.run).parameters
+                    if not any(p.kind == inspect.Parameter.VAR_KEYWORD
+                               for p in parameters.values()):
+                        run_kwargs = {k: v for k, v in run_kwargs.items() if k in parameters}
+                except (TypeError, ValueError):
+                    pass
+                feedback, detail = agent.run(action, **run_kwargs)
+
+                check_agent_cancellation(cancellation_token, phase="after_env_step")
 
                 self.log[agent_name].append(detail)
 

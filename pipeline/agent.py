@@ -21,11 +21,15 @@ import threading
 import torch
 import platform
 import math
+import inspect
 from numbers import Integral, Real
 from pathlib import Path
 from model.utils import extract_info
 from env.runtime_paths import RuntimePaths, atomic_write_json
 from env.minecraft_client import (
+    AgentExecutionCancelledError,
+    check_agent_cancellation,
+    wait_for_agent_cancellation,
     MinecraftActionLogError,
     MinecraftToolTimeoutError,
     ToolActionBlockedError,
@@ -171,19 +175,14 @@ class BaseAgent:
         return (
             not self._virtual_debug
             and self.RL_mode == ""
-            and isinstance(self.llm, VLLMLanguageModel)
         )
 
-    def step(self, task:Task, cancellation_token=None) -> (str, dict):
+    def step(self, task:Task, cancellation_token=None, phase_callback=None) -> (str, dict):
         '''
         take an action and return the feedback and detail
-        cancellation_token is supported only by the local VLLM path.
+        cancellation_token is a cooperative boundary signal.
         return: final_answer, {"input": response["input"], "action_list": action_list, "final_answer": final_answer}
         '''
-        local_model_step = self.supports_cooperative_cancellation()
-        if cancellation_token is not None and not local_model_step:
-            raise ValueError("cancellation_token is only supported for local VLLM agent steps")
-
         if self._virtual_debug:
             return self.virtual_step(task)
 
@@ -193,7 +192,10 @@ class BaseAgent:
             if isinstance(self.llm, VLLMLanguageModel):
                 return self.local_step(task, cancellation_token=cancellation_token)
             else:
-                return self.normal_step(task)
+                if cancellation_token is None and phase_callback is None:
+                    return self.normal_step(task)
+                return self.normal_step(task, cancellation_token=cancellation_token,
+                                        phase_callback=phase_callback)
         
     def rl_step(self, task:Task) -> (str, dict):
         # 构建基础提示和状态
@@ -417,7 +419,7 @@ class BaseAgent:
             observations.append(obs)
 
     
-    def normal_step(self, task:Task) -> (str, dict):
+    def normal_step(self, task:Task, cancellation_token=None, phase_callback=None) -> (str, dict):
         if random() < 0.5:
             speech_style = sample(list(speaking_styles.keys()), 1)[0]
             personality = speaking_styles[speech_style]['personality']
@@ -475,45 +477,71 @@ class BaseAgent:
             "relevant_data": smart_truncate(task.content, max_length=4096), 
             "agent_state": self.data_manager.query_history(self.name),
         })
+        def check(phase):
+            if callable(phase_callback):
+                phase_callback(phase)
+            check_agent_cancellation(cancellation_token, phase=phase)
+
+        def cancelled_result(error):
+            failure = dict(error.failure_detail)
+            detail = {"input": task_str, "action_list": [],
+                      "final_answer": failure["message"], "failure": failure}
+            return ({"message": failure["message"], "status": False,
+                     "new_events": [], "error": failure}, detail)
+
         self.IDLE = False
         last_error = None
-        while max_retry > 0:
-            try:
-                feedback, detail = self.env.step(self.name, task_str)
-                break
-            except KeyboardInterrupt:
-                self.IDLE = True
-                self.logger.info("KeyboardInterrupt")
-                raise KeyboardInterrupt
-            except ConnectionError:
-                self.IDLE = True
-                self.logger.error("ConnectionError")
-                raise ConnectionError
-            except ConnectionRefusedError:
-                self.IDLE = True
-                self.logger.error("ConnectionRefusedError")
-                raise ConnectionRefusedError
-            except (
-                ToolActionBlockedError,
-                MinecraftToolTimeoutError,
-                MinecraftActionLogError,
-            ):
-                self.IDLE = True
-                raise
-            except Exception as e:
-                last_error = e
-                self.logger.error(f"Error: {e}")
-                max_retry -= 1
-                time.sleep(3)
-        else:
-            self.IDLE = True
-            raise last_error
-        
-        self.IDLE = True
+        try:
+            while max_retry > 0:
+                try:
+                    check("before_env_step")
+                    step_kwargs = {"cancellation_token": cancellation_token,
+                                   "phase_callback": phase_callback}
+                    try:
+                        parameters = inspect.signature(self.env.step).parameters
+                        if not any(p.kind == inspect.Parameter.VAR_KEYWORD
+                                   for p in parameters.values()):
+                            step_kwargs = {k: v for k, v in step_kwargs.items() if k in parameters}
+                    except (TypeError, ValueError):
+                        pass
+                    feedback, detail = self.env.step(self.name, task_str, **step_kwargs)
+                    check("after_env_return")
+                    break
+                except AgentExecutionCancelledError as error:
+                    return cancelled_result(error)
+                except KeyboardInterrupt:
+                    self.logger.info("KeyboardInterrupt")
+                    raise KeyboardInterrupt
+                except ConnectionError:
+                    self.logger.error("ConnectionError")
+                    raise ConnectionError
+                except ConnectionRefusedError:
+                    self.logger.error("ConnectionRefusedError")
+                    raise ConnectionRefusedError
+                except (ToolActionBlockedError, MinecraftToolTimeoutError,
+                        MinecraftActionLogError):
+                    raise
+                except Exception as e:
+                    last_error = e
+                    self.logger.error(f"Error: {e}")
+                    max_retry -= 1
+                    try:
+                        wait_for_agent_cancellation(cancellation_token, 3)
+                        check("retry_wait")
+                    except AgentExecutionCancelledError as error:
+                        return cancelled_result(error)
+            else:
+                raise last_error
 
-        # 耗时操作
-        status = self.env.agent_status(self.name)
-        self.data_manager.update_database(AgentFeedback(task, detail, status).to_json())
+            try:
+                check("before_agent_status")
+                status = self.env.agent_status(self.name)
+                check("before_database_update")
+                self.data_manager.update_database(AgentFeedback(task, detail, status).to_json())
+            except AgentExecutionCancelledError as error:
+                return cancelled_result(error)
+        finally:
+            self.IDLE = True
 
         # self.data_manager.save()
         return feedback, detail

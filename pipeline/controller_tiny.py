@@ -21,7 +21,9 @@ from pipeline.utils import *
 from pipeline.controller_prompt import *
 from pipeline.runtime_events import NoOpRuntimeEventSink, safe_emit_runtime_event
 from env.env import VillagerBench
-from env.minecraft_client import ToolActionBlockedError
+from env.minecraft_client import (
+    ToolActionBlockedError, AgentExecutionCancelledError,
+)
 from env.minecraft_dual_dag import rank_minecraft_runtime_tasks
 from env.runtime_paths import RuntimePaths, atomic_write_json
 import logging
@@ -38,6 +40,7 @@ class TaskExecutionGroup:
     terminal_state_persisted: bool = False
     post_processing_complete: bool = False
     cancellation_tokens: dict[str, threading.Event] = field(default_factory=dict)
+    cancellation_phases: dict[str, str] = field(default_factory=dict)
     timeout_detected: set[str] = field(default_factory=set)
     timeout_detected_at: dict[str, float] = field(default_factory=dict)
     cancellation_requested: set[str] = field(default_factory=set)
@@ -192,6 +195,7 @@ class GlobalController:
 
         # init thread pool
         self.executor = ThreadPoolExecutor(max_workers=max_workers)  # 可以根据需要调整max_workers的数量
+        self._started_execution_groups: list[TaskExecutionGroup] = []
 
         # init max task time
         self.max_task_time = 60 * 30 # 3min
@@ -232,10 +236,33 @@ class GlobalController:
 
     def _request_shutdown(self):
         with self._execution_state_lock:
+            for group in self._all_execution_groups():
+                for agent_name, token in group.cancellation_tokens.items():
+                    future = group.futures.get(agent_name)
+                    if future is None or future.done():
+                        continue
+                    token.set()
+                    group.cancellation_requested.add(agent_name)
+                    group.cancellation_requested_at.setdefault(agent_name, time.time())
             self._post_processing_cancellation_token().set()
             self.shutdown_event.set()
         with self._feedback_persistence_gate_lock():
             self._feedback_persistence_closed = True
+
+    def _all_execution_groups(self):
+        return list(getattr(self, "_started_execution_groups", ()))
+
+    def _phase_callback(self, group, agent_name):
+        def update(phase):
+            phase = str(phase)
+            with self._execution_state_lock:
+                group.cancellation_phases[agent_name] = phase
+                if group.cancellation_tokens[agent_name].is_set() or self._execution_admission_closed():
+                    operation = "confirmed" if any(marker in phase for marker in ("after", "_end", "return")) else "not_active"
+                    raise AgentExecutionCancelledError(
+                        phase=phase, blocking_operation_termination=operation,
+                    )
+        return update
 
     def _post_processing_cancellation_token(self):
         token = getattr(self, "_post_processing_cancel_event", None)
@@ -483,24 +510,40 @@ class GlobalController:
                 if enqueue:
                     self.result_queue.append(group)
                 group.started_at = time.time()
+                registry = getattr(self, "_started_execution_groups", None)
+                if registry is None:
+                    registry = self._started_execution_groups = []
+                registry.append(group)
                 for agent in group.agents:
                     if self._execution_admission_closed():
                         raise ControllerShutdownError(
                             f"Task {group.task.description} submission interrupted by controller shutdown"
                         )
                     supports_cancellation = getattr(
-                        agent, "supports_cooperative_cancellation", None
+                        agent, "supports_cooperative_cancellation", None,
                     )
-                    if callable(supports_cancellation) and supports_cancellation():
+                    cooperative = (
+                        callable(supports_cancellation)
+                        and supports_cancellation()
+                    )
+                    kwargs = {}
+                    if cooperative:
                         token = threading.Event()
                         group.cancellation_tokens[agent.name] = token
-                        group.futures[agent.name] = self.executor.submit(
-                            agent.step,
-                            group.task,
-                            cancellation_token=token,
-                        )
-                    else:
-                        group.futures[agent.name] = self.executor.submit(agent.step, group.task)
+                        kwargs = {
+                            "cancellation_token": token,
+                            "phase_callback": self._phase_callback(
+                                group, agent.name,
+                            ),
+                        }
+                    try:
+                        parameters = inspect.signature(agent.step).parameters
+                        if not any(p.kind == inspect.Parameter.VAR_KEYWORD
+                                   for p in parameters.values()):
+                            kwargs = {k: v for k, v in kwargs.items() if k in parameters}
+                    except (TypeError, ValueError):
+                        pass
+                    group.futures[agent.name] = self.executor.submit(agent.step, group.task, **kwargs)
                     self.logger.info(f"Agent {agent.name} is executing task now ...")
                 group.submission_complete = True
 
@@ -667,6 +710,7 @@ class GlobalController:
                         "cancellation_requested": False,
                         "cancellation_acknowledged": False,
                         "cancellation_forced": False,
+                        "phase": group.cancellation_phases.get(agent_name, "unknown"),
                     }
 
                 # Completion may race with the deadline snapshot. Recheck before
@@ -1657,8 +1701,9 @@ class GlobalController:
             "terminal_barrier": self._terminal_barrier_context(),
             "movement_cancellation": self.movement_shutdown_result,
             "tool_runtime": self._tool_runtime_context(),
+            "execution_cancellation": self._execution_cancellation_context(),
         }
-        if not shutdown_complete or interrupted_task_ids:
+        if not shutdown_complete:
             message = "Controller shutdown incomplete"
             if alive_threads:
                 message += f"; live threads: {', '.join(alive_threads)}"
@@ -1686,6 +1731,7 @@ class GlobalController:
                 "terminal_barrier": self._terminal_barrier_context(),
                 "movement_cancellation": self.movement_shutdown_result,
                 "tool_runtime": self._tool_runtime_context(),
+                "execution_cancellation": self._execution_cancellation_context(),
             })
             setattr(self._first_failure[0], "controller_shutdown_context", {
                 "shutdown_complete": shutdown_complete,
@@ -1753,6 +1799,16 @@ class GlobalController:
         if not isinstance(result, dict):
             return {"state": "invalid_result", "terminal": False}
         return result
+
+    def _execution_cancellation_context(self) -> list[dict]:
+        return [{
+            "task_id": group.task.id,
+            "requested": sorted(group.cancellation_requested),
+            "acknowledged": sorted(group.cancellation_acknowledged),
+            "phases": dict(group.cancellation_phases),
+            "active_agents": [name for name, future in group.futures.items()
+                              if not future.done()],
+        } for group in self._all_execution_groups()]
 
     def _terminal_barrier_context(self) -> dict:
         with self._tool_action_condition:
@@ -1860,6 +1916,12 @@ class GlobalController:
                 execution_may_still_be_active = any(
                     future.running() for future in group.futures.values()
                 )
+                for agent_name, future in group.futures.items():
+                    if (agent_name in group.cancellation_requested
+                            and future.done()
+                            and self._is_cancellation_acknowledgement(
+                                self._snapshot_future(future))):
+                        group.cancellation_acknowledged.add(agent_name)
                 agent_names = [agent.name for agent in group.agents]
                 submitted_agent_names = list(group.futures)
                 active_group_agents = [
@@ -1880,6 +1942,14 @@ class GlobalController:
                     "submission_complete": group.submission_complete,
                     "agent_reuse_blocked": True,
                     "requires_agent_reconciliation": True,
+                    "cancellation_requested": sorted(group.cancellation_requested),
+                    "cancellation_acknowledged": sorted(group.cancellation_acknowledged),
+                    "cancellation_phases": dict(group.cancellation_phases),
+                    "blocking_operation_termination": (
+                        "unconfirmed" if execution_may_still_be_active
+                        else ("confirmed" if group.cancellation_acknowledged
+                              else "not_active")
+                    ),
                 }
                 if group.timeout_detected:
                     feedback.update({
@@ -1889,8 +1959,38 @@ class GlobalController:
                         "cancellation_acknowledged": sorted(group.cancellation_acknowledged),
                         "cancellation_forced": sorted(group.cancellation_forced),
                         "timeout_details": dict(group.timeout_details),
+                        "cancellation_phases": dict(group.cancellation_phases),
                     })
-                if group.shutdown_escalated and execution_may_still_be_active:
+                terminal_snapshots = {
+                    agent_name: self._snapshot_future(future)
+                    for agent_name, future in group.futures.items()
+                }
+                clean_interruption = (
+                    not execution_may_still_be_active
+                    and group.submission_complete
+                    and all(
+                        snapshot["done"] and snapshot["exception"] is None
+                        for snapshot in terminal_snapshots.values()
+                    )
+                )
+                if clean_interruption:
+                    cancellation_confirmed = (
+                        bool(group.cancellation_requested)
+                        and group.cancellation_requested.issubset(
+                            group.cancellation_acknowledged
+                        )
+                    )
+                    feedback["reason"] = (
+                        "controller_shutdown_cancelled"
+                        if cancellation_confirmed
+                        else "controller_shutdown_interrupted"
+                    )
+                    self.task_manager.mark_task_status(group.task.id, Task.running, feedback)
+                    group.task.status = Task.running
+                    group.shutdown_reconciled = True
+                    group.post_processing_complete = True
+                    group.completed = True
+                elif group.shutdown_escalated and execution_may_still_be_active:
                     feedback["reason"] = "task_timeout_shutdown_escalation"
                     if not group.timeout_checkpoint_persisted:
                         self.task_manager.mark_task_status(group.task.id, Task.running, feedback)
