@@ -176,7 +176,13 @@ class OpenAILanguageModel(AbstractLanguageModel):
             with path.open("a", encoding="utf-8") as output:
                 output.write(json.dumps(value, ensure_ascii=True, sort_keys=True) + "\n")
 
-    def _bounded_provider_call(self, callback, provider_client, cancellation_event=None):
+    def _bounded_provider_call(
+        self,
+        callback,
+        provider_client,
+        cancellation_event=None,
+        provider_started_callback=None,
+    ):
         if cancellation_event is not None and cancellation_event.is_set():
             raise ProviderCallCancellationError(
                 "OpenAI provider call was cancelled before start",
@@ -193,6 +199,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
         worker = threading.Thread(target=invoke, name="openai-provider-call", daemon=True)
         worker.start()
+        if provider_started_callback is not None:
+            provider_started_callback()
         deadline = time.monotonic() + self.request_timeout_seconds
         succeeded = None
         value = None
@@ -360,7 +368,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
 
     def gpt_api(self, messages: list, model: str, temperature: float,
                 max_tokens: int | None = None, provider_client=None,
-                reasoning_effort: str | None = None, cancellation_event=None):
+                reasoning_effort: str | None = None, cancellation_event=None,
+                provider_started_callback=None):
         """为提供的对话消息创建新的回答
 
         Args:
@@ -382,7 +391,12 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 max_tokens=max_tokens, extra_body=extra_body,
             )
 
-        completion = self._bounded_provider_call(complete, provider_client, cancellation_event)
+        completion = self._bounded_provider_call(
+            complete,
+            provider_client,
+            cancellation_event,
+            provider_started_callback,
+        )
         choice = completion.choices[0]
         content = choice.message.content or ""
         reasoning = (
@@ -404,7 +418,8 @@ class OpenAILanguageModel(AbstractLanguageModel):
     
     def gpt_api_stream(self, messages: list, model: str, temperature: float,
                        max_tokens: int | None = None, provider_client=None,
-                       reasoning_effort: str | None = None, cancellation_event=None):
+                       reasoning_effort: str | None = None, cancellation_event=None,
+                       provider_started_callback=None):
         """为提供的对话消息创建新的回答 (流式传输)
 
         Args:
@@ -459,7 +474,12 @@ class OpenAILanguageModel(AbstractLanguageModel):
                 "finish_reason": finish_reason,
             }
 
-        content, response_metadata = self._bounded_provider_call(consume_stream, provider_client, cancellation_event)
+        content, response_metadata = self._bounded_provider_call(
+            consume_stream,
+            provider_client,
+            cancellation_event,
+            provider_started_callback,
+        )
         self._response_metadata.value = response_metadata
         logger.debug(f"Time taken: {time.monotonic() - start_time}")
         return content
@@ -477,7 +497,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
     def few_shot_generate_thoughts(self, system_prompt: str = "", example_prompt: [str] or str = [], max_tokens=1024,
                                    temperature=0.0, k=1, stop=None, cache_enabled=False, api_model="", check_tags=[],
                                    json_check=False, stream=True, reasoning_effort: str | None = None,
-                                   cancellation_event=None):
+                                   cancellation_event=None, model_admission_lock=None):
         if api_model == "":
             api_model = self.api_model
         if type(example_prompt) == str:
@@ -529,9 +549,30 @@ class OpenAILanguageModel(AbstractLanguageModel):
                     messages.append({"role": "assistant", "content": example_prompt[i]})
 
             try:
+                admission_held = False
+
+                def release_model_admission():
+                    nonlocal admission_held
+                    if admission_held:
+                        admission_held = False
+                        model_admission_lock.release()
+
+                if model_admission_lock is not None:
+                    model_admission_lock.acquire()
+                    admission_held = True
+                    if cancellation_event is not None and cancellation_event.is_set():
+                        raise ProviderCallCancellationError(
+                            "OpenAI provider call was cancelled before model admission",
+                            provider_termination_confirmed=True,
+                            close_failure_diagnostics={"phase": "model_admission"},
+                        )
                 cancellation_kwargs = (
                     {"cancellation_event": cancellation_event}
                     if cancellation_event is not None else {}
+                )
+                admission_kwargs = (
+                    {"provider_started_callback": release_model_admission}
+                    if admission_held else {}
                 )
                 if stream:
                     content = self.gpt_api_stream(
@@ -539,6 +580,7 @@ class OpenAILanguageModel(AbstractLanguageModel):
                         provider_client=provider_client,
                         reasoning_effort=selected_reasoning_effort,
                         **cancellation_kwargs,
+                        **admission_kwargs,
                     )
                 else:
                     response = self.gpt_api(
@@ -546,9 +588,13 @@ class OpenAILanguageModel(AbstractLanguageModel):
                         provider_client=provider_client,
                         reasoning_effort=selected_reasoning_effort,
                         **cancellation_kwargs,
+                        **admission_kwargs,
                     )
                     content = response.choices[0].message.content or ""
+                release_model_admission()
             except Exception as exc:
+                if "release_model_admission" in locals():
+                    release_model_admission()
                 diagnostic = self._diagnostic_base(
                     attempt=attempt, model=api_model, stream=stream,
                 )

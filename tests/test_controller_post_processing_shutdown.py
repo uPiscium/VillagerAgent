@@ -5,9 +5,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from pipeline.agent import ReflectionOutcome
+from pipeline.agent import (
+    BaseAgent,
+    ReflectionInterruptedError,
+    ReflectionOutcome,
+)
 from pipeline.controller_tiny import GlobalController, TaskExecutionGroup
-from type_define.graph import Task
+from pipeline.task_manager import (
+    TaskManager,
+    TaskManagerFeedbackCommitError,
+    TaskManagerFeedbackOutcome,
+)
+from model.openai_models import (
+    OpenAILanguageModel,
+    ProviderCallCancellationError,
+    ProviderCallTerminationError,
+)
+from type_define.graph import Graph, GraphState, Task
 
 
 class Manager:
@@ -40,6 +54,56 @@ class Agent:
         return True
 
 
+class FeedbackModel(OpenAILanguageModel):
+    def __init__(self, callback):
+        self.callback = callback
+
+    def few_shot_generate_thoughts(self, *_args, **kwargs):
+        return self.callback(kwargs.get("cancellation_event"))
+
+
+class ModelFeedbackManager(TaskManager):
+    def __init__(self, task, model):
+        self.graph = SimpleNamespace(vertex=[task])
+        self.status = TaskManager.idle
+        self.manage_method = "update"
+        self.llm = model
+        self.logger = SimpleNamespace(error=lambda *a, **k: None)
+        self.runtime_task_store = SimpleNamespace(
+            terminal_state=lambda: GraphState.FAILURE,
+        )
+        self.status_updates = []
+        self.trace_calls = 0
+        self.model_calls = 0
+        self.mutation_calls = 0
+
+    def mark_task_status(self, task_id, status, feedback=None):
+        self.status_updates.append((task_id, status, feedback, {}))
+
+    def add_task_to_trace(self):
+        self.trace_calls += 1
+
+    def update_task(
+        self,
+        _task,
+        cancellation_token=None,
+        commit_lock=None,
+        persistence_gate=None,
+    ):
+        self.model_calls += 1
+        self._feedback_model_call(
+            "system",
+            "user",
+            cancellation_token=cancellation_token,
+            cache_enabled=False,
+        )
+        with self._feedback_commit_context(commit_lock):
+            self._require_feedback_admission(
+                cancellation_token, phase="test_feedback_commit",
+            )
+            self.mutation_calls += 1
+
+
 def controller(names=("Alice",)):
     task = Task("deterministic post processing", {})
     task.candidate_list = list(names)
@@ -64,7 +128,7 @@ def controller(names=("Alice",)):
     ctl.max_task_time = 30
     ctl.query_interval = .001
     ctl.cancellation_grace_period = .05
-    ctl.reflection_cancellation_grace_period = .05
+    ctl.post_processing_cancellation_grace_period = .05
     ctl.task_manager = Manager(task)
     ctl.logger = SimpleNamespace(error=lambda *a, **k: None,
                                  exception=lambda *a, **k: None,
@@ -285,6 +349,9 @@ def test_committed_reflection_is_not_reclassified_when_shutdown_follows():
     assert group.reflection_committed == {"Alice"}
     assert group.post_processing_interrupted is False
     assert ctl.task_manager.status_updates[0][1] == Task.success
+    assert ctl.task_manager.feedback_calls == 0
+    assert group.feedback_interrupted is True
+    assert ctl._feedback_interruption_ledger[task.id]["feedback_started"] is False
 
 
 def test_terminal_persistence_is_linearized_before_shutdown():
@@ -315,3 +382,338 @@ def test_terminal_persistence_is_linearized_before_shutdown():
     assert not shutdown.is_alive()
     assert group.terminal_state_persisted is True
     assert group.post_processing_interrupted is False
+
+
+def model_feedback_controller(callback):
+    ctl, task = controller()
+    manager = ModelFeedbackManager(task, FeedbackModel(callback))
+    ctl.task_manager = manager
+    ctl.agent_list[0].reflection = lambda _token: ReflectionOutcome(True)
+    return ctl, task, manager, group_for(ctl, task)
+
+
+def test_shutdown_between_terminal_persistence_and_feedback_starts_no_model():
+    ctl, task, manager, group = model_feedback_controller(
+        lambda _token: "unused",
+    )
+    original_mark = manager.mark_task_status
+
+    def shutdown_after_terminal(*args, **kwargs):
+        original_mark(*args, **kwargs)
+        ctl._request_shutdown()
+
+    manager.mark_task_status = shutdown_after_terminal
+
+    assert ctl.finalize_execution_group(group) is True
+    assert task.status == Task.success
+    assert manager.model_calls == 0
+    assert manager.mutation_calls == 0
+    assert group.feedback_interrupted is True
+    assert group.feedback_interruption["feedback_started"] is False
+
+
+def test_in_flight_task_manager_model_is_cancelled_with_one_feedback_attempt():
+    entered = threading.Event()
+
+    def blocked(token):
+        entered.set()
+        assert token.wait(.5)
+        raise ProviderCallCancellationError(
+            "feedback cancelled",
+            provider_termination_confirmed=True,
+            close_failure_diagnostics={"phase": "test_provider"},
+        )
+
+    ctl, task, manager, group = model_feedback_controller(blocked)
+    finalizer = threading.Thread(target=ctl.finalize_execution_group, args=(group,))
+    finalizer.start()
+    assert entered.wait(.5)
+    ctl._request_shutdown()
+    finalizer.join(.5)
+
+    assert not finalizer.is_alive()
+    assert task.status == Task.success
+    assert manager.model_calls == 1
+    assert manager.mutation_calls == 0
+    assert group.feedback_interrupted is True
+    assert group.feedback_interruption["provider_termination_confirmed"] is True
+
+
+def test_real_task_manager_update_model_is_cancelled_before_graph_mutation(
+    tmp_path, monkeypatch,
+):
+    entered = threading.Event()
+
+    def blocked(token):
+        entered.set()
+        assert token.wait(.5)
+        raise ProviderCallCancellationError(
+            "real feedback cancelled",
+            provider_termination_confirmed=True,
+            close_failure_diagnostics={"phase": "real_task_manager"},
+        )
+
+    ctl, task = controller()
+    manager = TaskManager(
+        silent=True,
+        method="update",
+        history_output_dir=tmp_path,
+    )
+    manager.set_task_list_from_decomposition([task])
+    projected_task = manager.graph.vertex[0]
+    manager.mark_task_running(projected_task, ["Alice"])
+    manager.llm = FeedbackModel(blocked)
+    manager.dm = SimpleNamespace(
+        query_env_with_task=lambda _description: "environment",
+        query_history=lambda _name: "history",
+    )
+    manager.agent_list = ctl.agent_list
+    manager.task_description = "root task"
+    manager.task_document = {}
+    monkeypatch.setattr(Graph, "write_graph_to_md", lambda *_a, **_k: None)
+    monkeypatch.setattr(Graph, "write_graph_to_json", lambda *_a, **_k: None)
+    ctl.task_manager = manager
+    ctl.task_list = [projected_task]
+    ctl.assignment = {"Alice": projected_task.id}
+    ctl.agent_list[0].reflection = lambda _token: ReflectionOutcome(True)
+    group = group_for(ctl, projected_task)
+    finalizer = threading.Thread(target=ctl.finalize_execution_group, args=(group,))
+    finalizer.start()
+    assert entered.wait(.5)
+    ctl._request_shutdown()
+    finalizer.join(.5)
+
+    assert not finalizer.is_alive()
+    assert projected_task.status == Task.success
+    assert group.feedback_interrupted is True
+    snapshot = manager.runtime_task_store.snapshot()
+    assert len(snapshot["nodes"]) == 1
+    assert snapshot["nodes"][0]["lifecycle"]["status"] == Task.success
+
+
+def test_uncooperative_task_manager_model_keeps_shutdown_unconfirmed():
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked(_token):
+        entered.set()
+        release.wait(1)
+        return "late"
+
+    ctl, task, manager, group = model_feedback_controller(blocked)
+    ctl.post_processing_cancellation_grace_period = .05
+    finalizer = threading.Thread(target=ctl.finalize_execution_group, args=(group,))
+    finalizer.start()
+    try:
+        assert entered.wait(.5)
+        ctl._request_shutdown()
+        finalizer.join(.5)
+        assert not finalizer.is_alive()
+        assert manager.model_calls == 1
+        assert manager.mutation_calls == 0
+        assert group.feedback_interruption[
+            "provider_termination_confirmed"
+        ] is False
+        assert ctl._provider_termination_unconfirmed_task_ids == [task.id]
+    finally:
+        release.set()
+        finalizer.join(1)
+
+
+def test_task_manager_provider_timeout_forces_incomplete_shutdown_state():
+    def terminated(_token):
+        raise ProviderCallTerminationError(
+            "provider worker remained active",
+        )
+
+    ctl, task, manager, group = model_feedback_controller(terminated)
+
+    assert ctl.finalize_execution_group(group) is True
+    assert ctl.shutdown_event.is_set() is True
+    assert manager.model_calls == 1
+    assert manager.mutation_calls == 0
+    assert group.feedback_interruption[
+        "provider_termination_confirmed"
+    ] is False
+    assert ctl._provider_termination_unconfirmed_task_ids == [task.id]
+
+
+def test_base_agent_reflection_provider_timeout_is_unconfirmed():
+    def terminated(_token):
+        raise ProviderCallTerminationError(
+            "reflection provider worker remained active",
+        )
+
+    agent = object.__new__(BaseAgent)
+    agent.llm = FeedbackModel(terminated)
+    agent.name = "Alice"
+    agent.data_manager = SimpleNamespace(
+        query_history=lambda _name: "history",
+    )
+    task = Task("reflection timeout", {})
+    task.milestones = []
+
+    with pytest.raises(ReflectionInterruptedError) as raised:
+        agent.reflect(
+            task,
+            {"action_list": []},
+            cancellation_token=threading.Event(),
+            commit_lock=threading.RLock(),
+        )
+
+    assert raised.value.provider_termination_confirmed is False
+    assert raised.value.diagnostics["phase"] == "provider_timeout"
+
+
+def test_normal_task_manager_feedback_model_and_mutation_execute_once():
+    ctl, task, manager, group = model_feedback_controller(
+        lambda _token: "feedback response",
+    )
+
+    assert ctl.finalize_execution_group(group) is True
+    assert ctl.finalize_execution_group(group) is True
+    assert task.status == Task.success
+    assert manager.model_calls == 1
+    assert manager.mutation_calls == 1
+    assert group.feedback_completed is True
+    assert group.feedback_interrupted is False
+
+
+def test_post_commit_feedback_artifact_failure_is_not_retried():
+    ctl, task = controller()
+    group = group_for(ctl, task)
+    calls = []
+
+    def committed_then_failed(_task, **_kwargs):
+        calls.append(1)
+        raise TaskManagerFeedbackCommitError("artifact write failed")
+
+    ctl.task_manager.feedback_task = committed_then_failed
+
+    errors = []
+
+    def process():
+        try:
+            ctl.process_completed_tasks()
+        except BaseException as exc:
+            errors.append(exc)
+
+    processor = threading.Thread(target=process)
+    processor.start()
+    processor.join(.5)
+
+    assert not processor.is_alive()
+    assert isinstance(errors[0], TaskManagerFeedbackCommitError)
+    assert group.completed is True
+    assert group.feedback_persisted is True
+    assert ctl.finalize_execution_group(group) is True
+    assert calls == [1]
+    assert ctl.result_queue == []
+
+
+def test_committed_feedback_with_deferred_artifacts_is_auditable():
+    ctl, task, manager, group = model_feedback_controller(
+        lambda _token: "unused",
+    )
+    manager.update_task = lambda *_a, **_k: TaskManagerFeedbackOutcome(
+        ancillary_complete=False,
+    )
+
+    assert ctl.finalize_execution_group(group) is True
+    assert group.feedback_persisted is True
+    assert group.feedback_ancillary_complete is False
+    assert ctl._feedback_interruption_ledger[task.id] == {
+        "task_id": task.id,
+        "reason": "task_manager_feedback_ancillary_deferred",
+        "feedback_started": True,
+        "committed": True,
+        "ancillary_complete": False,
+        "provider_termination_confirmed": True,
+        "diagnostics": {"phase": "after_feedback_commit"},
+    }
+
+
+def test_feedback_artifact_persistence_stops_after_cancellation():
+    task = Task("artifact cancellation", {})
+    cancellation = threading.Event()
+    manager = ModelFeedbackManager(task, FeedbackModel(lambda _token: "unused"))
+    calls = []
+
+    def update_history(*_args):
+        calls.append("history")
+        cancellation.set()
+
+    manager.update_history = update_history
+    manager.checkpoint_runtime_state = lambda **_kwargs: calls.append("checkpoint")
+    manager.emit_task_graph_snapshot = lambda *_args: calls.append("snapshot")
+    manager.graph.write_graph_to_md = lambda *_args: calls.append("markdown")
+    manager.graph.write_graph_to_json = lambda *_args: calls.append("json")
+
+    outcome = manager._persist_feedback_artifacts(
+        history=("system", "user", "response"),
+        snapshot_source="test",
+        cancellation_token=cancellation,
+    )
+
+    assert outcome.committed is True
+    assert outcome.ancillary_complete is False
+    assert calls == ["history"]
+
+
+def test_feedback_persistence_gate_closes_atomically_with_shutdown():
+    ctl, _task = controller()
+    entered = threading.Event()
+    release = threading.Event()
+    completed = []
+
+    def admitted_operation():
+        entered.set()
+        assert release.wait(.5)
+        completed.append("admitted")
+
+    operation = threading.Thread(
+        target=lambda: ctl._run_feedback_persistence_operation(
+            admitted_operation,
+            ctl._post_processing_cancellation_token(),
+        ),
+    )
+    operation.start()
+    assert entered.wait(.5)
+    shutdown = threading.Thread(target=ctl._request_shutdown)
+    shutdown.start()
+    time.sleep(.02)
+    assert not shutdown.is_alive()
+    release.set()
+    operation.join(.5)
+    shutdown.join(.5)
+
+    late_calls = []
+    admitted = ctl._run_feedback_persistence_operation(
+        lambda: late_calls.append("late"),
+        ctl._post_processing_cancellation_token(),
+    )
+    assert completed == ["admitted"]
+    assert admitted is False
+    assert late_calls == []
+
+
+def test_explicit_failure_shutdown_cannot_start_task_manager_feedback_model():
+    ctl, task, manager, group = model_feedback_controller(
+        lambda _token: "unused",
+    )
+    failed = Future()
+    failed.set_result(("done", {"failure": {"reason": "explicit"}}))
+    group.futures["Alice"] = failed
+    original_mark = manager.mark_task_status
+
+    def shutdown_after_terminal(*args, **kwargs):
+        original_mark(*args, **kwargs)
+        ctl._request_shutdown()
+
+    manager.mark_task_status = shutdown_after_terminal
+
+    assert ctl.finalize_execution_group(group) is True
+    assert task.status == Task.failure
+    assert ctl.agent_list[0].reflection_calls == 0
+    assert manager.model_calls == 0
+    assert group.feedback_interrupted is True

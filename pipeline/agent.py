@@ -5,7 +5,11 @@ from env.env import VillagerBench
 from type_define.graph import Task
 from pipeline.data_manager import DataManager
 from pipeline.utils import *
-from model.openai_models import OpenAILanguageModel, ProviderCallCancellationError
+from model.openai_models import (
+    OpenAILanguageModel,
+    ProviderCallCancellationError,
+    ProviderCallTerminationError,
+)
 from model.vllm_model import VLLMLanguageModel
 from random import random, randint, choice, sample
 from pipeline.agent_prompt import *
@@ -866,9 +870,18 @@ class BaseAgent:
                 response = self.llm.few_shot_generate_thoughts(
                     reflect_system_prompt, prompt, cache_enabled=False, max_tokens=256,
                     json_check=True, cancellation_event=cancellation_token,
+                    model_admission_lock=commit_lock,
                 )
             except ProviderCallCancellationError as error:
                 interrupted(error.close_failure_diagnostics, error.provider_termination_confirmed)
+            except ProviderCallTerminationError as error:
+                interrupted(
+                    {
+                        "phase": "provider_timeout",
+                        "error_type": type(error).__name__,
+                    },
+                    confirmed=False,
+                )
         else:
             prompt = format_string(reflect_user_prompt,
                                    {

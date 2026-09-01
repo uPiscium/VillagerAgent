@@ -12,6 +12,7 @@ from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_
 from env.runtime_paths import RuntimePaths
 from model.openai_models import OpenAILanguageModel, ProviderCallCancellationError
 from env.minecraft_client import LLMHandler
+from pipeline.task_manager import TaskManager, TaskManagerFeedbackInterruptedError
 
 
 class _FakeWaiter:
@@ -259,6 +260,46 @@ def test_k11_instruments_provider_cancellation_as_one_terminal_failure(monkeypat
     assert len(starts) == len(terminals) == 1
     assert starts[0]["payload"]["model_call_id"] == terminals[0]["payload"]["model_call_id"]
     assert terminals[0]["payload"]["error_type"] == "ProviderCallCancellationError"
+
+
+def test_k11_task_manager_feedback_cancellation_has_one_model_terminal(monkeypatch) -> None:
+    def provider_call(unused_self, messages, model, temperature, **kwargs):
+        raise ProviderCallCancellationError(
+            "feedback cancelled",
+            provider_termination_confirmed=True,
+            close_failure_diagnostics={"phase": "task_manager_feedback"},
+        )
+
+    def feedback_call(model_self, *_args, cancellation_event=None, **_kwargs):
+        return model_self.gpt_api_stream(
+            [], "gemma4:12b", 0, cancellation_event=cancellation_event,
+        )
+
+    monkeypatch.setattr(OpenAILanguageModel, "gpt_api_stream", provider_call)
+    monkeypatch.setattr(
+        OpenAILanguageModel, "few_shot_generate_thoughts", feedback_call,
+    )
+    manager = object.__new__(TaskManager)
+    manager.llm = _model()
+    trace = K11TraceRecorder("k11-task-manager-feedback-cancelled")
+
+    with K11ProcessInstrumentation(trace):
+        with pytest.raises(TaskManagerFeedbackInterruptedError):
+            manager._feedback_model_call(
+                "system", "user", cancellation_token=threading.Event(),
+            )
+
+    events = trace.artifact()["events"]
+    starts = [
+        event for event in events
+        if event["event_type"] == "k11.model_call_started"
+    ]
+    terminals = [
+        event for event in events
+        if event["event_type"] == "k11.model_call_failed"
+    ]
+    assert len(starts) == len(terminals) == 1
+    assert starts[0]["payload"]["model_call_id"] == terminals[0]["payload"]["model_call_id"]
 
 
 def test_k11_does_not_count_openai_cache_hit_as_provider_call(tmp_path, monkeypatch) -> None:

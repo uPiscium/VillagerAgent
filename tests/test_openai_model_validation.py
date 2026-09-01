@@ -448,6 +448,63 @@ def test_openai_cancellation_aware_retry_delay_prevents_second_attempt(tmp_path,
     assert calls == [1]
 
 
+def test_openai_model_admission_lock_prevents_post_shutdown_provider_start(
+    tmp_path, monkeypatch,
+):
+    provider_calls = []
+
+    class Client:
+        def __init__(self):
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(create=self.create),
+            )
+
+        def create(self, **_kwargs):
+            provider_calls.append(1)
+            return iter(())
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: Client())
+    model = OpenAILanguageModel(
+        api_key="test-key",
+        runtime_paths=RuntimePaths.isolated(tmp_path),
+        model_call_attempts=1,
+    )
+    admission_lock = threading.RLock()
+    cancellation = threading.Event()
+    errors = []
+    admission_lock.acquire()
+    thread = threading.Thread(
+        target=lambda: _call_with_model_admission(
+            model, cancellation, admission_lock, errors,
+        ),
+    )
+    thread.start()
+    time.sleep(.05)
+    cancellation.set()
+    admission_lock.release()
+    thread.join(1)
+
+    assert not thread.is_alive()
+    assert isinstance(errors[0], ProviderCallCancellationError)
+    assert errors[0].provider_termination_confirmed is True
+    assert provider_calls == []
+
+
+def _call_with_model_admission(model, cancellation, admission_lock, errors):
+    try:
+        model.few_shot_generate_thoughts(
+            "system",
+            "user",
+            cancellation_event=cancellation,
+            model_admission_lock=admission_lock,
+        )
+    except BaseException as exc:
+        errors.append(exc)
+
+
 def test_openai_stream_forwards_documented_reasoning_effort(tmp_path, monkeypatch):
     monkeypatch.setattr("model.openai_models.OpenAI", lambda **_: object())
     model = OpenAILanguageModel(

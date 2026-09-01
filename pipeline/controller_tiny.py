@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from model.init_model import init_language_model
 
 from type_define.graph import Task
-from pipeline.task_manager import TaskManager
+from pipeline.task_manager import (
+    TaskManager,
+    TaskManagerFeedbackInterruptedError,
+    TaskManagerFeedbackOutcome,
+    TaskManagerFeedbackCommitError,
+)
 from pipeline.data_manager import DataManager
 from pipeline.agent import BaseAgent, ReflectionInterruptedError, ReflectionOutcome
 from pipeline.utils import *
@@ -54,6 +59,12 @@ class TaskExecutionGroup:
     shutdown_reconciled: bool = False
     assignments_released: bool = False
     feedback_persisted: bool = False
+    feedback_started: bool = False
+    feedback_completed: bool = False
+    feedback_ancillary_complete: bool = False
+    feedback_interrupted: bool = False
+    feedback_interruption: dict = field(default_factory=dict)
+    feedback_worker: threading.Thread | None = None
 
 
 class ControllerShutdownError(RuntimeError):
@@ -187,13 +198,15 @@ class GlobalController:
 
         self.shutdown_event = threading.Event()
         self._post_processing_cancel_event = threading.Event()
+        self._feedback_persistence_lock = threading.Lock()
+        self._feedback_persistence_closed = False
         self._failure_lock = threading.Lock()
         self._first_failure = None
         self._controller_threads = []
         self.shutdown_grace_period = 5.0
         self.judger_drain_grace_period = 120.0
         self.cancellation_grace_period = 5.0
-        self.reflection_cancellation_grace_period = 1.5
+        self.post_processing_cancellation_grace_period = 1.5
         self._run_started = False
         self._judger_terminal_payload = None
         self._judger_terminal_detected_at = None
@@ -207,6 +220,7 @@ class GlobalController:
         self.shutdown_context = None
         self._result_claim_cursor = 0
         self._post_processing_interruption_ledger = {}
+        self._feedback_interruption_ledger = {}
         self._provider_termination_unconfirmed_task_ids = []
         self.minecraft_dual_dag_config = minecraft_dual_dag_config or {}
         self.event_sink = event_sink or getattr(task_manager, "event_sink", NoOpRuntimeEventSink())
@@ -220,12 +234,33 @@ class GlobalController:
         with self._execution_state_lock:
             self._post_processing_cancellation_token().set()
             self.shutdown_event.set()
+        with self._feedback_persistence_gate_lock():
+            self._feedback_persistence_closed = True
 
     def _post_processing_cancellation_token(self):
         token = getattr(self, "_post_processing_cancel_event", None)
         if token is None:
             token = self._post_processing_cancel_event = threading.Event()
         return token
+
+    def _feedback_persistence_gate_lock(self):
+        lock = getattr(self, "_feedback_persistence_lock", None)
+        if lock is None:
+            lock = self._feedback_persistence_lock = threading.Lock()
+            self._feedback_persistence_closed = False
+        return lock
+
+    def _run_feedback_persistence_operation(
+        self, callback, cancellation_token,
+    ) -> bool:
+        with self._feedback_persistence_gate_lock():
+            if (
+                self._feedback_persistence_closed
+                or cancellation_token.is_set()
+            ):
+                return False
+        callback()
+        return True
 
     def _record_failure(self, name, exc):
         failure = {
@@ -545,7 +580,7 @@ class GlobalController:
                     continue
                 if cancellation_deadline is None:
                     cancellation_deadline = time.monotonic() + getattr(
-                        self, "reflection_cancellation_grace_period", 1.5,
+                        self, "post_processing_cancellation_grace_period", 1.5,
                     )
                 if time.monotonic() < cancellation_deadline:
                     continue
@@ -586,6 +621,17 @@ class GlobalController:
             "reflection_started": sorted(group.reflection_started),
             "reflection_completed": sorted(group.reflection_completed),
         }
+        if not group.post_processing_interruption[
+            "provider_termination_confirmed"
+        ]:
+            unconfirmed = getattr(
+                self, "_provider_termination_unconfirmed_task_ids", None,
+            )
+            if unconfirmed is None:
+                unconfirmed = self._provider_termination_unconfirmed_task_ids = []
+            if group.task.id not in unconfirmed:
+                unconfirmed.append(group.task.id)
+            self._request_shutdown()
 
     def finalize_execution_group(self, group: TaskExecutionGroup, now: float | None = None) -> bool:
         if group.completed:
@@ -844,6 +890,144 @@ class GlobalController:
             and detail["failure"].get("cancellation_acknowledged") is True
         )
 
+    def _task_manager_feedback(self, task, cancellation_token, commit_lock):
+        try:
+            parameters = inspect.signature(
+                self.task_manager.feedback_task
+            ).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+        names = {parameter.name for parameter in parameters}
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        kwargs = {}
+        if "cancellation_token" in names or accepts_kwargs:
+            kwargs["cancellation_token"] = cancellation_token
+        if "commit_lock" in names or accepts_kwargs:
+            kwargs["commit_lock"] = commit_lock
+        if "persistence_gate" in names or accepts_kwargs:
+            kwargs["persistence_gate"] = (
+                self._run_feedback_persistence_operation
+            )
+        return self.task_manager.feedback_task(task, **kwargs)
+
+    def _run_task_manager_feedback_bounded(
+        self, group: TaskExecutionGroup, task,
+    ):
+        outcome = queue.Queue(maxsize=1)
+        cancellation_token = self._post_processing_cancellation_token()
+
+        def invoke():
+            try:
+                outcome.put((True, self._task_manager_feedback(
+                    task, cancellation_token, self._execution_state_lock,
+                )))
+            except BaseException as exc:
+                outcome.put((False, exc))
+
+        worker = threading.Thread(
+            target=invoke,
+            name=f"controller-task-feedback-{group.task.id}",
+            daemon=True,
+        )
+        with self._execution_state_lock:
+            if self._execution_admission_closed():
+                raise TaskManagerFeedbackInterruptedError(
+                    "TaskManager feedback admission closed before start",
+                    provider_termination_confirmed=True,
+                    diagnostics={"phase": "before_feedback_worker_start"},
+                )
+            group.feedback_started = True
+            group.feedback_worker = worker
+            worker.start()
+
+        cancellation_deadline = None
+        while True:
+            try:
+                succeeded, value = outcome.get(timeout=0.05)
+            except queue.Empty:
+                if not cancellation_token.is_set():
+                    continue
+                if cancellation_deadline is None:
+                    cancellation_deadline = time.monotonic() + getattr(
+                        self, "post_processing_cancellation_grace_period", 1.5,
+                    )
+                if time.monotonic() < cancellation_deadline:
+                    continue
+                raise TaskManagerFeedbackInterruptedError(
+                    "TaskManager feedback worker termination was not confirmed",
+                    provider_termination_confirmed=False,
+                    diagnostics={
+                        "phase": "feedback_worker_join",
+                        "feedback_worker_alive": worker.is_alive(),
+                    },
+                )
+            if not succeeded:
+                raise value
+            feedback_committed = (
+                isinstance(value, TaskManagerFeedbackOutcome)
+                and value.committed
+            )
+            if cancellation_token.is_set() and not feedback_committed:
+                raise TaskManagerFeedbackInterruptedError(
+                    "TaskManager feedback was interrupted before commit",
+                    provider_termination_confirmed=True,
+                    diagnostics={"phase": "after_feedback"},
+                )
+            return value
+
+    def _mark_feedback_interrupted(
+        self,
+        group: TaskExecutionGroup,
+        exc: TaskManagerFeedbackInterruptedError,
+    ) -> None:
+        group.feedback_interrupted = True
+        group.feedback_interruption = {
+            "reason": "task_manager_feedback_interrupted",
+            "feedback_started": group.feedback_started,
+            "provider_termination_confirmed": (
+                exc.provider_termination_confirmed
+            ),
+            "diagnostics": dict(exc.diagnostics),
+        }
+        ledger = getattr(self, "_feedback_interruption_ledger", None)
+        if ledger is None:
+            ledger = self._feedback_interruption_ledger = {}
+        ledger[group.task.id] = {
+            "task_id": group.task.id,
+            **group.feedback_interruption,
+        }
+        if not exc.provider_termination_confirmed:
+            unconfirmed = getattr(
+                self, "_provider_termination_unconfirmed_task_ids", None,
+            )
+            if unconfirmed is None:
+                unconfirmed = self._provider_termination_unconfirmed_task_ids = []
+            if group.task.id not in unconfirmed:
+                unconfirmed.append(group.task.id)
+            self._request_shutdown()
+
+    def _record_feedback_ancillary_deferred(
+        self, group: TaskExecutionGroup,
+    ) -> None:
+        group.feedback_interruption = {
+            "reason": "task_manager_feedback_ancillary_deferred",
+            "feedback_started": group.feedback_started,
+            "committed": True,
+            "ancillary_complete": False,
+            "provider_termination_confirmed": True,
+            "diagnostics": {"phase": "after_feedback_commit"},
+        }
+        ledger = getattr(self, "_feedback_interruption_ledger", None)
+        if ledger is None:
+            ledger = self._feedback_interruption_ledger = {}
+        ledger[group.task.id] = {
+            "task_id": group.task.id,
+            **group.feedback_interruption,
+        }
+
     def _complete_execution_group(self, group: TaskExecutionGroup) -> None:
         if not group.assignments_released:
             for agent in self.agent_list:
@@ -854,9 +1038,27 @@ class GlobalController:
                 f"task {group.task.description} has been executed, the result is {group.task.status}"
             )
         if not group.feedback_persisted:
-            self.task_manager.feedback_task(self.get_task_by_id(group.task.id))
-            group.feedback_persisted = True
-        group.post_processing_complete = True
+            try:
+                feedback_outcome = self._run_task_manager_feedback_bounded(
+                    group, self.get_task_by_id(group.task.id),
+                )
+            except TaskManagerFeedbackInterruptedError as exc:
+                self._mark_feedback_interrupted(group, exc)
+            except TaskManagerFeedbackCommitError:
+                group.feedback_persisted = True
+                group.feedback_completed = True
+                group.completed = True
+                group.post_processing_complete = True
+                raise
+            else:
+                group.feedback_persisted = True
+                group.feedback_completed = True
+                group.feedback_ancillary_complete = bool(
+                    getattr(feedback_outcome, "ancillary_complete", True)
+                )
+                if not group.feedback_ancillary_complete:
+                    self._record_feedback_ancillary_deferred(group)
+        group.post_processing_complete = group.feedback_persisted
         group.completed = True
 
     def reconcile_judger_terminal(self) -> bool:
@@ -1235,7 +1437,7 @@ class GlobalController:
                     self.logger.info(f"Task {group.task.description} finished!")
             finally:
                 self._finish_result_group_claim(
-                    group, claim_token, remove=completed,
+                    group, claim_token, remove=(completed or group.completed),
                 )
             self.shutdown_event.wait(self.query_interval)
 
@@ -1369,6 +1571,8 @@ class GlobalController:
         if not hasattr(self, "_post_processing_cancel_event"):
             self._post_processing_cancel_event = threading.Event()
         self._post_processing_cancel_event.clear()
+        with self._feedback_persistence_gate_lock():
+            self._feedback_persistence_closed = False
         self._first_failure = None
         self.controller_state = self.STATE_RUNNING
         self.shutdown_complete = False
@@ -1444,6 +1648,9 @@ class GlobalController:
             "post_processing_interrupted": list(
                 getattr(self, "_post_processing_interruption_ledger", {}).values()
             ),
+            "feedback_interrupted": list(
+                getattr(self, "_feedback_interruption_ledger", {}).values()
+            ),
             "provider_termination_unconfirmed_task_ids": list(
                 getattr(self, "_provider_termination_unconfirmed_task_ids", [])
             ),
@@ -1470,6 +1677,9 @@ class GlobalController:
                 "post_processing_interrupted": list(
                     getattr(self, "_post_processing_interruption_ledger", {}).values()
                 ),
+                "feedback_interrupted": list(
+                    getattr(self, "_feedback_interruption_ledger", {}).values()
+                ),
                 "provider_termination_unconfirmed_task_ids": list(
                     getattr(self, "_provider_termination_unconfirmed_task_ids", [])
                 ),
@@ -1487,6 +1697,9 @@ class GlobalController:
                 "incomplete_submission_task_ids": incomplete_submission_task_ids,
                 "post_processing_interrupted": list(
                     getattr(self, "_post_processing_interruption_ledger", {}).values()
+                ),
+                "feedback_interrupted": list(
+                    getattr(self, "_feedback_interruption_ledger", {}).values()
                 ),
                 "provider_termination_unconfirmed_task_ids": list(
                     getattr(self, "_provider_termination_unconfirmed_task_ids", [])
