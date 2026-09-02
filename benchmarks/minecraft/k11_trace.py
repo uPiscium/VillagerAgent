@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
-from benchmarks.common.eac.model import ExactRequest, Proposition
+from benchmarks.common.eac.model import ExactRequest, Proposition, PropositionKey
 
 
 TRACE_SCHEMA_VERSION = "minecraft-k11-trace/2"
@@ -87,6 +87,79 @@ def event_in_observation_window(
         return True
     value = event.get("monotonic_ns")
     return isinstance(value, int) and bounds[0] <= value < bounds[1]
+
+
+def valid_evidence_ingestion(
+    event: Mapping[str, Any], *, run_id: Any,
+) -> bool:
+    """Return whether an evidence event retains its replay identity."""
+    payload = event.get("payload")
+    actor_id = event.get("actor_id")
+    proposition = payload.get("proposition") if isinstance(payload, Mapping) else None
+    revision = payload.get("revision") if isinstance(payload, Mapping) else None
+    supersedes = payload.get("supersedes") if isinstance(payload, Mapping) else None
+    visible_to = payload.get("visible_to") if isinstance(payload, Mapping) else None
+    source_stream_revision = (
+        payload.get("source_stream_revision") if isinstance(payload, Mapping) else None
+    )
+    proposition_valid = False
+    if (isinstance(proposition, Mapping)
+            and isinstance(proposition.get("arguments"), list)):
+        try:
+            Proposition(
+                PropositionKey(
+                    proposition.get("namespace"),
+                    proposition.get("predicate"),
+                    tuple(proposition["arguments"]),
+                    proposition.get("temporal_scope"),
+                ),
+                polarity=proposition.get("polarity"),
+            )
+        except (TypeError, ValueError):
+            pass
+        else:
+            proposition_valid = True
+    record_type = payload.get("record_type") if isinstance(payload, Mapping) else None
+    stream_backed = record_type in {"direct_observation", "visible_action_outcome"}
+    stream_identity_valid = (
+        isinstance(payload.get("source_stream_id"), str)
+        and bool(payload["source_stream_id"])
+        and type(revision) is int
+        and revision > 0
+        and type(source_stream_revision) is int
+        and source_stream_revision == revision
+    ) if isinstance(payload, Mapping) and stream_backed else (
+        isinstance(payload, Mapping)
+        and payload.get("source_stream_id") is None
+        and source_stream_revision is None
+    )
+    return bool(
+        event.get("event_type") == "k11.eac_evidence_ingested"
+        and isinstance(run_id, str) and run_id
+        and event.get("run_id") == run_id
+        and isinstance(actor_id, str) and actor_id
+        and isinstance(proposition, Mapping)
+        and proposition_valid
+        and all(isinstance(proposition.get(key), str) and proposition[key]
+                for key in ("namespace", "predicate", "temporal_scope"))
+        and isinstance(proposition.get("arguments"), list)
+        and type(proposition.get("polarity")) is bool
+        and record_type in {
+            "direct_observation", "trusted_tool_result", "visible_action_outcome", "peer_report",
+        }
+        and all(isinstance(payload.get(key), str) and payload[key]
+                for key in ("root_id", "source", "provenance_id"))
+        and ((stream_backed and type(revision) is int and revision > 0)
+             or (not stream_backed and (
+                 (type(revision) is int and revision > 0)
+                 or (isinstance(revision, str) and revision)
+             )))
+        and isinstance(supersedes, list)
+        and all(isinstance(item, str) and item for item in supersedes)
+        and (stream_backed or not supersedes)
+        and visible_to == [actor_id]
+        and stream_identity_valid
+    )
 
 
 def _candidate_id(event: Mapping[str, Any]) -> str | None:
@@ -631,6 +704,12 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     bounds = observation_window_bounds(artifact)
     if bounds is None:
         errors.append("P0 trace requires one valid observation window")
+    artifact_run_id = artifact.get("run_id")
+    if not isinstance(artifact_run_id, str) or not artifact_run_id:
+        errors.append("P0 trace requires a non-empty run identity")
+    elif any(event.get("run_id") != artifact_run_id for event in events
+             if isinstance(event, Mapping)):
+        errors.append("P0 trace event run identity is not correlated")
 
     def rows(kind: str, *, within_window: bool = True) -> list[Mapping[str, Any]]:
         return [event for event in events if isinstance(event, Mapping) and event.get("event_type") == kind
@@ -687,9 +766,9 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     tool_enters = rows("k11.tool_call_entered", within_window=False)
     tool_exits = rows("k11.tool_call_exited", within_window=False)
     require_lifecycles(tool_enters, tool_exits, lambda event: event.get("tool_call_id"), "tool")
-    if not rows("k11.eac_evidence_ingested"):
-        errors.append("P0 trace lacks evidence ingestion")
-
+    for evidence in rows("k11.eac_evidence_ingested"):
+        if not valid_evidence_ingestion(evidence, run_id=artifact_run_id):
+            errors.append("P0 evidence ingestion is malformed or lacks replay identity")
     prepared = [event for event in rows("k11.eac_action_prepared")
                 if event.get("payload", {}).get("exact_request", {}).get("action", {}).get("identity") in PRIMARY_EFFECT_ACTIONS]
     if not prepared:

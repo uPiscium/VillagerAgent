@@ -28,6 +28,9 @@ from benchmarks.minecraft.k11_process import cleanup_process_group_descendants, 
 from benchmarks.minecraft.k11_trace import (
     PRIMARY_EFFECT_ACTIONS,
     K11TraceRecorder,
+    event_in_observation_window,
+    observation_window_bounds,
+    valid_evidence_ingestion,
     validate_p0_trace,
     validate_trace,
 )
@@ -38,8 +41,12 @@ from start_with_config import run as run_villageragent
 
 ROOT = Path(__file__).resolve().parents[2]
 P0_MANIFEST_ID = "minecraft-k11-p0-manifest"
-P0_MANIFEST_VERSION = 1
+P0_MANIFEST_VERSION = 2
+P0_VALIDATION_CONTRACT = "minecraft-k11-p0-validation-contract/1"
+P0_VALIDATION_ARTIFACT_VERSION = 2
+DEVELOPMENT_SMOKE_ARTIFACT_VERSION = 2
 P0_EXPECTED_RUNS = 8
+COHORT_MODES = frozenset({"development_smoke", "formal_p0"})
 EAC_IDENTITY_SOURCE = "current_immutable_checkout"
 RUN_PROCESS_TIMEOUT_SECONDS = 900.0
 RUN_COMPLETION_GRACE_SECONDS = 10.0
@@ -102,6 +109,8 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
     document = _load_json(path)
     if document.get("artifact_id") != P0_MANIFEST_ID or document.get("artifact_version") != P0_MANIFEST_VERSION:
         raise K11PilotContractError("K11 P0 manifest identity mismatch")
+    if document.get("validation_contract") != P0_VALIDATION_CONTRACT:
+        raise K11PilotContractError("K11 P0 validation contract identity mismatch")
     if document.get("study_phase") != "K11-P0-instrumentation-validation":
         raise K11PilotContractError("K11 P0 study phase mismatch")
     if document.get("prevalence_inference_allowed") is not False:
@@ -253,7 +262,37 @@ def _event_type_counts(trace_artifact: Mapping[str, Any]) -> dict[str, int]:
     return counts
 
 
-def _coverage_summary(event_counts: Mapping[str, int], actor_threads, model_call_sources) -> dict[str, bool]:
+def _qualifying_in_window_evidence_events(trace_artifact: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return evidence events inside the declared trace window."""
+    bounds = observation_window_bounds(trace_artifact)
+    if bounds is None:
+        return []
+    qualifying = []
+    for event in trace_artifact.get("events", []):
+        if (isinstance(event, Mapping)
+                and event.get("event_type") == "k11.eac_evidence_ingested"
+                and event_in_observation_window(event, bounds)
+                and valid_evidence_ingestion(event, run_id=trace_artifact.get("run_id"))):
+            qualifying.append(event)
+    return qualifying
+
+
+def _in_window_evidence_metadata(trace_artifact: Mapping[str, Any]) -> dict[str, Any]:
+    bounds = observation_window_bounds(trace_artifact)
+    events = _qualifying_in_window_evidence_events(trace_artifact)
+    return {
+        "observation_window_present": bounds is not None,
+        "observation_window_start_monotonic_ns": bounds[0] if bounds else None,
+        "observation_window_end_monotonic_ns": bounds[1] if bounds else None,
+        "qualifying_event_count": len(events),
+        "qualified": bool(events),
+    }
+
+
+def _coverage_summary(
+    event_counts: Mapping[str, int], actor_threads, model_call_sources, *,
+    qualifying_in_window_evidence_count: int,
+) -> dict[str, bool]:
     sources = set(model_call_sources)
     return {
         "model_calls_observed": event_counts.get("k11.model_call_started", 0) > 0,
@@ -262,7 +301,7 @@ def _coverage_summary(event_counts: Mapping[str, int], actor_threads, model_call
         ),
         "tool_calls_observed": event_counts.get("k11.tool_call_entered", 0) > 0,
         "prepared_actions_observed": event_counts.get("k11.eac_action_prepared", 0) > 0,
-        "evidence_ingestions_observed": event_counts.get("k11.eac_evidence_ingested", 0) > 0,
+        "evidence_ingestions_observed": qualifying_in_window_evidence_count > 0,
         "multiple_actor_thread_pairs_observed": len(actor_threads) > 1,
     }
 
@@ -289,6 +328,8 @@ def _run_single_row(
     execution_revision: str,
     premanifest_path: Path,
     observation_horizon_seconds: float,
+    manifest_digest: str,
+    cohort_mode: str,
 ) -> dict[str, Any]:
     run_id = row["run_id"]
     if run_dir.exists() and any(run_dir.iterdir()):
@@ -337,6 +378,7 @@ def _run_single_row(
         and isinstance(event.get("thread_id"), int)
     }
     primary_terminal_count = _primary_terminal_count(trace_artifact)
+    evidence_metadata = _in_window_evidence_metadata(trace_artifact)
     try:
         analysis = analyze_trace(trace_artifact)
     except Exception as exc:
@@ -354,6 +396,11 @@ def _run_single_row(
         encoding="utf-8",
     )
     summary = {
+        "artifact_id": "minecraft-k11-p0-run-validation",
+        "artifact_version": P0_VALIDATION_ARTIFACT_VERSION,
+        "validation_contract": P0_VALIDATION_CONTRACT,
+        "manifest_digest": manifest_digest,
+        "cohort_mode": cohort_mode,
         "run_id": run_id,
         "runtime_error": error,
         "runtime_error_type": error_type,
@@ -367,6 +414,13 @@ def _run_single_row(
         "offline_analysis_error": analysis.get("analysis_error"),
         "runtime_returned": result is not None,
         "observation_horizon_seconds": observation_horizon_seconds,
+        "structural_validation": {
+            "valid": (validation.get("valid") is True
+                      and analysis_validation.get("valid") is True),
+            "trace_valid": validation.get("valid") is True,
+            "analysis_valid": analysis_validation.get("valid") is True,
+        },
+        "exposure_coverage": evidence_metadata,
     }
     (run_dir / "p0_validation.json").write_text(
         json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
@@ -383,6 +437,7 @@ def _worker_command(
     execution_revision: str,
     premanifest_path: Path,
     manifest_digest: str,
+    cohort_mode: str,
 ) -> list[str]:
     return [
         sys.executable,
@@ -394,12 +449,20 @@ def _worker_command(
         "--execution-revision", execution_revision,
         "--premanifest", str(premanifest_path),
         "--manifest-digest", manifest_digest,
+        "--cohort-mode", cohort_mode,
     ]
 
 
-def _failed_process_summary(run_id: str, supervision: Mapping[str, Any]) -> dict[str, Any]:
+def _failed_process_summary(
+    run_id: str, supervision: Mapping[str, Any], *, manifest_digest: str, cohort_mode: str,
+) -> dict[str, Any]:
     error_type = "RunProcessTimeout" if supervision.get("timed_out") else "RunProcessFailure"
     return {
+        "artifact_id": "minecraft-k11-p0-run-validation",
+        "artifact_version": P0_VALIDATION_ARTIFACT_VERSION,
+        "validation_contract": P0_VALIDATION_CONTRACT,
+        "manifest_digest": manifest_digest,
+        "cohort_mode": cohort_mode,
         "run_id": run_id,
         "runtime_error": "isolated run process did not produce a complete validation artifact",
         "runtime_error_type": error_type,
@@ -412,6 +475,14 @@ def _failed_process_summary(run_id: str, supervision: Mapping[str, Any]) -> dict
         "primary_terminal_count": 0,
         "offline_analysis_error": error_type,
         "runtime_returned": False,
+        "structural_validation": {"valid": False, "trace_valid": False, "analysis_valid": False},
+        "exposure_coverage": {
+            "observation_window_present": False,
+            "observation_window_start_monotonic_ns": None,
+            "observation_window_end_monotonic_ns": None,
+            "qualifying_event_count": 0,
+            "qualified": False,
+        },
     }
 
 
@@ -435,6 +506,21 @@ def _apply_process_outcome(
     return summary
 
 
+def _validate_worker_summary_identity(
+    summary: Any, *, expected_run_id: str, manifest_digest: str, cohort_mode: str,
+) -> None:
+    if (not isinstance(summary, Mapping)
+            or summary.get("artifact_id") != "minecraft-k11-p0-run-validation"
+            or summary.get("artifact_version") != P0_VALIDATION_ARTIFACT_VERSION
+            or summary.get("run_id") != expected_run_id
+            or summary.get("validation_contract") != P0_VALIDATION_CONTRACT
+            or summary.get("manifest_digest") != manifest_digest
+            or summary.get("cohort_mode") != cohort_mode):
+        raise K11PilotContractError(
+            "isolated run validation artifact identity does not match its parent"
+        )
+
+
 def _run_isolated_row(
     row: Mapping[str, Any],
     *,
@@ -443,6 +529,7 @@ def _run_isolated_row(
     execution_revision: str,
     premanifest_path: Path,
     manifest_digest: str,
+    cohort_mode: str,
 ) -> dict[str, Any]:
     run_id = row["run_id"]
     run_dir = output_root / run_id
@@ -458,6 +545,7 @@ def _run_isolated_row(
             execution_revision=execution_revision,
             premanifest_path=premanifest_path,
             manifest_digest=manifest_digest,
+            cohort_mode=cohort_mode,
         ),
         cwd=ROOT,
         timeout_seconds=RUN_PROCESS_TIMEOUT_SECONDS,
@@ -472,8 +560,14 @@ def _run_isolated_row(
     )
     if validation_path.is_file():
         summary = json.loads(validation_path.read_text(encoding="utf-8"))
+        _validate_worker_summary_identity(
+            summary, expected_run_id=run_id,
+            manifest_digest=manifest_digest, cohort_mode=cohort_mode,
+        )
     else:
-        summary = _failed_process_summary(run_id, supervision)
+        summary = _failed_process_summary(
+            run_id, supervision, manifest_digest=manifest_digest, cohort_mode=cohort_mode,
+        )
     summary = _apply_process_outcome(summary, supervision)
     worker_shutdown_path = run_dir / "worker_shutdown.json"
     if worker_shutdown_path.is_file():
@@ -495,31 +589,50 @@ def run_development_smoke(
     root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     _, revision, premanifest_path, identity = _prepare_execution_identity(root)
+    manifest_digest = _manifest_digest(manifest)
     summary = _run_isolated_row(
         matching_rows[0],
         manifest_path=manifest_path,
         output_root=root,
         execution_revision=revision,
         premanifest_path=premanifest_path,
-        manifest_digest=_manifest_digest(manifest),
+        manifest_digest=manifest_digest,
+        cohort_mode="development_smoke",
     )
     counts = summary.get("event_type_counts", {})
-    smoke_passed = (
-        summary.get("runtime_error") is None
-        and summary.get("trace_validation", {}).get("valid") is True
-        and summary.get("analysis_validation", {}).get("valid") is True
-        and counts.get("k11.model_call_started", 0) > 0
+    structural_validation_passed = (
+        summary.get("structural_validation", {}).get("valid") is True
+    )
+    runtime_qualified = summary.get("runtime_error") is None
+    development_lifecycle_qualified = (
+        counts.get("k11.model_call_started", 0) > 0
         and counts.get("k11.tool_call_entered", 0) > 0
         and counts.get("k11.eac_action_prepared", 0) > 0
         and summary.get("primary_terminal_count", 0) > 0
     )
+    development_exposure_qualified = summary.get("exposure_coverage", {}).get(
+        "qualified", False,
+    ) is True
+    smoke_passed = (
+        runtime_qualified
+        and structural_validation_passed
+        and development_lifecycle_qualified
+        and development_exposure_qualified
+    )
     artifact = {
         "artifact_id": "minecraft-k11-development-smoke-validation",
-        "artifact_version": 1,
+        "artifact_version": DEVELOPMENT_SMOKE_ARTIFACT_VERSION,
+        "validation_contract": P0_VALIDATION_CONTRACT,
+        "manifest_digest": manifest_digest,
+        "cohort_mode": "development_smoke",
         "study_phase": "K11-P0-development-smoke",
         "formal_p0": False,
         "prevalence_inference_allowed": False,
         "smoke_passed": smoke_passed,
+        "runtime_qualified": runtime_qualified,
+        "structural_validation_passed": structural_validation_passed,
+        "development_lifecycle_qualified": development_lifecycle_qualified,
+        "development_exposure_qualified": development_exposure_qualified,
         "manifest": str(Path(manifest_path).resolve()),
         "execution_revision": revision,
         "runtime_digest": identity["runtime_digest"],
@@ -549,6 +662,7 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             execution_revision=revision,
             premanifest_path=premanifest_path,
             manifest_digest=manifest_digest,
+            cohort_mode="formal_p0",
         ))
 
     calibration_error = None
@@ -579,8 +693,13 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
     runtime_error_count = sum(item["runtime_error"] is not None for item in summaries)
     trace_valid_count = sum(item["trace_validation"]["valid"] is True for item in summaries)
     analysis_valid_count = sum(item["analysis_validation"]["valid"] is True for item in summaries)
+    qualifying_evidence_count = sum(
+        item.get("exposure_coverage", {}).get("qualifying_event_count", 0)
+        for item in summaries
+    )
     coverage = _coverage_summary(
         aggregate_event_counts, all_actor_threads, all_model_call_sources,
+        qualifying_in_window_evidence_count=qualifying_evidence_count,
     )
     coverage_sufficient = all(coverage.values())
     p0_passed = _p0_passes(
@@ -592,7 +711,10 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
 
     aggregate = {
         "artifact_id": "minecraft-k11-p0-validation",
-        "artifact_version": 1,
+        "artifact_version": P0_VALIDATION_ARTIFACT_VERSION,
+        "validation_contract": P0_VALIDATION_CONTRACT,
+        "manifest_digest": manifest_digest,
+        "cohort_mode": "formal_p0",
         "study_phase": "K11-P0-instrumentation-validation",
         "prevalence_inference_allowed": False,
         "p0_passed": p0_passed,
@@ -614,6 +736,10 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             "by the K11 instrumentation contract tests."
         ),
         "coverage_sufficient": coverage_sufficient,
+        "exposure_coverage": {
+            "qualifying_event_count": qualifying_evidence_count,
+            "qualified": qualifying_evidence_count > 0,
+        },
         "calibration_error": calibration_error,
         "runs": summaries,
     }
@@ -635,11 +761,14 @@ def main(argv=None) -> int:
     parser.add_argument("--execution-revision")
     parser.add_argument("--premanifest")
     parser.add_argument("--manifest-digest")
+    parser.add_argument("--cohort-mode", choices=sorted(COHORT_MODES))
     args = parser.parse_args(argv)
     if args.worker_run_id:
-        if not args.execution_revision or not args.premanifest or not args.manifest_digest:
+        if (not args.execution_revision or not args.premanifest or not args.manifest_digest
+                or not args.cohort_mode):
             parser.error(
-                "worker mode requires --execution-revision, --premanifest, and --manifest-digest"
+                "worker mode requires --execution-revision, --premanifest, --manifest-digest, "
+                "and --cohort-mode"
             )
         manifest = load_p0_manifest(args.manifest)
         if _manifest_digest(manifest) != args.manifest_digest:
@@ -665,6 +794,8 @@ def main(argv=None) -> int:
                 execution_revision=args.execution_revision,
                 premanifest_path=premanifest_path,
                 observation_horizon_seconds=manifest["observation_window"]["horizon_seconds"],
+                manifest_digest=args.manifest_digest,
+                cohort_mode=args.cohort_mode,
             )
         finally:
             cleanup = cleanup_process_group_descendants(

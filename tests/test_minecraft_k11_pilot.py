@@ -7,8 +7,10 @@ import benchmarks.minecraft.k11_pilot as k11_pilot
 from benchmarks.minecraft.k11_pilot import (
     K11PilotContractError,
     P0_EXPECTED_RUNS,
+    P0_VALIDATION_CONTRACT,
     _apply_process_outcome,
     _coverage_summary,
+    _in_window_evidence_metadata,
     _p0_passes,
     _primary_terminal_count,
     load_p0_manifest,
@@ -41,7 +43,8 @@ def _runtime(index: int) -> dict:
 def _manifest() -> dict:
     return {
         "artifact_id": "minecraft-k11-p0-manifest",
-        "artifact_version": 1,
+        "artifact_version": 2,
+        "validation_contract": P0_VALIDATION_CONTRACT,
         "study_phase": "K11-P0-instrumentation-validation",
         "prevalence_inference_allowed": False,
         "eac_identity_source": "current_immutable_checkout",
@@ -79,6 +82,33 @@ def test_k11_p0_manifest_requires_exactly_eight_advisory_natural_runs(tmp_path: 
         row["runtime"]["minecraft_dual_dag_config"]["eac_mode"] == "dual_dag_advisory"
         for row in loaded["runs"]
     )
+
+
+def test_k11_p0_manifest_requires_prospective_validation_contract(tmp_path: Path) -> None:
+    document = _manifest()
+    document["validation_contract"] = "minecraft-k11-p0-validation-contract/0"
+
+    with pytest.raises(K11PilotContractError, match="validation contract identity"):
+        load_p0_manifest(_write(tmp_path, document))
+
+
+def test_k11_v1_manifest_preserves_v0_cohort_and_changes_only_contract_metadata() -> None:
+    root = Path(k11_pilot.__file__).resolve().parents[2]
+    v0 = json.loads(
+        (root / "configs/minecraft/k11-p0-natural-manifest-v0.json").read_text(encoding="utf-8")
+    )
+    v1 = load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v1.json")
+
+    assert v0["artifact_version"] == 1
+    assert "validation_contract" not in v0
+    assert v1["artifact_version"] == 2
+    assert v1["validation_contract"] == P0_VALIDATION_CONTRACT
+    normalized_v1 = dict(v1)
+    normalized_v1["artifact_version"] = 1
+    normalized_v1.pop("validation_contract")
+    assert normalized_v1 == v0
+    with pytest.raises(K11PilotContractError, match="manifest identity mismatch"):
+        load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v0.json")
 
 
 def test_k11_p0_manifest_rejects_intervention_configuration(tmp_path: Path) -> None:
@@ -178,12 +208,108 @@ def test_k11_p0_coverage_requires_exercised_direct_openai_compatible_path() -> N
     }
     actor_threads = {("Alice", 1), ("Bob", 2)}
 
-    langchain_only = _coverage_summary(counts, actor_threads, {"LLMHandler.on_llm_start"})
-    direct = _coverage_summary(counts, actor_threads, {"OpenAILanguageModel.gpt_api_stream"})
+    langchain_only = _coverage_summary(
+        counts, actor_threads, {"LLMHandler.on_llm_start"},
+        qualifying_in_window_evidence_count=1,
+    )
+    direct = _coverage_summary(
+        counts, actor_threads, {"OpenAILanguageModel.gpt_api_stream"},
+        qualifying_in_window_evidence_count=1,
+    )
 
     assert langchain_only["model_calls_observed"] is True
     assert langchain_only["direct_openai_compatible_calls_observed"] is False
     assert all(direct.values())
+
+
+def _windowed_evidence_trace(*timestamps: int) -> dict:
+    run_id = "windowed-evidence"
+    events = [
+        {"event_type": "k11.observation_window_opened", "monotonic_ns": 100,
+         "seq": 1, "run_id": run_id,
+         "payload": {"configured_horizon_seconds": 1,
+                                  "horizon_monotonic_ns": 1_000_000_100}},
+        *[
+            {"event_type": "k11.eac_evidence_ingested", "monotonic_ns": timestamp,
+             "seq": index + 2, "run_id": run_id, "actor_id": "Alice",
+             "payload": {
+                 "proposition": {
+                     "namespace": "minecraft", "predicate": "target_block_present",
+                     "arguments": [1, 2, 3], "temporal_scope": "current", "polarity": True,
+                 },
+                 "record_type": "direct_observation", "source": "test",
+                 "root_id": f"root-{index}", "revision": 1, "supersedes": [],
+                 "provenance_id": f"provenance-{index}", "visible_to": ["Alice"],
+                 "source_stream_id": "test-stream", "source_stream_revision": index + 1,
+             }}
+            for index, timestamp in enumerate(timestamps)
+        ],
+        {"event_type": "k11.observation_window_closed", "monotonic_ns": 200,
+         "seq": len(timestamps) + 2, "run_id": run_id,
+         "payload": {"reason": "natural_runtime_terminal",
+                      "window_close_monotonic_ns": 200,
+                      "configured_horizon_seconds": 1,
+                      "shutdown_requested": False}},
+    ]
+    return {"run_id": run_id, "events": events}
+
+
+@pytest.mark.parametrize("timestamps, expected", [
+    ((), 0), ((99,), 0), ((100,), 1), ((199,), 1), ((200,), 0),
+])
+def test_k11_p0_evidence_coverage_counts_only_qualifying_window_events(timestamps, expected) -> None:
+    metadata = _in_window_evidence_metadata(_windowed_evidence_trace(*timestamps))
+    assert metadata["qualifying_event_count"] == expected
+    assert metadata["qualified"] is (expected > 0)
+
+
+def test_k11_p0_malformed_in_window_evidence_does_not_qualify() -> None:
+    artifact = _windowed_evidence_trace(150)
+    evidence = artifact["events"][1]
+    evidence["payload"]["root_id"] = ""
+
+    metadata = _in_window_evidence_metadata(artifact)
+
+    assert metadata["qualifying_event_count"] == 0
+    assert metadata["qualified"] is False
+
+
+def test_k11_p0_all_zero_or_pre_window_only_cohort_fails_evidence_coverage() -> None:
+    actor_threads = {("Alice", 1), ("Bob", 2)}
+    sources = {"OpenAILanguageModel.gpt_api"}
+    base = {"k11.model_call_started": 1, "k11.tool_call_entered": 1,
+            "k11.eac_action_prepared": 1, "k11.eac_evidence_ingested": 8}
+    assert _coverage_summary(
+        base, actor_threads, sources, qualifying_in_window_evidence_count=0,
+    )["evidence_ingestions_observed"] is False
+    assert _in_window_evidence_metadata(_windowed_evidence_trace(99))["qualified"] is False
+
+
+def test_k11_p0_mixed_zero_evidence_summaries_are_allowed_when_cohort_coverage_is_true() -> None:
+    summaries = [{"runtime_error": None, "trace_validation": {"valid": True},
+                  "analysis_validation": {"valid": True},
+                  "exposure_coverage": {"qualifying_event_count": int(index == 0)}}
+                 for index in range(P0_EXPECTED_RUNS)]
+    assert _p0_passes(
+        summaries=summaries, calibration_error=None,
+        calibration={"traced": {"trace_validation": {"valid": True}}},
+        coverage_sufficient=True,
+    ) is True
+
+
+def test_k11_p0_all_zero_evidence_cohort_fails_aggregate_gate() -> None:
+    summaries = [{
+        "runtime_error": None,
+        "trace_validation": {"valid": True},
+        "analysis_validation": {"valid": True},
+        "exposure_coverage": {"qualifying_event_count": 0},
+    } for _ in range(P0_EXPECTED_RUNS)]
+
+    assert _p0_passes(
+        summaries=summaries, calibration_error=None,
+        calibration={"traced": {"trace_validation": {"valid": True}}},
+        coverage_sufficient=False,
+    ) is False
 
 
 def test_k11_p0_final_gate_requires_every_run_validation() -> None:
@@ -235,6 +361,40 @@ def test_k11_p0_timeout_fails_even_when_validation_artifact_exists() -> None:
     assert result["runtime_error_type"] == "RunProcessTimeout"
 
 
+def test_k11_parent_rejects_worker_artifact_from_another_contract_or_cohort() -> None:
+    expected = {
+        "artifact_id": "minecraft-k11-p0-run-validation",
+        "artifact_version": 2,
+        "run_id": "K11-P0-01",
+        "validation_contract": P0_VALIDATION_CONTRACT,
+        "manifest_digest": "a" * 64,
+        "cohort_mode": "formal_p0",
+    }
+    k11_pilot._validate_worker_summary_identity(
+        expected, expected_run_id="K11-P0-01",
+        manifest_digest="a" * 64, cohort_mode="formal_p0",
+    )
+    for field, value in (
+        ("artifact_id", "another-artifact"),
+        ("artifact_version", 1),
+        ("run_id", "K11-P0-02"),
+        ("validation_contract", "minecraft-k11-p0-validation-contract/0"),
+        ("manifest_digest", "b" * 64),
+        ("cohort_mode", "development_smoke"),
+    ):
+        malformed = {**expected, field: value}
+        with pytest.raises(K11PilotContractError, match="does not match its parent"):
+            k11_pilot._validate_worker_summary_identity(
+                malformed, expected_run_id="K11-P0-01",
+                manifest_digest="a" * 64, cohort_mode="formal_p0",
+            )
+    with pytest.raises(K11PilotContractError, match="does not match its parent"):
+        k11_pilot._validate_worker_summary_identity(
+            [], expected_run_id="K11-P0-01",
+            manifest_digest="a" * 64, cohort_mode="formal_p0",
+        )
+
+
 def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch) -> None:
     row = {"run_id": "K11-P0-01", "runtime": {}}
     manifest = {
@@ -266,11 +426,14 @@ def test_k11_p0_worker_mode_uses_validated_manifest(tmp_path: Path, monkeypatch)
         "--execution-revision", "a" * 40,
         "--premanifest", str(tmp_path / "premanifest.json"),
         "--manifest-digest", k11_pilot._manifest_digest(manifest),
+        "--cohort-mode", "development_smoke",
     ])
 
     assert result == 0
     assert called[0][0][0] == row
     assert called[0][1]["observation_horizon_seconds"] == 600
+    assert called[0][1]["manifest_digest"] == k11_pilot._manifest_digest(manifest)
+    assert called[0][1]["cohort_mode"] == "development_smoke"
     assert (tmp_path / "output" / "K11-P0-01" / "worker_shutdown.json").is_file()
 
 
@@ -289,6 +452,7 @@ def test_k11_development_smoke_requires_full_one_run_lifecycle(tmp_path: Path, m
         "runtime_error": None,
         "trace_validation": {"valid": True},
         "analysis_validation": {"valid": True},
+        "structural_validation": {"valid": True},
         "primary_terminal_count": 1,
         "event_type_counts": {
             "k11.model_call_started": 1,
@@ -296,6 +460,7 @@ def test_k11_development_smoke_requires_full_one_run_lifecycle(tmp_path: Path, m
             "k11.eac_action_prepared": 1,
             "k11.eac_action_terminal": 1,
         },
+        "exposure_coverage": {"qualified": True, "qualifying_event_count": 1},
     }
     monkeypatch.setattr(k11_pilot, "_run_isolated_row", lambda *_args, **_kwargs: summary)
 
@@ -304,6 +469,14 @@ def test_k11_development_smoke_requires_full_one_run_lifecycle(tmp_path: Path, m
     )
 
     assert result["smoke_passed"] is True
+    assert result["validation_contract"] == P0_VALIDATION_CONTRACT
+    assert result["manifest_digest"] == k11_pilot._manifest_digest({"runs": [row]})
+    assert result["cohort_mode"] == "development_smoke"
+    assert result["runtime_qualified"] is True
+    assert result["structural_validation_passed"] is True
+    assert result["runtime_qualified"] is True
+    assert result["development_lifecycle_qualified"] is True
+    assert result["development_exposure_qualified"] is True
     assert result["formal_p0"] is False
     artifact = json.loads((tmp_path / "smoke" / "DEV_SMOKE_VALIDATION.json").read_text())
     assert artifact == result
@@ -324,6 +497,7 @@ def test_k11_development_smoke_fails_without_terminal_disposition(tmp_path: Path
         "runtime_error": None,
         "trace_validation": {"valid": True},
         "analysis_validation": {"valid": True},
+        "structural_validation": {"valid": True},
         "event_type_counts": {
             "k11.model_call_started": 1,
             "k11.tool_call_entered": 1,
@@ -335,6 +509,44 @@ def test_k11_development_smoke_fails_without_terminal_disposition(tmp_path: Path
         tmp_path / "manifest.json", output_root=tmp_path / "smoke", run_id="K11-P0-01",
     )
 
+    assert result["smoke_passed"] is False
+
+
+def test_k11_development_smoke_keeps_zero_evidence_structural_pass_separate(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    row = {"run_id": "K11-P0-01", "runtime": {}}
+    monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: {"runs": [row]})
+    monkeypatch.setattr(
+        k11_pilot,
+        "_prepare_execution_identity",
+        lambda root: (
+            object(), "a" * 40, root / "premanifest.json",
+            {"runtime_digest": "sha256:runtime", "premanifest_identity": "premanifest"},
+        ),
+    )
+    monkeypatch.setattr(k11_pilot, "_run_isolated_row", lambda *_args, **_kwargs: {
+        "runtime_error": None,
+        "trace_validation": {"valid": True, "counts": {"evidence_ingestions": 0}},
+        "analysis_validation": {"valid": True},
+        "structural_validation": {"valid": True},
+        "primary_terminal_count": 1,
+        "event_type_counts": {
+            "k11.model_call_started": 1,
+            "k11.tool_call_entered": 1,
+            "k11.eac_action_prepared": 1,
+            "k11.eac_action_terminal": 1,
+        },
+        "exposure_coverage": {"qualified": False, "qualifying_event_count": 0},
+    })
+
+    result = run_development_smoke(
+        tmp_path / "manifest.json", output_root=tmp_path / "smoke", run_id="K11-P0-01",
+    )
+
+    assert result["structural_validation_passed"] is True
+    assert result["development_lifecycle_qualified"] is True
+    assert result["development_exposure_qualified"] is False
     assert result["smoke_passed"] is False
 
 
@@ -389,6 +601,7 @@ def test_k11_worker_rejects_manifest_changed_after_parent_validation(
             "--execution-revision", "a" * 40,
             "--premanifest", str(tmp_path / "premanifest.json"),
             "--manifest-digest", "0" * 64,
+            "--cohort-mode", "formal_p0",
         ])
 
 

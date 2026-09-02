@@ -2,8 +2,8 @@
 
 Status: **DRAFT — NOT FROZEN**  
 Protocol identity: `minecraft-eac-k11-natural-prevalence`  
-Draft version: `0.1`  
-Issue lineage: `#511`  
+Draft version: `0.2`<br>
+Issue lineage: `#511`, `#533`<br>
 Subject repository: `upiscium/VillagerAgent`  
 Audited base before this draft: `66a904de8af2b0bbaf79071628f06bed91a40078`
 
@@ -352,7 +352,7 @@ At minimum, final K11 reporting contains raw numerators and denominators for:
 - N0–N4 counts;
 - all QC-state counts.
 
-Zero denominators are reported explicitly as undefined ratios, never converted to zero rates.
+Zero denominators are reported explicitly as undefined ratios, never converted to zero rates. Any exposure-dependent ratio whose denominator is undefined is non-interpretable: it is reported as undefined and must not be read as zero exposure, zero prevalence, or evidence of absence.
 
 Mechanical prepare-to-disposition / prepare-to-execution-decision durations are reported descriptively (count, median, quantiles, minimum, maximum as appropriate) without IID population interpretation.
 
@@ -376,9 +376,13 @@ Each natural run records at least:
 
 ## 22. Pilot P0
 
-P0 is instrumentation validation only and is never used as K11 prevalence evidence.
+P0 is instrumentation validation only and is never used as K11 prevalence evidence. The P0 gate is prospective: development smoke runs and other development artifacts cannot later be promoted into the formal P0 cohort or treated as qualifying cohort evidence.
 
-Target: **8 natural runs** unless an infrastructure failure prevents completing eight valid instrumentation-validation runs. Failed attempts remain disclosed.
+Target: **8 natural runs**. Formal P0 is a separate fixed eight-run cohort gate. The gate counts qualifying actor-visible evidence-ingestion events that occur within each run's prospectively configured observation window. All eight designated runs must be retained and assessed; an all-zero cohort, or a cohort whose evidence occurs only before the observation windows, fails the gate. Failed attempts remain disclosed and do not become unrecorded replacements.
+
+Per-run structural validity is distinct from stochastic evidence exposure. A structurally complete run can validly contain zero qualifying evidence events; that run is retained as a zero-evidence run and is not retried or replaced because of that result. The cohort gate nevertheless fails when the fixed eight-run cohort has no qualifying in-window evidence (including when all observed evidence is pre-window). Structural validity must not be used to manufacture evidence exposure.
+
+This separation is bound prospectively by `minecraft-k11-p0-validation-contract/1` and `configs/minecraft/k11-p0-natural-manifest-v1.json`. The preserved v0 manifest remains provenance for earlier development work and is not accepted as the identity of a fresh run under the revised validator contract. The v1 manifest changes only manifest/validation-contract identity metadata: its eight run descriptors, ordering, task goals, runtime/model configuration, and 600-second pilot horizon are byte-for-byte equivalent as JSON values to v0.
 
 P0 validates:
 

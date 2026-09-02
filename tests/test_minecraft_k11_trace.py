@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from benchmarks.common.eac import Proposition, PropositionKey
-from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
+from benchmarks.minecraft.eac_runtime import MinecraftEACError, MinecraftEACRuntime
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
 from benchmarks.minecraft.k11_trace import (
     K11TraceRecorder,
@@ -9,6 +9,7 @@ from benchmarks.minecraft.k11_trace import (
     derive_positive_disposition,
     exact_request_digest,
     use_scope,
+    valid_evidence_ingestion,
     validate_p0_trace,
     validate_trace,
 )
@@ -18,11 +19,11 @@ def _mine(*, player_name, x, y, z, emotion=None, murmur=""):
     return {"status": True, "message": f"mined {x},{y},{z}"}
 
 
-def _runtime(run_id="k11-test"):
+def _runtime(run_id="k11-test", *, env_precheck=True):
     runtime = MinecraftEACRuntime(
         mode="dual_dag_advisory",
         run_id=run_id,
-        env_prechecks={"MineBlock": lambda unused: True},
+        env_prechecks={"MineBlock": lambda unused: env_precheck},
         audit_path=None,
     )
     trace = K11TraceRecorder(run_id)
@@ -151,6 +152,25 @@ def _complete_p0_artifact(run_id="k11-p0-complete"):
         runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
         runtime.execute_prepared(_prepare(runtime))
         trace.record("k11.tool_call_exited", source="test")
+        trace.record("k11.agent_step_completed", source="test")
+    return _with_natural_window(trace.artifact())
+
+
+def _complete_zero_evidence_p0_artifact(run_id="k11-p0-zero-evidence"):
+    runtime, trace = _runtime(run_id, env_precheck=False)
+    scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    with use_scope(scope):
+        trace.record("k11.agent_step_started", source="test")
+        trace.record("k11.model_call_started", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.model_call_completed", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.tool_call_entered", source="test")
+        try:
+            runtime.execute_prepared(_prepare(runtime))
+        except MinecraftEACError:
+            trace.record("k11.tool_call_exited", source="test", payload={"outcome": "raised"})
         trace.record("k11.agent_step_completed", source="test")
     return _with_natural_window(trace.artifact())
 
@@ -339,6 +359,94 @@ def test_k11_p0_trace_accepts_complete_correlated_run() -> None:
     validation = validate_p0_trace(_complete_p0_artifact())
     assert validation["valid"] is True
     assert validation["counts"]["prepared"] == 1
+
+
+def test_k11_p0_trace_accepts_complete_zero_evidence_run() -> None:
+    validation = validate_p0_trace(_complete_zero_evidence_p0_artifact())
+
+    assert validation["valid"] is True
+    assert validation["counts"]["evidence_ingestions"] == 0
+    assert validation["counts"]["prepared"] == 1
+
+
+def test_k11_p0_trace_rejects_malformed_evidence_identity() -> None:
+    artifact = _complete_p0_artifact("k11-p0-malformed-evidence")
+    evidence = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_evidence_ingested"
+    )
+    evidence["payload"]["visible_to"] = []
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("evidence ingestion" in error for error in validation["errors"])
+
+
+def test_k11_non_stream_evidence_retains_replay_identity_without_stream_fields() -> None:
+    artifact = _complete_p0_artifact("k11-p0-non-stream-evidence")
+    evidence = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_evidence_ingested"
+    )
+    for record_type in ("trusted_tool_result", "peer_report"):
+        candidate = deepcopy(evidence)
+        candidate["payload"]["record_type"] = record_type
+        candidate["payload"]["source_stream_id"] = None
+        candidate["payload"]["source_stream_revision"] = None
+        candidate["payload"]["supersedes"] = []
+        assert valid_evidence_ingestion(candidate, run_id=artifact["run_id"]) is True
+
+
+def test_k11_stream_evidence_requires_matching_integer_revision() -> None:
+    artifact = _complete_p0_artifact("k11-p0-stream-revision")
+    evidence = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_evidence_ingested"
+        and event["payload"]["record_type"] == "direct_observation"
+    )
+    for revision, stream_revision in (("1", 1), (1, 2)):
+        candidate = deepcopy(evidence)
+        candidate["payload"]["revision"] = revision
+        candidate["payload"]["source_stream_revision"] = stream_revision
+        assert valid_evidence_ingestion(candidate, run_id=artifact["run_id"]) is False
+
+
+def test_k11_evidence_rejects_noncanonical_proposition_argument() -> None:
+    artifact = _complete_p0_artifact("k11-p0-evidence-argument")
+    evidence = next(
+        event for event in artifact["events"]
+        if event["event_type"] == "k11.eac_evidence_ingested"
+    )
+    evidence["payload"]["proposition"]["arguments"] = [1.5]
+
+    assert valid_evidence_ingestion(evidence, run_id=artifact["run_id"]) is False
+    assert validate_p0_trace(artifact)["valid"] is False
+
+
+def test_k11_p0_trace_rejects_missing_or_mismatched_run_identity() -> None:
+    artifact = _complete_p0_artifact("k11-p0-run-identity")
+    artifact["run_id"] = ""
+    assert validate_p0_trace(artifact)["valid"] is False
+
+    artifact = _complete_p0_artifact("k11-p0-run-identity")
+    artifact["events"][1]["run_id"] = "another-run"
+    validation = validate_p0_trace(artifact)
+    assert validation["valid"] is False
+    assert any("run identity" in error for error in validation["errors"])
+
+
+def test_k11_p0_zero_evidence_run_still_rejects_malformed_lifecycle() -> None:
+    artifact = _complete_zero_evidence_p0_artifact("k11-p0-zero-evidence-malformed")
+    artifact["events"] = [
+        event for event in artifact["events"]
+        if event["event_type"] != "k11.tool_call_exited"
+    ]
+
+    validation = validate_p0_trace(artifact)
+
+    assert validation["valid"] is False
+    assert any("tool lifecycle" in error for error in validation["errors"])
 
 
 def test_k11_p0_trace_requires_declared_observation_window() -> None:

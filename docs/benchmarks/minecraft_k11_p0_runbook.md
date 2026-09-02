@@ -71,13 +71,19 @@ The failed `061307a` development smoke then produced reasoning-only output until
 
 ## 4. P0 manifest
 
-The pilot manifest is:
+The prospective validation-contract manifest is:
 
 ```text
-configs/minecraft/k11-p0-natural-manifest-v0.json
+configs/minecraft/k11-p0-natural-manifest-v1.json
 ```
 
-It contains exactly eight Advisory, `task_type=none`, non-judged, non-production runs. It forbids supplied stale EAC premanifest/revision values. Its top-level `observation_window` prospectively binds a 600-second fixed monotonic horizon for this development pilot. That value is not the final K11 horizon and does not freeze the draft protocol.
+`configs/minecraft/k11-p0-natural-manifest-v0.json` remains unchanged as provenance for earlier development work. The current runner requires `minecraft-k11-p0-validation-contract/1`; it does not silently reinterpret v0 artifacts under the revised structural/exposure semantics.
+
+Every v1 per-run, development-smoke, and aggregate validation artifact records the canonical manifest digest and an explicit `cohort_mode` (`development_smoke` or `formal_p0`). The parent process rejects a worker validation artifact whose contract, manifest digest, or cohort mode differs from its invocation, so a detached smoke result cannot be accepted as a formal-cohort run artifact.
+
+It contains exactly eight Advisory, `task_type=none`, non-judged, non-production runs. It forbids supplied stale EAC premanifest/revision values. Its top-level `observation_window` prospectively binds a 600-second fixed monotonic horizon for this development pilot. That value is not the final K11 horizon and does not freeze the draft protocol. Formal P0 is a separate fixed eight-run cohort gate: it counts qualifying actor-visible evidence-ingestion events inside the configured windows, and all-zero or pre-window-only evidence fails the gate.
+
+A run may be structurally valid with zero qualifying in-window evidence. Such a zero-evidence run is retained and is not retried or replaced for that reason. Development smoke and other prior development artifacts are not eligible for retroactive promotion into the formal eight-run cohort.
 
 At pilot start the runner:
 
@@ -110,12 +116,12 @@ After committing the remediation and establishing a new clean execution revision
 
 ```bash
 python -m benchmarks.minecraft.k11_pilot \
-  --manifest configs/minecraft/k11-p0-natural-manifest-v0.json \
+  --manifest configs/minecraft/k11-p0-natural-manifest-v1.json \
   --output-root ../VillagerAgent-k11-p0-dev-smoke-01 \
   --development-smoke-run-id K11-P0-01
 ```
 
-The smoke is explicitly non-formal and writes `DEV_SMOKE_VALIDATION.json`. It passes only after model, guarded-tool, primary-preparation, terminal-disposition, valid replay/analysis, and clean process-exit evidence are present. A preparation cut by the fixed boundary is retained as right-censored D1 and cannot enter D2-D6 or N0-N4. Stop after this one smoke; do not start the formal eight-run cohort without a separate decision.
+The smoke is explicitly non-formal and writes `DEV_SMOKE_VALIDATION.json`. It passes only after model, guarded-tool, primary-preparation, terminal-disposition, valid replay/analysis, clean process exit, and at least one qualifying in-window evidence ingestion are present; it does not satisfy the formal P0 cohort gate. A structurally valid zero-evidence smoke reports structural validation separately but retains `smoke_passed=false`. A preparation cut by the fixed boundary is retained as right-censored D1 and cannot enter D2-D6 or N0-N4. Stop after this one smoke; do not start the formal eight-run cohort without a separate decision.
 
 ### Development basis for the 600-second pilot binding
 
@@ -127,7 +133,7 @@ For a bounded replacement development smoke, 600 seconds captures substantial re
 
 ```bash
 python -m benchmarks.minecraft.k11_pilot \
-  --manifest configs/minecraft/k11-p0-natural-manifest-v0.json \
+  --manifest configs/minecraft/k11-p0-natural-manifest-v1.json \
   --output-root ../VillagerAgent-k11-p0-results \
   --formal-p0
 ```
@@ -182,6 +188,8 @@ Coverage additionally requires observation of:
 - EAC prepared-action events;
 - actor-visible evidence-ingestion events;
 - more than one actor/thread pair across the pilot.
+
+For the formal cohort gate, the evidence-ingestion coverage above is counted only when the qualifying event is inside its run's observation window. `p0_passed` is false for zero qualifying in-window events across the fixed eight runs or for evidence that is pre-window-only, even when every run is structurally valid.
 
 Observed model-call events prove only that the listed paths were exercised. Complete direct-call lifecycle coverage is established by the K11 instrumentation contract tests, not inferred from a nonzero aggregate event count.
 

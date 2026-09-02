@@ -1,5 +1,7 @@
+from copy import deepcopy
+
 from benchmarks.common.eac import Proposition, PropositionKey
-from benchmarks.minecraft.eac_runtime import MinecraftEACRuntime
+from benchmarks.minecraft.eac_runtime import MinecraftEACError, MinecraftEACRuntime
 from benchmarks.minecraft.k11_analysis import analyze_trace, replay_admissibility, validate_p0_analysis
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
 from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
@@ -9,11 +11,11 @@ def _mine(**kwargs):
     return {"status": True, "message": "ok"}
 
 
-def _runtime(run_id: str):
+def _runtime(run_id: str, *, env_precheck=True):
     runtime = MinecraftEACRuntime(
         mode="dual_dag_advisory",
         run_id=run_id,
-        env_prechecks={"MineBlock": lambda unused: True},
+        env_prechecks={"MineBlock": lambda unused: env_precheck},
         audit_path=None,
     )
     trace = K11TraceRecorder(run_id)
@@ -42,6 +44,51 @@ def _prepare_at(runtime, x, y, z):
         "MineBlock", _mine, (),
         {"player_name": "Alice", "x": x, "y": y, "z": z, "emotion": [], "murmur": ""},
     )
+
+
+def _complete_zero_evidence_artifact(run_id="k11-analysis-zero-evidence"):
+    runtime, trace = _runtime(run_id, env_precheck=False)
+    scope = K11TraceScope(
+        trace.run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    with use_scope(scope):
+        trace.record("k11.agent_step_started", source="test")
+        trace.record("k11.model_call_started", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.model_call_completed", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.tool_call_entered", source="test")
+        try:
+            runtime.execute_prepared(_prepare(runtime))
+        except MinecraftEACError:
+            trace.record("k11.tool_call_exited", source="test", payload={"outcome": "raised"})
+        trace.record("k11.agent_step_completed", source="test")
+    artifact = trace.artifact()
+    opened_ns = min(event["monotonic_ns"] for event in artifact["events"]) - 1
+    closed_ns = max(event["monotonic_ns"] for event in artifact["events"]) + 1
+    horizon_seconds = 3600
+    common = {
+        "run_id": artifact["run_id"], "task_id": None, "actor_id": None,
+        "agent_step_id": None, "tool_call_id": None, "source": "test", "thread_id": 1,
+    }
+    artifact["events"] = [
+        {
+            **common, "event_id": artifact["run_id"] + ":window-open",
+            "event_type": "k11.observation_window_opened", "monotonic_ns": opened_ns,
+            "payload": {"configured_horizon_seconds": horizon_seconds,
+                        "horizon_monotonic_ns": opened_ns + horizon_seconds * 1_000_000_000},
+        },
+        *artifact["events"],
+        {
+            **common, "event_id": artifact["run_id"] + ":window-close",
+            "event_type": "k11.observation_window_closed", "monotonic_ns": closed_ns,
+            "payload": {"reason": "natural_runtime_terminal",
+                        "configured_horizon_seconds": horizon_seconds,
+                        "window_close_monotonic_ns": closed_ns, "shutdown_requested": False},
+        },
+    ]
+    for seq, event in enumerate(artifact["events"], 1):
+        event["seq"] = seq
+    return artifact
 
 
 def _window_after_first_prepare(artifact, *, reason="fixed_observation_horizon"):
@@ -249,6 +296,21 @@ def test_k11_offline_analysis_keeps_ambiguous_disappearance_unresolved() -> None
     assert analysis["actions"][0]["qc_state"] == "disposition_unresolved"
 
 
+def test_k11_offline_analysis_accepts_zero_evidence_baseline() -> None:
+    artifact = _complete_zero_evidence_artifact()
+
+    analysis = analyze_trace(artifact)
+
+    assert analysis["trace_validation"]["valid"] is True
+    assert analysis["p0_trace_validation"]["valid"] is True
+    assert analysis["p0_trace_validation"]["counts"]["evidence_ingestions"] == 0
+    assert analysis["denominators"]["D2"] == 0
+    assert analysis["taxonomy"]["N2"] == 0
+    assert analysis["taxonomy"] == {"N0": 0, "N1": 0, "N2": 0, "N3": 0, "N4": 0}
+    assert analysis["actions"][0]["qc_state"] == "prepared_inadmissible_baseline"
+    assert validate_p0_analysis(analysis, artifact)["valid"] is True
+
+
 def test_k11_fixed_window_right_censors_prepare_without_in_window_disposition() -> None:
     runtime, trace = _runtime("k11-window-censored")
     scope = K11TraceScope(
@@ -427,4 +489,3 @@ def test_k11_p0_analysis_rejects_malformed_validation_structures() -> None:
         "actions": [],
     })
     assert result["valid"] is False
-from copy import deepcopy
