@@ -7,6 +7,7 @@ later frozen K11-E protocol.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -21,6 +22,7 @@ from benchmarks.minecraft.k11_trace import (
     derive_positive_disposition,
     validate_p0_trace,
     validate_trace,
+    canonical_trace_bytes,
     event_in_observation_window,
     observation_window_bounds,
 )
@@ -30,10 +32,61 @@ class K11AnalysisError(ValueError):
     pass
 
 
+PROSPECTIVE_TRACE_SCHEMA = "minecraft-k11-trace/3"
+MEASUREMENT_CUT_SCHEMA = "minecraft-k11-measurement-cut/1"
+PROSPECTIVE_ANALYSIS_ID = "minecraft-k11-prospective-analysis"
+PROSPECTIVE_ANALYSIS_VERSION = 1
+
+
+def _validate_measurement_cut(trace: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[int, int, str]]:
+    cut = trace.get("measurement_cut")
+    if not isinstance(cut, Mapping) or cut.get("schema_version") != MEASUREMENT_CUT_SCHEMA:
+        raise K11AnalysisError("prospective trace lacks measurement cut schema binding")
+    if cut.get("boundary") != "[open,close)":
+        raise K11AnalysisError("prospective measurement cut boundary is invalid")
+    start = cut.get("window_open_monotonic_ns")
+    end = cut.get("window_close_monotonic_ns")
+    reason = cut.get("close_reason")
+    if (type(start) is not int or type(end) is not int or end <= start
+            or reason not in {"fixed_observation_horizon", "natural_runtime_terminal"}):
+        raise K11AnalysisError("prospective measurement cut bounds are invalid")
+    events = trace.get("events")
+    if not isinstance(events, list):
+        raise K11AnalysisError("prospective trace events are malformed")
+    close_sequence = cut.get("close_sequence")
+    high_water = cut.get("event_prefix_high_water_sequence")
+    count = cut.get("in_window_event_count")
+    digest = cut.get("in_window_event_digest")
+    if (type(close_sequence) is not int or type(high_water) is not int or high_water < 0
+            or close_sequence < 0 or close_sequence > high_water):
+        raise K11AnalysisError("prospective measurement cut high-water is invalid")
+    cut_events = [e for e in events if isinstance(e, Mapping)
+                  and isinstance(e.get("monotonic_ns"), int)
+                  and start <= e["monotonic_ns"] < end
+                  and e.get("seq", 0) <= high_water]
+    expected = "sha256:" + hashlib.sha256(canonical_trace_bytes(cut_events)).hexdigest()
+    if (type(count) is not int or count != len(cut_events) or not isinstance(digest, str)
+            or digest != expected):
+        raise K11AnalysisError("prospective measurement cut digest/count/high-water mismatch")
+    if (cut.get("snapshot_valid") is not True
+            or not isinstance(cut.get("snapshot_errors"), list)
+            or cut.get("snapshot_errors")):
+        raise K11AnalysisError("prospective measurement cut snapshot is invalid")
+    inventory = cut.get("censoring_inventory")
+    if (not isinstance(inventory, Mapping) or not isinstance(inventory.get("items"), list)
+            or not isinstance(inventory.get("retention"), Mapping)):
+        raise K11AnalysisError("prospective censoring inventory is invalid")
+    return dict(cut), (start, end, reason)
+
+
 def load_trace(path: str | Path) -> dict[str, Any]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema_version") != TRACE_SCHEMA_VERSION:
+    if not isinstance(value, dict) or value.get("schema_version") not in {
+        TRACE_SCHEMA_VERSION, PROSPECTIVE_TRACE_SCHEMA,
+    }:
         raise K11AnalysisError("invalid K11 trace artifact")
+    if value.get("schema_version") == PROSPECTIVE_TRACE_SCHEMA:
+        _validate_measurement_cut(value)
     return value
 
 
@@ -192,9 +245,11 @@ def _candidate_events(trace: Mapping[str, Any], event_type: str,
 
 def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
     """Build P0 structural diagnostics and draft D1-D6/N0-N4 classifications."""
+    if trace.get("schema_version") == PROSPECTIVE_TRACE_SCHEMA:
+        return analyze_prospective_trace(trace)
     validation = validate_trace(trace)
     p0_validation = validate_p0_trace(trace)
-    bounds = observation_window_bounds(trace)
+    bounds = trace.get("_analysis_measurement_bounds", observation_window_bounds(trace))
     def in_population(event: Mapping[str, Any]) -> bool:
         return event_in_observation_window(event, bounds)
     prepared_by_id = _candidate_events(trace, "k11.eac_action_prepared", bounds)
@@ -384,8 +439,95 @@ def analyze_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def analyze_prospective_trace(trace: Mapping[str, Any]) -> dict[str, Any]:
+    """Analyze a prospectively cut /3 trace without changing the /2 classifier."""
+    cut, bounds = _validate_measurement_cut(trace)
+    legacy = dict(trace)
+    legacy["schema_version"] = TRACE_SCHEMA_VERSION
+    legacy["events"] = list(trace.get("events", []))
+    legacy["_analysis_measurement_bounds"] = bounds
+    # Bind every population decision to the authenticated cut, never to events
+    # appended after a fixed horizon marker.
+    result = analyze_trace(legacy)
+    prospective_validation = _prospective_validation(trace, cut)
+    prospective_p0_validation = _prospective_p0_validation(trace)
+    result["artifact_id"] = PROSPECTIVE_ANALYSIS_ID
+    result["artifact_version"] = PROSPECTIVE_ANALYSIS_VERSION
+    result["analysis_identity"] = {"schema_version": PROSPECTIVE_ANALYSIS_ID + "/1"}
+    result["measurement_cut"] = cut
+    result["measurement_bounds"] = list(bounds)
+    result["trace_validation"] = prospective_validation
+    result["p0_trace_validation"] = prospective_p0_validation
+    result["prevalence_inference_allowed"] = False
+    result["measurement_analysis_eligible"] = (
+        prospective_p0_validation.get("valid") is True
+        and result["denominators"].get("D1", 0) > 0
+        and not any(state in result["qc_states"] for state in
+                    ("disposition_unresolved", "ordering_ambiguous", "offline_replay_failed",
+                     "unsupported_path_observed"))
+    )
+    result["prospective_eligible"] = result["measurement_analysis_eligible"]
+    return result
+
+
+def _prospective_validation(trace: Mapping[str, Any], cut: Mapping[str, Any]) -> dict[str, Any]:
+    return validate_trace(trace)
+
+
+def _prospective_p0_validation(trace: Mapping[str, Any]) -> dict[str, Any]:
+    return validate_p0_trace(trace)
+
+
 def validate_p0_analysis(analysis: Mapping[str, Any], trace: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Validate that offline P0 replay diagnostics are complete and admissible."""
+    if analysis.get("artifact_id") == PROSPECTIVE_ANALYSIS_ID:
+        errors = []
+        if analysis.get("artifact_version") != PROSPECTIVE_ANALYSIS_VERSION:
+            errors.append("prospective analysis version is invalid")
+        if analysis.get("prevalence_inference_allowed") is not False:
+            errors.append("prospective analysis must forbid prevalence inference")
+        if trace is not None:
+            try:
+                cut, _ = _validate_measurement_cut(trace)
+                if analysis.get("measurement_cut") != cut:
+                    errors.append("prospective analysis measurement cut does not match trace")
+            except K11AnalysisError as exc:
+                errors.append(str(exc))
+            prospective = _prospective_validation(trace, cut if 'cut' in locals() else {})
+            if prospective.get("valid") is not True:
+                errors.append("prospective trace validation did not pass")
+            expected_candidates = {e.get("payload", {}).get("exact_request", {}).get("candidate_id")
+                                  for e in trace.get("events", [])
+                                  if e.get("event_type") == "k11.eac_action_prepared"
+                                  and event_in_observation_window(e, analysis.get("measurement_bounds"))
+                                  and e.get("payload", {}).get("exact_request", {}).get("action", {}).get("identity") in PRIMARY_EFFECT_ACTIONS}
+            observed_candidates = {r.get("candidate_id") for r in analysis.get("actions", []) if isinstance(r, Mapping)}
+            if expected_candidates != observed_candidates:
+                errors.append("prospective analysis does not cover primary actions exactly once")
+        if analysis.get("measurement_analysis_eligible") is not True:
+            errors.append("prospective measurement analysis is not eligible")
+        if analysis.get("denominators", {}).get("D1", 0) < 1:
+            errors.append("prospective analysis requires a primary action")
+        if analysis.get("qc_states", {}).get("disposition_unresolved", 0):
+            errors.append("natural unresolved disposition makes prospective analysis invalid")
+        denominators = analysis.get("denominators", {})
+        actions = [r for r in analysis.get("actions", []) if isinstance(r, Mapping)]
+        for name in ("D1", "D2", "D3", "D4", "D5", "D6"):
+            if denominators.get(name) != sum(row.get(name) is True for row in actions):
+                errors.append(f"prospective {name} denominator is inconsistent")
+        censored = [r for r in actions if r.get("qc_state") == "observation_window_censored"]
+        if any(r.get("D1") is not True or any(r.get(name) is True for name in ("D2", "D3", "D4", "D5", "D6"))
+               or r.get("taxonomy") is not None or "EAdm_disposition" in r
+               or type(r.get("EAdm_prepare")) is not bool for r in censored):
+            errors.append("prospective censored row invariants are invalid")
+        if analysis.get("window_censored_preparations") != len(censored):
+            errors.append("prospective censor count is inconsistent")
+        prepared_count = analysis.get("prepared_inside_window")
+        expected_fraction = len(censored) / prepared_count if prepared_count else 0.0
+        if analysis.get("censoring_fraction") != expected_fraction:
+            errors.append("prospective censor fraction is inconsistent")
+        return {"valid": not errors, "errors": errors,
+                "counts": {"primary_actions": analysis.get("denominators", {}).get("D1", 0)}}
     errors: list[str] = []
     embedded_trace_validation = analysis.get("p0_trace_validation", {})
     trace_validation = (

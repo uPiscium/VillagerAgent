@@ -8,6 +8,7 @@ from benchmarks.minecraft.k11_pilot import (
     K11PilotContractError,
     P0_EXPECTED_RUNS,
     P0_VALIDATION_CONTRACT,
+    PROSPECTIVE_VALIDATION_CONTRACT,
     _apply_process_outcome,
     _coverage_summary,
     _in_window_evidence_metadata,
@@ -97,16 +98,18 @@ def test_k11_v1_manifest_preserves_v0_cohort_and_changes_only_contract_metadata(
     v0 = json.loads(
         (root / "configs/minecraft/k11-p0-natural-manifest-v0.json").read_text(encoding="utf-8")
     )
-    v1 = load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v1.json")
+    v1 = json.loads(
+        (root / "configs/minecraft/k11-p0-natural-manifest-v1.json").read_text(encoding="utf-8")
+    )
 
     assert v0["artifact_version"] == 1
     assert "validation_contract" not in v0
     assert v1["artifact_version"] == 2
-    assert v1["validation_contract"] == P0_VALIDATION_CONTRACT
-    normalized_v1 = dict(v1)
-    normalized_v1["artifact_version"] = 1
-    normalized_v1.pop("validation_contract")
-    assert normalized_v1 == v0
+    assert v1["validation_contract"] == "minecraft-k11-p0-validation-contract/1"
+    v2 = load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v2.json")
+    assert v2["artifact_version"] == 3
+    assert v2["validation_contract"] == PROSPECTIVE_VALIDATION_CONTRACT
+    assert v2["runs"] == v1["runs"]
     with pytest.raises(K11PilotContractError, match="manifest identity mismatch"):
         load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v0.json")
 
@@ -288,6 +291,7 @@ def test_k11_p0_all_zero_or_pre_window_only_cohort_fails_evidence_coverage() -> 
 def test_k11_p0_mixed_zero_evidence_summaries_are_allowed_when_cohort_coverage_is_true() -> None:
     summaries = [{"runtime_error": None, "trace_validation": {"valid": True},
                   "analysis_validation": {"valid": True},
+                  "primary_terminal_count": 1,
                   "exposure_coverage": {"qualifying_event_count": int(index == 0)}}
                  for index in range(P0_EXPECTED_RUNS)]
     assert _p0_passes(
@@ -302,6 +306,7 @@ def test_k11_p0_all_zero_evidence_cohort_fails_aggregate_gate() -> None:
         "runtime_error": None,
         "trace_validation": {"valid": True},
         "analysis_validation": {"valid": True},
+        "primary_terminal_count": 1,
         "exposure_coverage": {"qualifying_event_count": 0},
     } for _ in range(P0_EXPECTED_RUNS)]
 
@@ -317,6 +322,7 @@ def test_k11_p0_final_gate_requires_every_run_validation() -> None:
         "runtime_error": None,
         "trace_validation": {"valid": True},
         "analysis_validation": {"valid": True},
+        "primary_terminal_count": 1,
     } for _ in range(P0_EXPECTED_RUNS)]
     calibration = {"traced": {"trace_validation": {"valid": True}}}
 
@@ -337,6 +343,7 @@ def test_k11_p0_final_gate_requires_every_offline_analysis() -> None:
         "runtime_error": None,
         "trace_validation": {"valid": True},
         "analysis_validation": {"valid": True},
+        "primary_terminal_count": 1,
     } for _ in range(P0_EXPECTED_RUNS)]
     summaries[-1]["analysis_validation"] = {"valid": False}
 
@@ -367,6 +374,7 @@ def test_k11_parent_rejects_worker_artifact_from_another_contract_or_cohort() ->
         "artifact_version": 2,
         "run_id": "K11-P0-01",
         "validation_contract": P0_VALIDATION_CONTRACT,
+        "trace_schema_version": "minecraft-k11-trace/2",
         "manifest_digest": "a" * 64,
         "cohort_mode": "formal_p0",
     }
@@ -621,3 +629,153 @@ def test_k11_cli_routes_formal_p0_only_when_explicit(tmp_path: Path, monkeypatch
 
     assert result == 0
     assert len(calls) == 1
+
+
+def test_k11_prospective_measurement_cut_is_fail_closed() -> None:
+    assert k11_pilot._measurement_cut_status({})["measurement_analysis_eligible"] is False
+    cut = {
+        "snapshot_valid": True,
+        "snapshot_errors": [],
+        "close_reason": "fixed_observation_horizon",
+        "window_open_monotonic_ns": 1,
+        "window_close_monotonic_ns": 2,
+        "open_lifecycles": {"items": []},
+        "active_executions": {"items": []},
+        "censoring_inventory": {"items": []},
+    }
+    trace = {"measurement_cut": cut, "events": [
+        {"event_type": "k11.observation_window_opened", "monotonic_ns": 1},
+        {"event_type": "k11.observation_window_closed", "monotonic_ns": 2,
+         "payload": {"reason": "fixed_observation_horizon", "window_close_monotonic_ns": 2}},
+    ]}
+    result = k11_pilot._measurement_cut_status(trace, cut_valid=True)
+    assert result["measurement_analysis_eligible"] is True
+
+
+def test_k11_active_or_post_close_effect_stops_admission() -> None:
+    base = {"snapshot_valid": True, "close_reason": "fixed_observation_horizon",
+            "snapshot_errors": [],
+            "window_open_monotonic_ns": 1, "window_close_monotonic_ns": 2,
+            "open_lifecycles": {"items": [{"kind": "native", "id": "c1"}]},
+            "active_executions": {"items": []},
+            "censoring_inventory": {"items": []}}
+    trace = {"measurement_cut": base, "events": [
+        {"event_type": "k11.observation_window_opened", "monotonic_ns": 1},
+        {"event_type": "k11.observation_window_closed", "monotonic_ns": 2,
+         "payload": {"window_close_monotonic_ns": 2}},
+        {"event_type": "k11.eac_native_effect_entered", "monotonic_ns": 2},
+    ]}
+    result = k11_pilot._measurement_cut_status(trace, cut_valid=True)
+    assert result["active_effect_at_horizon"] is True
+    assert result["post_close_effect"] is True
+    assert result["measurement_analysis_eligible"] is True
+
+
+def test_k11_post_close_completion_alone_does_not_block() -> None:
+    trace = {"measurement_cut": {
+        "snapshot_valid": True, "close_reason": "fixed_observation_horizon",
+        "snapshot_errors": [],
+        "window_open_monotonic_ns": 1, "window_close_monotonic_ns": 2,
+        "open_lifecycles": {"items": []}, "censoring_inventory": {"items": []},
+        "active_executions": {"items": []},
+    }, "events": [{
+        "event_type": "k11.eac_native_effect_completed", "monotonic_ns": 3,
+    }]}
+    result = k11_pilot._measurement_cut_status(trace, cut_valid=True)
+    assert result["post_close_effect"] is False
+    assert result["active_effect_at_horizon"] is False
+    assert result["measurement_analysis_eligible"] is True
+
+
+def _prospective_runtime_cleanup(*, shutdown_complete=True, providers=None,
+                                 movement_terminal=True, bridge_complete=True):
+    return {
+        "controller": {"context": {"diagnostics": {"verdict": {
+            "shutdown_complete": shutdown_complete,
+            "authoritative_basis": {
+                "provider_termination_unconfirmed_task_ids": providers or [],
+                "movement_cancellation": {"terminal": movement_terminal},
+                "live_threads": [] if shutdown_complete else ["controller-worker"],
+                "active_task_ids": [], "active_agent_ids": [],
+                "incomplete_submission_task_ids": [], "undrained_queues": [],
+            },
+        }}}},
+        "bridge_cleanup": {
+            "cleanup_complete": bridge_complete,
+            "incomplete_process_count": 0 if bridge_complete else 1,
+        },
+    }
+
+
+def test_k11_prospective_cleanup_status_is_separate_and_fail_closed() -> None:
+    supervision = {
+        "exit_code": 0, "artifact_ready": True, "timed_out": False,
+        "post_artifact_linger": False,
+        "post_parent_group_linger": False, "process_group_alive_after_cleanup": False,
+    }
+    worker = {"processes_after_cleanup": []}
+    assert k11_pilot._prospective_cleanup_status(
+        supervision, worker, _prospective_runtime_cleanup(),
+    ) == "qualified_within_budget"
+    assert k11_pilot._prospective_cleanup_status(
+        supervision, worker, _prospective_runtime_cleanup(shutdown_complete=False),
+    ) == "unknown"
+    late_supervision = {**supervision, "timed_out": True}
+    assert k11_pilot._prospective_cleanup_status(
+        late_supervision, worker, _prospective_runtime_cleanup(),
+    ) == "qualified_late"
+    assert k11_pilot._prospective_cleanup_status(
+        supervision, worker, _prospective_runtime_cleanup(providers=["task-1"]),
+    ) == "unknown"
+    assert k11_pilot._prospective_cleanup_status(
+        supervision, {"processes_after_cleanup": [{"pid": 1}]},
+        _prospective_runtime_cleanup(),
+    ) == "not_qualified"
+
+
+def test_k11_prospective_cohort_stops_before_blocked_next_row(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    rows = [{"run_id": f"K11-P0-{index:02d}", "runtime": {}}
+            for index in range(1, 9)]
+    manifest = {
+        "artifact_version": 3, "runs": rows, "runtime_hygiene": {},
+        "admission": {"same_domain": True, "no_world_reset": True},
+    }
+    monkeypatch.setattr(k11_pilot, "load_p0_manifest", lambda _path: manifest)
+    monkeypatch.setattr(
+        k11_pilot, "_prepare_execution_identity",
+        lambda root: (
+            object(), "a" * 40, root / "premanifest.json",
+            {"runtime_digest": "sha256:runtime", "premanifest_identity": "premanifest"},
+        ),
+    )
+    monkeypatch.setattr(
+        k11_pilot, "measure_inprocess_overhead",
+        lambda **_kwargs: {"traced": {"trace_validation": {"valid": True}}},
+    )
+    calls = []
+    def blocked_row(row, **_kwargs):
+        calls.append(row["run_id"])
+        return {
+            "runtime_error": None, "trace_validation": {"valid": True},
+            "analysis_validation": {"valid": True},
+            "measurement_analysis_eligible": True,
+            "cross_run_contamination_excluded": False,
+            "next_run_admission_allowed": False,
+            "cleanup_status": "qualified_within_budget",
+            "event_type_counts": {}, "agent_thread_pairs": [],
+            "model_call_sources": [],
+            "exposure_coverage": {"qualifying_event_count": 0},
+        }
+    monkeypatch.setattr(k11_pilot, "_run_isolated_row", blocked_row)
+
+    result = k11_pilot.run_p0_manifest(
+        tmp_path / "manifest.json", output_root=tmp_path / "output",
+    )
+
+    assert calls == ["K11-P0-01"]
+    assert result["run_count"] == 1
+    assert result["stopped_after_run_id"] == "K11-P0-01"
+    assert result["blocked_next_run_id"] == "K11-P0-02"
+    assert result["p0_passed"] is False

@@ -134,6 +134,76 @@ def test_should_shutdown_is_a_side_effect_free_query():
     assert controller._judger_terminal_observed is False
 
 
+def test_nonblocking_execution_snapshot_callback_freezes_stable_ids():
+    controller, _, _ = _controller()
+    task = Task("snapshot", {})
+    task.status = Task.running
+    release = threading.Event()
+    agent = SimpleNamespace(name="Alice", step=lambda _task: release.wait(2))
+    group = TaskExecutionGroup(task=task, agents=[agent])
+    controller.start_execution_group(group)
+    received = []
+    assert controller.with_execution_lock_nonblocking(received.append) is True
+    assert received[0]["items"][0]["task_id"] == str(task.id)
+    assert received[0]["items"][0]["actor_id"] == "Alice"
+    release.set()
+    controller.executor.shutdown(wait=True)
+
+
+def test_execution_snapshot_uses_cutoff_and_atomically_seals_admission():
+    controller, _, _ = _controller()
+    task = Task("snapshot", {})
+    task.id = 0
+    task.status = Task.running
+    release = threading.Event()
+    agent = SimpleNamespace(name="Alice", step=lambda _task: release.wait(2))
+    group = TaskExecutionGroup(task=task, agents=[agent])
+    controller.start_execution_group(group)
+    group.execution_completion_markers["Alice"] = {
+        "event": "future_completed",
+        "execution_id": group.execution_ids["Alice"],
+        "monotonic_ns": 200,
+    }
+    received = []
+
+    assert controller.with_execution_lock_nonblocking(
+        received.append, cutoff_monotonic_ns=100, seal_admission=True,
+    ) is True
+    assert received[0]["items"][0]["task_id"] == "0"
+
+    later = TaskExecutionGroup(
+        task=Task("later", {}),
+        agents=[SimpleNamespace(name="Bob", step=lambda _task: None)],
+    )
+    with pytest.raises(ControllerShutdownError, match="Cannot start execution"):
+        controller.start_execution_group(later)
+    release.set()
+    controller.executor.shutdown(wait=True)
+
+
+def test_execution_measurement_snapshot_fails_closed_without_waiting_for_lock():
+    controller, _, _ = _controller()
+    locked = threading.Event()
+    release = threading.Event()
+    def holder():
+        with controller._execution_state_lock:
+            locked.set()
+            release.wait(2)
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert locked.wait(1)
+    received = []
+    started = time.monotonic()
+    assert controller.with_execution_lock_nonblocking(
+        received.append, seal_admission=True,
+    ) is False
+    assert time.monotonic() - started < 0.1
+    assert received[0]["errors"] == ["execution state lock unavailable"]
+    assert controller._execution_admission_closed() is True
+    release.set()
+    thread.join(1)
+
+
 def test_judged_completion_persists_canonical_success_before_shutdown():
     controller, _, sink = _controller()
     task = Task("Judged task", {})

@@ -147,6 +147,7 @@ class GlobalController:
     EXECUTION_HISTORY_TOTAL_LIMIT = 1024
     EXECUTION_LIFECYCLE_LIMIT = EXECUTION_HISTORY_LIMIT + 2
     EXECUTION_ACTOR_LIMIT = 64
+    K11_SNAPSHOT_EXECUTION_LIMIT = 128
     SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT = 128
     SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT = 128
     def __init__(self, llm_config: dict, task_manager: TaskManager, data_manager: DataManager, env: VillagerBench,
@@ -271,6 +272,59 @@ class GlobalController:
 
     def emit_runtime_event(self, event_type, *, entity_id=None, source, payload=None):
         safe_emit_runtime_event(getattr(self, "event_sink", NoOpRuntimeEventSink()), event_type, entity_id=entity_id, source=source, payload=payload)
+
+    def with_execution_lock_nonblocking(
+        self, callback, *, cutoff_monotonic_ns=None, seal_admission=False,
+    ):
+        """Snapshot execution state under its lock, or fail closed immediately."""
+        if seal_admission:
+            # Admission checks read this flag while holding the execution lock.
+            # Publish it before the nonblocking attempt so a failed snapshot
+            # cannot leave a post-cut admission gap.
+            self._measurement_cut_admission_closed = True
+        acquired = self._execution_state_lock.acquire(blocking=False)
+        if not acquired:
+            callback({"items": [], "count": 0, "errors": ["execution state lock unavailable"],
+                      "retention": {"capacity": self.K11_SNAPSHOT_EXECUTION_LIMIT,
+                                     "retained": 0, "truncated": False, "dropped_count": 0}})
+            return False
+        try:
+            items = []
+            for group in self._all_execution_groups():
+                for agent_name in group.execution_ids:
+                    completion = group.execution_completion_markers.get(agent_name)
+                    completion_ns = (
+                        completion.get("monotonic_ns")
+                        if isinstance(completion, dict) else None
+                    )
+                    if (completion is not None
+                            and (cutoff_monotonic_ns is None
+                                 or (isinstance(completion_ns, int)
+                                     and completion_ns < cutoff_monotonic_ns))):
+                        continue
+                    task_id = getattr(group.task, "id", None)
+                    items.append({
+                        "execution_id": group.execution_ids.get(agent_name),
+                        "task_id": str(task_id) if task_id is not None else None,
+                        "actor_id": agent_name,
+                    })
+            errors = []
+            total_items = len(items)
+            if total_items > self.K11_SNAPSHOT_EXECUTION_LIMIT:
+                errors.append("active execution snapshot truncated")
+            items = items[:self.K11_SNAPSHOT_EXECUTION_LIMIT]
+            if any(not item["execution_id"] or item["task_id"] is None or not item["actor_id"] for item in items):
+                errors.append("active execution snapshot lacks stable identity")
+            snapshot = {"items": items, "count": len(items), "errors": errors,
+                        "retention": {
+                            "capacity": self.K11_SNAPSHOT_EXECUTION_LIMIT,
+                            "retained": len(items), "truncated": bool(errors and "truncated" in errors[0]),
+                            "dropped_count": max(0, total_items - self.K11_SNAPSHOT_EXECUTION_LIMIT),
+                        }}
+            callback(deepcopy(snapshot))
+            return True
+        finally:
+            self._execution_state_lock.release()
 
     def _request_shutdown(self):
         with self._execution_state_lock:
@@ -471,6 +525,7 @@ class GlobalController:
         return bool(
             getattr(self, "_judger_terminal_pending", False)
             or getattr(self, "_judger_terminal_observed", False)
+            or getattr(self, "_measurement_cut_admission_closed", False)
             or self.shutdown_event.is_set()
         )
 

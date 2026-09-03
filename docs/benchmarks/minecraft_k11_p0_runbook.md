@@ -74,16 +74,16 @@ The failed `061307a` development smoke then produced reasoning-only output until
 The prospective validation-contract manifest is:
 
 ```text
-configs/minecraft/k11-p0-natural-manifest-v1.json
+configs/minecraft/k11-p0-natural-manifest-v2.json
 ```
 
-`configs/minecraft/k11-p0-natural-manifest-v0.json` remains unchanged as provenance for earlier development work. The current runner requires `minecraft-k11-p0-validation-contract/1`; it does not silently reinterpret v0 artifacts under the revised structural/exposure semantics.
+`configs/minecraft/k11-p0-natural-manifest-v0.json` and v1 remain unchanged as provenance. The legacy v1 validation path retains contract `/1` and trace `/2`; the new prospective path requires manifest artifact version 3, `minecraft-k11-p0-validation-contract/2`, and trace schema `minecraft-k11-trace/3`. Earlier artifacts are never silently reinterpreted under the prospective semantics.
 
-Every v1 per-run, development-smoke, and aggregate validation artifact records the canonical manifest digest and an explicit `cohort_mode` (`development_smoke` or `formal_p0`). The parent process rejects a worker validation artifact whose contract, manifest digest, or cohort mode differs from its invocation, so a detached smoke result cannot be accepted as a formal-cohort run artifact.
+Every v2 per-run, development-smoke, and aggregate validation artifact records the canonical manifest digest and an explicit `cohort_mode` (`development_smoke` or `formal_p0`). The parent process rejects a worker validation artifact whose contract, manifest digest, or cohort mode differs from its invocation, so a detached smoke result cannot be accepted as a formal-cohort run artifact.
 
-It contains exactly eight Advisory, `task_type=none`, non-judged, non-production runs. It forbids supplied stale EAC premanifest/revision values. Its top-level `observation_window` prospectively binds a 600-second fixed monotonic horizon for this development pilot. That value is not the final K11 horizon and does not freeze the draft protocol. Formal P0 is a separate fixed eight-run cohort gate: it counts qualifying actor-visible evidence-ingestion events inside the configured windows, and all-zero or pre-window-only evidence fails the gate.
+It contains exactly eight Advisory, `task_type=none`, non-judged, non-production runs, copied unchanged from v1. Admission metadata is explicit and fail-closed: same-domain execution is required, world reset is forbidden, and missing/invalid metadata blocks admission. It forbids supplied stale EAC premanifest/revision values. Its top-level `observation_window` prospectively binds a 600-second fixed monotonic horizon for this development pilot. That value is not the final K11 horizon and does not freeze the draft protocol.
 
-A run may be structurally valid with zero qualifying in-window evidence. Such a zero-evidence run is retained and is not retried or replaced for that reason. Development smoke and other prior development artifacts are not eligible for retroactive promotion into the formal eight-run cohort.
+A run may be structurally valid with zero qualifying in-window evidence. Such a zero-evidence run is retained and is not retried or replaced for that reason. The prospective measurement snapshot, structural validation, censoring, and analysis cuts are recorded separately. Contamination is excluded rather than repaired. An active tool/native effect at H, any post-close tool/native entry, uncertainty, or uncertain/failed cleanup blocks the next row. A post-close completion of an effect already censored at H remains cleanup metadata and does not rewrite measurement. The formal loop stops before that next row, with no retry or skip; counts and status counts report the completed prefix. Development smoke and other prior development artifacts are not eligible for retroactive promotion into the formal eight-run cohort.
 
 At pilot start the runner:
 
@@ -116,7 +116,7 @@ After committing the remediation and establishing a new clean execution revision
 
 ```bash
 python -m benchmarks.minecraft.k11_pilot \
-  --manifest configs/minecraft/k11-p0-natural-manifest-v1.json \
+  --manifest configs/minecraft/k11-p0-natural-manifest-v2.json \
   --output-root ../VillagerAgent-k11-p0-dev-smoke-01 \
   --development-smoke-run-id K11-P0-01
 ```
@@ -133,7 +133,7 @@ For a bounded replacement development smoke, 600 seconds captures substantial re
 
 ```bash
 python -m benchmarks.minecraft.k11_pilot \
-  --manifest configs/minecraft/k11-p0-natural-manifest-v1.json \
+  --manifest configs/minecraft/k11-p0-natural-manifest-v2.json \
   --output-root ../VillagerAgent-k11-p0-results \
   --formal-p0
 ```

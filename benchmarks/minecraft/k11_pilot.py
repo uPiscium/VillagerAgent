@@ -44,6 +44,10 @@ P0_MANIFEST_ID = "minecraft-k11-p0-manifest"
 P0_MANIFEST_VERSION = 2
 P0_VALIDATION_CONTRACT = "minecraft-k11-p0-validation-contract/1"
 P0_VALIDATION_ARTIFACT_VERSION = 2
+PROSPECTIVE_MANIFEST_VERSION = 3
+PROSPECTIVE_VALIDATION_CONTRACT = "minecraft-k11-p0-validation-contract/2"
+PROSPECTIVE_TRACE_SCHEMA = "minecraft-k11-trace/3"
+PROSPECTIVE_VALIDATION_ARTIFACT_VERSION = 3
 DEVELOPMENT_SMOKE_ARTIFACT_VERSION = 2
 P0_EXPECTED_RUNS = 8
 COHORT_MODES = frozenset({"development_smoke", "formal_p0"})
@@ -107,16 +111,40 @@ def _load_json(path: str | Path) -> dict[str, Any]:
 
 def load_p0_manifest(path: str | Path) -> dict[str, Any]:
     document = _load_json(path)
-    if document.get("artifact_id") != P0_MANIFEST_ID or document.get("artifact_version") != P0_MANIFEST_VERSION:
+    version = document.get("artifact_version")
+    if document.get("artifact_id") != P0_MANIFEST_ID or version not in {
+            P0_MANIFEST_VERSION, PROSPECTIVE_MANIFEST_VERSION}:
         raise K11PilotContractError("K11 P0 manifest identity mismatch")
-    if document.get("validation_contract") != P0_VALIDATION_CONTRACT:
+    prospective = version == PROSPECTIVE_MANIFEST_VERSION
+    expected_contract = PROSPECTIVE_VALIDATION_CONTRACT if prospective else P0_VALIDATION_CONTRACT
+    if document.get("validation_contract") != expected_contract:
         raise K11PilotContractError("K11 P0 validation contract identity mismatch")
+    if prospective and document.get("trace_schema") != PROSPECTIVE_TRACE_SCHEMA:
+        raise K11PilotContractError("K11 P0 trace schema identity mismatch")
     if document.get("study_phase") != "K11-P0-instrumentation-validation":
         raise K11PilotContractError("K11 P0 study phase mismatch")
     if document.get("prevalence_inference_allowed") is not False:
         raise K11PilotContractError("P0 must explicitly forbid prevalence inference")
     if document.get("eac_identity_source") != EAC_IDENTITY_SOURCE:
         raise K11PilotContractError("K11 P0 must bind EAC identity to the current immutable checkout")
+    admission = document.get("admission")
+    if (prospective and (not isinstance(admission, Mapping)
+            or set(admission) != {
+                "same_domain", "no_world_reset", "world_reset", "fail_closed",
+                "active_effect_at_horizon_blocks_next_run",
+                "post_close_effect_blocks_next_run",
+                "uncertainty_blocks_next_run",
+            }
+            or admission.get("same_domain") is not True
+            or admission.get("no_world_reset") is not True
+            or admission.get("world_reset") is not False
+            or admission.get("fail_closed") is not True
+            or admission.get("active_effect_at_horizon_blocks_next_run") is not True
+            or admission.get("post_close_effect_blocks_next_run") is not True
+            or admission.get("uncertainty_blocks_next_run") is not True)):
+        raise K11PilotContractError(
+            "K11 P0 admission must be same-domain, no-world-reset, and fail closed"
+        )
     window = document.get("observation_window")
     horizon = window.get("horizon_seconds") if isinstance(window, Mapping) else None
     if (not isinstance(window, Mapping)
@@ -150,6 +178,16 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
     for row in runs:
         _validate_run(row)
     return document
+
+
+def _manifest_contract(document: Mapping[str, Any]) -> tuple[str, str, int, bool]:
+    prospective = document.get("artifact_version") == PROSPECTIVE_MANIFEST_VERSION
+    return (
+        PROSPECTIVE_VALIDATION_CONTRACT if prospective else P0_VALIDATION_CONTRACT,
+        PROSPECTIVE_TRACE_SCHEMA if prospective else "minecraft-k11-trace/2",
+        PROSPECTIVE_VALIDATION_ARTIFACT_VERSION if prospective else P0_VALIDATION_ARTIFACT_VERSION,
+        prospective,
+    )
 
 
 def _validate_run(row: Mapping[str, Any]) -> None:
@@ -289,6 +327,120 @@ def _in_window_evidence_metadata(trace_artifact: Mapping[str, Any]) -> dict[str,
     }
 
 
+def _measurement_snapshot(trace_artifact: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract the prospective measurement cut without guessing missing data."""
+    cut = trace_artifact.get("measurement_cut")
+    if not isinstance(cut, Mapping):
+        return {"valid": False, "errors": ["measurement_cut_missing"]}
+    errors = []
+    if cut.get("snapshot_valid") is not True:
+        errors.append("snapshot_invalid")
+    if not isinstance(cut.get("snapshot_errors"), list) or cut.get("snapshot_errors"):
+        errors.append("snapshot_errors_present")
+    close_reason = cut.get("close_reason")
+    if close_reason not in {"fixed_observation_horizon", "natural_runtime_terminal"}:
+        errors.append("close_reason_invalid")
+    window_start = cut.get("window_open_monotonic_ns", cut.get("window_start_monotonic_ns"))
+    window_end = cut.get("window_close_monotonic_ns", cut.get("window_end_monotonic_ns"))
+    if type(window_start) is not int or type(window_end) is not int or window_start >= window_end:
+        errors.append("window_bounds_invalid")
+    open_lifecycles = cut.get("open_lifecycles")
+    active_executions = cut.get("active_executions")
+    censoring_inventory = cut.get("censoring_inventory")
+    if not isinstance(open_lifecycles, Mapping) or not isinstance(open_lifecycles.get("items"), list):
+        errors.append("open_lifecycles_invalid")
+        open_items = []
+    else:
+        open_items = open_lifecycles["items"]
+    if (not isinstance(active_executions, Mapping)
+            or not isinstance(active_executions.get("items"), list)):
+        errors.append("active_executions_invalid")
+        active_items = []
+    else:
+        active_items = active_executions["items"]
+    if not isinstance(censoring_inventory, Mapping) or not isinstance(censoring_inventory.get("items"), list):
+        errors.append("censoring_inventory_invalid")
+        censor_items = []
+    else:
+        censor_items = censoring_inventory["items"]
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "snapshot_valid": cut.get("snapshot_valid"),
+        "close_reason": close_reason,
+        "window_open_monotonic_ns": window_start,
+        "window_close_monotonic_ns": window_end,
+        "open_lifecycles": {"items": open_items},
+        "active_executions": {"items": active_items},
+        "censoring_inventory": {"items": censor_items},
+    }
+
+
+def _measurement_cut_status(
+    trace_artifact: Mapping[str, Any], *, cut_valid: bool = False,
+) -> dict[str, Any]:
+    snapshot = _measurement_snapshot(trace_artifact)
+    bounds = observation_window_bounds(trace_artifact)
+    end = bounds[1] if bounds else None
+    cut = trace_artifact.get("measurement_cut")
+    if isinstance(cut, Mapping):
+        for key in ("window_close_monotonic_ns", "window_end_monotonic_ns"):
+            if isinstance(cut.get(key), int):
+                end = cut[key]
+                break
+    events = trace_artifact.get("events")
+    post_close_effect = False
+    if isinstance(events, list) and isinstance(end, int):
+        post_close_effect = any(
+            isinstance(event, Mapping)
+            and event.get("event_type") in {
+                "k11.tool_call_entered", "k11.eac_native_effect_entered",
+            }
+            and isinstance(event.get("monotonic_ns"), int)
+            and event["monotonic_ns"] >= end
+            for event in events
+        )
+    open_items = snapshot.get("open_lifecycles", {}).get("items", [])
+    active_at_horizon = any(
+        isinstance(item, Mapping)
+        and item.get("kind", item.get("lifecycle_kind")) in {"tool", "tool_call_id", "native"}
+        for item in open_items
+    )
+    uncertainty = not snapshot.get("valid", False) or any(
+        not isinstance(item, Mapping) for item in open_items
+    )
+    open_agent_scopes = {
+        (item.get("scope", {}).get("task_id"), item.get("scope", {}).get("actor_id"))
+        for item in open_items if isinstance(item, Mapping)
+        and item.get("kind") == "agent_step_id"
+        and isinstance(item.get("scope"), Mapping)
+    }
+    active_items = snapshot.get("active_executions", {}).get("items", [])
+    active_agent_scopes = {
+        (item.get("task_id"), item.get("actor_id"))
+        for item in active_items if isinstance(item, Mapping)
+    }
+    if active_agent_scopes != open_agent_scopes or any(
+        not isinstance(item, Mapping)
+        or (item.get("task_id"), item.get("actor_id")) not in open_agent_scopes
+        for item in active_items
+    ):
+        uncertainty = True
+    censoring_complete = cut_valid and snapshot.get("valid", False) and isinstance(
+        snapshot.get("censoring_inventory", {}).get("items"), list
+    )
+    structurally_valid = cut_valid and snapshot.get("valid", False) and not uncertainty
+    return {
+        "snapshot": snapshot,
+        "active_effect_at_horizon": active_at_horizon,
+        "post_close_effect": post_close_effect,
+        "uncertainty": uncertainty,
+        "measurement_structurally_valid": structurally_valid,
+        "measurement_censoring_complete": censoring_complete,
+        "measurement_analysis_eligible": bool(structurally_valid and censoring_complete),
+    }
+
+
 def _coverage_summary(
     event_counts: Mapping[str, int], actor_threads, model_call_sources, *,
     qualifying_in_window_evidence_count: int,
@@ -320,6 +472,23 @@ def _p0_passes(*, summaries: list[Mapping[str, Any]], calibration_error: str | N
     )
 
 
+def _prospective_passes(*, summaries: list[Mapping[str, Any]], calibration_error: str | None,
+                        calibration: Mapping[str, Any], coverage_sufficient: bool) -> bool:
+    return bool(
+        len(summaries) == P0_EXPECTED_RUNS
+        and all(item.get("trace_validation", {}).get("valid") is True for item in summaries)
+        and all(item.get("analysis_validation", {}).get("valid") is True for item in summaries)
+        and all(item.get("measurement_analysis_eligible") is True for item in summaries)
+        and all(item.get("cross_run_contamination_excluded") is True for item in summaries)
+        and all(item.get("next_run_admission_allowed") is True for item in summaries)
+        and all(item.get("cleanup_status") in {"qualified_within_budget", "qualified_late"}
+                for item in summaries)
+        and calibration_error is None
+        and calibration.get("traced", {}).get("trace_validation", {}).get("valid") is True
+        and coverage_sufficient
+    )
+
+
 def _run_single_row(
     row: Mapping[str, Any],
     run_dir: Path,
@@ -330,12 +499,38 @@ def _run_single_row(
     observation_horizon_seconds: float,
     manifest_digest: str,
     cohort_mode: str,
+    validation_contract: str = P0_VALIDATION_CONTRACT,
+    trace_schema: str = "minecraft-k11-trace/2",
+    validation_artifact_version: int = P0_VALIDATION_ARTIFACT_VERSION,
+    prospective: bool = False,
 ) -> dict[str, Any]:
     run_id = row["run_id"]
     if run_dir.exists() and any(run_dir.iterdir()):
         raise K11PilotContractError(f"K11 P0 run directory already contains data: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
-    trace = K11TraceRecorder(run_id)
+    measurement_identity = None
+    if prospective:
+        premanifest = _load_json(premanifest_path)
+        measurement_identity = {
+            "run_id": run_id,
+            "manifest_digest": manifest_digest,
+            "execution_revision": execution_revision,
+            "runtime_digest": premanifest.get("runtime_digest"),
+            "premanifest_identity": premanifest.get("premanifest_identity"),
+            "validation_contract": validation_contract,
+            "trace_schema": trace_schema,
+        }
+    try:
+        trace = K11TraceRecorder(
+            run_id, schema_version=trace_schema,
+            measurement_identity=measurement_identity,
+        )
+    except TypeError as exc:
+        if prospective:
+            raise K11PilotContractError(
+                "prospective trace recorder does not accept the selected schema"
+            ) from exc
+        trace = K11TraceRecorder(run_id)
     error = None
     error_type = None
     result = None
@@ -379,6 +574,9 @@ def _run_single_row(
     }
     primary_terminal_count = _primary_terminal_count(trace_artifact)
     evidence_metadata = _in_window_evidence_metadata(trace_artifact)
+    measurement = _measurement_cut_status(
+        trace_artifact, cut_valid=generic_validation.get("valid") is True,
+    ) if prospective else None
     try:
         analysis = analyze_trace(trace_artifact)
     except Exception as exc:
@@ -397,8 +595,10 @@ def _run_single_row(
     )
     summary = {
         "artifact_id": "minecraft-k11-p0-run-validation",
-        "artifact_version": P0_VALIDATION_ARTIFACT_VERSION,
-        "validation_contract": P0_VALIDATION_CONTRACT,
+        "artifact_version": validation_artifact_version,
+        **({"trace_schema_version": trace_schema}
+           if validation_contract == PROSPECTIVE_VALIDATION_CONTRACT else {}),
+        "validation_contract": validation_contract,
         "manifest_digest": manifest_digest,
         "cohort_mode": cohort_mode,
         "run_id": run_id,
@@ -414,14 +614,50 @@ def _run_single_row(
         "offline_analysis_error": analysis.get("analysis_error"),
         "runtime_returned": result is not None,
         "observation_horizon_seconds": observation_horizon_seconds,
+        "exposure_coverage": evidence_metadata,
+        # These are intentionally separate cuts: snapshot/structure are not
+        # silently promoted to a usable measurement when censoring is present.
+        "measurement_snapshot": measurement["snapshot"] if measurement else None,
         "structural_validation": {
             "valid": (validation.get("valid") is True
                       and analysis_validation.get("valid") is True),
             "trace_valid": validation.get("valid") is True,
             "analysis_valid": analysis_validation.get("valid") is True,
         },
-        "exposure_coverage": evidence_metadata,
+        "censoring": {
+            "active_effect_at_horizon": measurement["active_effect_at_horizon"] if measurement else None,
+            "post_close_effect": measurement["post_close_effect"] if measurement else None,
+            "uncertainty": (
+                measurement["uncertainty"]
+                or generic_validation.get("valid") is not True
+            ) if measurement else None,
+        },
+        "measurement_snapshot_valid": measurement["snapshot"].get("valid") if measurement else None,
+        "measurement_structurally_valid": generic_validation.get("valid") is True if measurement else None,
+        "measurement_censoring_complete": measurement["measurement_censoring_complete"] if measurement else None,
+        "measurement_analysis_eligible": bool(
+            measurement and measurement["measurement_analysis_eligible"]
+            and analysis_validation.get("valid") is True
+            and analysis.get("measurement_analysis_eligible") is True
+        ) if measurement else None,
+        "cross_run_contamination_excluded": False if measurement else None,
+        "contamination_excluded": False if measurement else None,
+        "next_run_admission_allowed": False if measurement else True,
+        "next_run_admission": False if measurement else True,
     }
+    if prospective:
+        summary["measurement_identity"] = trace_artifact.get(
+            "measurement_cut", {}
+        ).get("identity")
+    if not prospective:
+        for key in (
+            "trace_schema_version", "measurement_snapshot", "censoring",
+            "measurement_snapshot_valid", "measurement_structurally_valid",
+            "measurement_censoring_complete", "measurement_analysis_eligible",
+            "cross_run_contamination_excluded", "contamination_excluded",
+            "next_run_admission_allowed", "next_run_admission",
+        ):
+            summary.pop(key, None)
     (run_dir / "p0_validation.json").write_text(
         json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -438,6 +674,9 @@ def _worker_command(
     premanifest_path: Path,
     manifest_digest: str,
     cohort_mode: str,
+    validation_contract: str = P0_VALIDATION_CONTRACT,
+    trace_schema: str = "minecraft-k11-trace/2",
+    validation_artifact_version: int = P0_VALIDATION_ARTIFACT_VERSION,
 ) -> list[str]:
     return [
         sys.executable,
@@ -450,17 +689,25 @@ def _worker_command(
         "--premanifest", str(premanifest_path),
         "--manifest-digest", manifest_digest,
         "--cohort-mode", cohort_mode,
+        "--validation-contract", validation_contract,
+        "--trace-schema", trace_schema,
+        "--validation-artifact-version", str(validation_artifact_version),
     ]
 
 
 def _failed_process_summary(
     run_id: str, supervision: Mapping[str, Any], *, manifest_digest: str, cohort_mode: str,
+    validation_contract: str = P0_VALIDATION_CONTRACT,
+    trace_schema: str = "minecraft-k11-trace/2",
+    validation_artifact_version: int = P0_VALIDATION_ARTIFACT_VERSION,
 ) -> dict[str, Any]:
     error_type = "RunProcessTimeout" if supervision.get("timed_out") else "RunProcessFailure"
     return {
         "artifact_id": "minecraft-k11-p0-run-validation",
-        "artifact_version": P0_VALIDATION_ARTIFACT_VERSION,
-        "validation_contract": P0_VALIDATION_CONTRACT,
+        "artifact_version": validation_artifact_version,
+        **({"trace_schema_version": trace_schema}
+           if validation_contract == PROSPECTIVE_VALIDATION_CONTRACT else {}),
+        "validation_contract": validation_contract,
         "manifest_digest": manifest_digest,
         "cohort_mode": cohort_mode,
         "run_id": run_id,
@@ -506,14 +753,87 @@ def _apply_process_outcome(
     return summary
 
 
+def _prospective_cleanup_status(
+    supervision: Mapping[str, Any], shutdown: Any, runtime_result: Any = None,
+) -> str:
+    """Classify cleanup only; cleanup defects are not rewritten as runtime errors."""
+    if not isinstance(shutdown, Mapping) or not isinstance(runtime_result, Mapping):
+        return "unknown"
+    supervision_types = {
+        "artifact_ready": bool, "timed_out": bool,
+        "post_artifact_linger": bool, "post_parent_group_linger": bool,
+        "process_group_alive_after_cleanup": bool,
+    }
+    if any(type(supervision.get(key)) is not expected
+           for key, expected in supervision_types.items()):
+        return "unknown"
+    if (supervision.get("artifact_ready") is not True
+            or type(supervision.get("exit_code")) is not int):
+        return "unknown"
+    remaining_processes = shutdown.get("processes_after_cleanup")
+    if not isinstance(remaining_processes, list):
+        return "unknown"
+    if remaining_processes:
+        return "not_qualified"
+    if supervision.get("process_group_alive_after_cleanup") is not False:
+        return "unknown"
+    controller = runtime_result.get("controller")
+    context = controller.get("context") if isinstance(controller, Mapping) else None
+    diagnostics = context.get("diagnostics") if isinstance(context, Mapping) else None
+    verdict = diagnostics.get("verdict") if isinstance(diagnostics, Mapping) else None
+    basis = verdict.get("authoritative_basis") if isinstance(verdict, Mapping) else None
+    bridge = runtime_result.get("bridge_cleanup")
+    if not all(isinstance(value, Mapping) for value in (verdict, basis, bridge)):
+        return "unknown"
+    if type(verdict.get("shutdown_complete")) is not bool:
+        return "unknown"
+    providers = basis.get("provider_termination_unconfirmed_task_ids")
+    if providers != []:
+        return "unknown"
+    movement = basis.get("movement_cancellation")
+    if not isinstance(movement, Mapping) or movement.get("terminal") is not True:
+        return "unknown"
+    if (type(bridge.get("cleanup_complete")) is not bool
+            or type(bridge.get("incomplete_process_count")) is not int):
+        return "unknown"
+    if (bridge["cleanup_complete"] is not True
+            or bridge["incomplete_process_count"] != 0):
+        return "not_qualified"
+    basis_lists = (
+        "live_threads", "active_task_ids", "active_agent_ids",
+        "incomplete_submission_task_ids", "undrained_queues",
+    )
+    if any(not isinstance(basis.get(key), list) for key in basis_lists):
+        return "unknown"
+    if verdict.get("shutdown_complete") is not True or any(
+        basis[key] for key in basis_lists
+    ):
+        return "unknown"
+    clean_within_budget = (
+        verdict.get("shutdown_complete") is True
+        and supervision.get("timed_out") is False
+        and supervision.get("post_artifact_linger") is False
+        and supervision.get("post_parent_group_linger") is False
+        and supervision.get("exit_code") == 0
+    )
+    if clean_within_budget:
+        return "qualified_within_budget"
+    return "qualified_late"
+
+
 def _validate_worker_summary_identity(
     summary: Any, *, expected_run_id: str, manifest_digest: str, cohort_mode: str,
+    validation_contract: str = P0_VALIDATION_CONTRACT,
+    trace_schema: str = "minecraft-k11-trace/2",
+    validation_artifact_version: int = P0_VALIDATION_ARTIFACT_VERSION,
 ) -> None:
     if (not isinstance(summary, Mapping)
             or summary.get("artifact_id") != "minecraft-k11-p0-run-validation"
-            or summary.get("artifact_version") != P0_VALIDATION_ARTIFACT_VERSION
+            or summary.get("artifact_version") != validation_artifact_version
             or summary.get("run_id") != expected_run_id
-            or summary.get("validation_contract") != P0_VALIDATION_CONTRACT
+            or summary.get("validation_contract") != validation_contract
+            or (validation_contract == PROSPECTIVE_VALIDATION_CONTRACT
+                and summary.get("trace_schema_version") != trace_schema)
             or summary.get("manifest_digest") != manifest_digest
             or summary.get("cohort_mode") != cohort_mode):
         raise K11PilotContractError(
@@ -530,6 +850,10 @@ def _run_isolated_row(
     premanifest_path: Path,
     manifest_digest: str,
     cohort_mode: str,
+    validation_contract: str = P0_VALIDATION_CONTRACT,
+    trace_schema: str = "minecraft-k11-trace/2",
+    validation_artifact_version: int = P0_VALIDATION_ARTIFACT_VERSION,
+    prospective: bool = False,
 ) -> dict[str, Any]:
     run_id = row["run_id"]
     run_dir = output_root / run_id
@@ -546,6 +870,9 @@ def _run_isolated_row(
             premanifest_path=premanifest_path,
             manifest_digest=manifest_digest,
             cohort_mode=cohort_mode,
+            validation_contract=validation_contract,
+            trace_schema=trace_schema,
+            validation_artifact_version=validation_artifact_version,
         ),
         cwd=ROOT,
         timeout_seconds=RUN_PROCESS_TIMEOUT_SECONDS,
@@ -563,15 +890,79 @@ def _run_isolated_row(
         _validate_worker_summary_identity(
             summary, expected_run_id=run_id,
             manifest_digest=manifest_digest, cohort_mode=cohort_mode,
+            validation_contract=validation_contract, trace_schema=trace_schema,
+            validation_artifact_version=validation_artifact_version,
         )
+        if prospective:
+            premanifest = _load_json(premanifest_path)
+            expected_measurement_identity = {
+                "run_id": run_id,
+                "manifest_digest": manifest_digest,
+                "execution_revision": execution_revision,
+                "runtime_digest": premanifest.get("runtime_digest"),
+                "premanifest_identity": premanifest.get("premanifest_identity"),
+                "validation_contract": validation_contract,
+                "trace_schema": trace_schema,
+            }
+            trace_path = run_dir / "k11_trace.json"
+            try:
+                persisted_trace = _load_json(trace_path)
+            except (OSError, ValueError) as exc:
+                raise K11PilotContractError(
+                    "prospective worker trace artifact is missing or malformed"
+                ) from exc
+            cut = persisted_trace.get("measurement_cut")
+            if (summary.get("measurement_identity") != expected_measurement_identity
+                    or not isinstance(cut, Mapping)
+                    or cut.get("identity") != expected_measurement_identity):
+                raise K11PilotContractError(
+                    "prospective measurement identity differs from parent authority"
+                )
     else:
         summary = _failed_process_summary(
             run_id, supervision, manifest_digest=manifest_digest, cohort_mode=cohort_mode,
+            validation_contract=validation_contract, trace_schema=trace_schema,
+            validation_artifact_version=validation_artifact_version,
         )
-    summary = _apply_process_outcome(summary, supervision)
     worker_shutdown_path = run_dir / "worker_shutdown.json"
+    shutdown = None
     if worker_shutdown_path.is_file():
         summary["worker_shutdown"] = json.loads(worker_shutdown_path.read_text(encoding="utf-8"))
+        shutdown = summary["worker_shutdown"]
+    if prospective:
+        summary.setdefault("measurement_snapshot", {"valid": False, "errors": ["process_artifact_missing"]})
+        summary.setdefault("measurement_snapshot_valid", False)
+        summary.setdefault("measurement_structurally_valid", False)
+        summary.setdefault("measurement_censoring_complete", False)
+        summary.setdefault("measurement_analysis_eligible", False)
+        summary.setdefault("censoring", {"active_effect_at_horizon": False, "post_close_effect": False, "uncertainty": True})
+        summary.setdefault("cross_run_contamination_excluded", False)
+        summary.setdefault("contamination_excluded", False)
+        runtime_result = None
+        result_path = run_dir / "runtime_result.json"
+        if result_path.is_file():
+            try:
+                runtime_result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                runtime_result = None
+        summary["process_supervision"] = dict(supervision)
+        summary["cleanup_status"] = _prospective_cleanup_status(
+            supervision, shutdown, runtime_result
+        )
+        clean = summary["cleanup_status"] in {"qualified_within_budget", "qualified_late"}
+        if summary.get("measurement_snapshot_valid") is True:
+            summary["cross_run_contamination_excluded"] = bool(
+                clean and not summary.get("censoring", {}).get("active_effect_at_horizon")
+                and not summary.get("censoring", {}).get("post_close_effect")
+                and not summary.get("censoring", {}).get("uncertainty")
+            )
+            summary["contamination_excluded"] = summary["cross_run_contamination_excluded"]
+        summary["next_run_admission_allowed"] = bool(
+            clean and summary.get("cross_run_contamination_excluded") is True
+        )
+        summary["next_run_admission"] = summary["next_run_admission_allowed"]
+    else:
+        summary = _apply_process_outcome(summary, supervision)
     validation_path.write_text(
         json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -583,6 +974,7 @@ def run_development_smoke(
     manifest_path: str | Path, *, output_root: str | Path, run_id: str,
 ) -> dict[str, Any]:
     manifest = load_p0_manifest(manifest_path)
+    contract, trace_schema, artifact_version, prospective = _manifest_contract(manifest)
     matching_rows = [row for row in manifest["runs"] if row["run_id"] == run_id]
     if len(matching_rows) != 1:
         raise K11PilotContractError(f"development smoke run_id is not unique: {run_id}")
@@ -598,6 +990,10 @@ def run_development_smoke(
         premanifest_path=premanifest_path,
         manifest_digest=manifest_digest,
         cohort_mode="development_smoke",
+        validation_contract=contract,
+        trace_schema=trace_schema,
+        validation_artifact_version=artifact_version,
+        prospective=prospective,
     )
     counts = summary.get("event_type_counts", {})
     structural_validation_passed = (
@@ -619,10 +1015,20 @@ def run_development_smoke(
         and development_lifecycle_qualified
         and development_exposure_qualified
     )
+    if prospective:
+        smoke_passed = bool(
+            smoke_passed
+            and summary.get("measurement_analysis_eligible") is True
+            and summary.get("cleanup_status") in {
+                "qualified_within_budget", "qualified_late",
+            }
+            and summary.get("cross_run_contamination_excluded") is True
+            and summary.get("next_run_admission_allowed") is True
+        )
     artifact = {
         "artifact_id": "minecraft-k11-development-smoke-validation",
-        "artifact_version": DEVELOPMENT_SMOKE_ARTIFACT_VERSION,
-        "validation_contract": P0_VALIDATION_CONTRACT,
+        "artifact_version": DEVELOPMENT_SMOKE_ARTIFACT_VERSION if not prospective else 3,
+        "validation_contract": contract,
         "manifest_digest": manifest_digest,
         "cohort_mode": "development_smoke",
         "study_phase": "K11-P0-development-smoke",
@@ -648,14 +1054,17 @@ def run_development_smoke(
 
 def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> dict[str, Any]:
     manifest = load_p0_manifest(manifest_path)
+    contract, trace_schema, artifact_version, prospective = _manifest_contract(manifest)
     root = Path(output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     _, revision, premanifest_path, identity = _prepare_execution_identity(root)
     summaries = []
     manifest_digest = _manifest_digest(manifest)
 
-    for row in manifest["runs"]:
-        summaries.append(_run_isolated_row(
+    stopped_before_run = None
+    blocked_next_run_id = None
+    for index, row in enumerate(manifest["runs"]):
+        summary = _run_isolated_row(
             row,
             manifest_path=manifest_path,
             output_root=root,
@@ -663,7 +1072,19 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
             premanifest_path=premanifest_path,
             manifest_digest=manifest_digest,
             cohort_mode="formal_p0",
-        ))
+            validation_contract=contract,
+            trace_schema=trace_schema,
+            validation_artifact_version=artifact_version,
+            prospective=prospective,
+        )
+        summaries.append(summary)
+        # A cut with an active effect, post-close effect, or uncertainty is a
+        # hard admission stop. There is deliberately no retry or skip path.
+        if prospective and not summary.get("next_run_admission_allowed", False):
+            if index + 1 < len(manifest["runs"]):
+                stopped_before_run = row["run_id"]
+                blocked_next_run_id = manifest["runs"][index + 1]["run_id"]
+                break
 
     calibration_error = None
     try:
@@ -702,7 +1123,7 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         qualifying_in_window_evidence_count=qualifying_evidence_count,
     )
     coverage_sufficient = all(coverage.values())
-    p0_passed = _p0_passes(
+    p0_passed = (_prospective_passes if prospective else _p0_passes)(
         summaries=summaries,
         calibration_error=calibration_error,
         calibration=calibration,
@@ -711,8 +1132,8 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
 
     aggregate = {
         "artifact_id": "minecraft-k11-p0-validation",
-        "artifact_version": P0_VALIDATION_ARTIFACT_VERSION,
-        "validation_contract": P0_VALIDATION_CONTRACT,
+        "artifact_version": artifact_version,
+        "validation_contract": contract,
         "manifest_digest": manifest_digest,
         "cohort_mode": "formal_p0",
         "study_phase": "K11-P0-instrumentation-validation",
@@ -725,6 +1146,25 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         "premanifest_path": str(premanifest_path),
         "runtime_hygiene": manifest["runtime_hygiene"],
         "run_count": len(summaries),
+        "expected_run_count": P0_EXPECTED_RUNS,
+        "stopped_before_next_run": stopped_before_run is not None,
+        "stopped_after_run_id": stopped_before_run,
+        "blocked_next_run_id": blocked_next_run_id,
+        "status_counts": {
+            status: sum(item.get("cleanup_status") == status for item in summaries)
+            for status in ("qualified_within_budget", "qualified_late", "not_qualified", "unknown")
+        } if prospective else {},
+        "measurement_valid_count": sum(
+            item.get("measurement_analysis_eligible") is True for item in summaries
+        ) if prospective else None,
+        "contamination_excluded_count": sum(
+            item.get("cross_run_contamination_excluded") is True for item in summaries
+        ),
+        "admission": {
+            "same_domain": manifest.get("admission", {}).get("same_domain") if prospective else None,
+            "no_world_reset": manifest.get("admission", {}).get("no_world_reset") if prospective else None,
+            "blocked_next_run_id": blocked_next_run_id,
+        } if prospective else None,
         "trace_valid_count": trace_valid_count,
         "offline_analysis_valid_count": analysis_valid_count,
         "runtime_error_count": runtime_error_count,
@@ -743,6 +1183,13 @@ def run_p0_manifest(manifest_path: str | Path, *, output_root: str | Path) -> di
         "calibration_error": calibration_error,
         "runs": summaries,
     }
+    if not prospective:
+        for key in (
+            "expected_run_count", "stopped_before_next_run", "stopped_after_run_id",
+            "blocked_next_run_id", "status_counts", "measurement_valid_count",
+            "contamination_excluded_count", "admission",
+        ):
+            aggregate.pop(key, None)
     (root / "P0_VALIDATION.json").write_text(
         json.dumps(aggregate, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -762,6 +1209,9 @@ def main(argv=None) -> int:
     parser.add_argument("--premanifest")
     parser.add_argument("--manifest-digest")
     parser.add_argument("--cohort-mode", choices=sorted(COHORT_MODES))
+    parser.add_argument("--validation-contract")
+    parser.add_argument("--trace-schema")
+    parser.add_argument("--validation-artifact-version", type=int)
     args = parser.parse_args(argv)
     if args.worker_run_id:
         if (not args.execution_revision or not args.premanifest or not args.manifest_digest
@@ -771,6 +1221,11 @@ def main(argv=None) -> int:
                 "and --cohort-mode"
             )
         manifest = load_p0_manifest(args.manifest)
+        contract, trace_schema, artifact_version, prospective = _manifest_contract(manifest)
+        if (args.validation_contract not in (None, contract)
+                or args.trace_schema not in (None, trace_schema)
+                or args.validation_artifact_version not in (None, artifact_version)):
+            raise K11PilotContractError("worker contract metadata differs from loaded manifest")
         if _manifest_digest(manifest) != args.manifest_digest:
             raise K11PilotContractError("worker manifest differs from the parent-validated snapshot")
         matching_rows = [row for row in manifest["runs"] if row["run_id"] == args.worker_run_id]
@@ -796,6 +1251,10 @@ def main(argv=None) -> int:
                 observation_horizon_seconds=manifest["observation_window"]["horizon_seconds"],
                 manifest_digest=args.manifest_digest,
                 cohort_mode=args.cohort_mode,
+                validation_contract=contract,
+                trace_schema=trace_schema,
+                validation_artifact_version=artifact_version,
+                prospective=prospective,
             )
         finally:
             cleanup = cleanup_process_group_descendants(

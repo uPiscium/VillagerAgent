@@ -8,7 +8,7 @@ from benchmarks.minecraft.k11_instrumentation import (
     _ObservationWindow,
     _controlled_shutdown_is_complete,
 )
-from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
+from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope, PROSPECTIVE_TRACE_SCHEMA_VERSION
 from env.runtime_paths import RuntimePaths
 from model.openai_models import OpenAILanguageModel, ProviderCallCancellationError
 from env.minecraft_client import LLMHandler
@@ -57,6 +57,22 @@ def test_k11_observation_window_fixed_close_is_authoritative_and_idempotent():
     assert events[1]["payload"]["reason"] == "fixed_observation_horizon"
     assert events[1]["payload"]["window_close_monotonic_ns"] - events[0]["monotonic_ns"] == 5_000_000_000
     assert controller.shutdown_requests == 1
+
+
+def test_k11_prospective_window_cut_has_exact_measurement_schema():
+    trace = K11TraceRecorder("k11-window-prospective", schema_version=PROSPECTIVE_TRACE_SCHEMA_VERSION)
+    waiter = _FakeWaiter()
+    window = _ObservationWindow(trace, 5, waiter, lambda: 100)
+    controller = _FakeController()
+    window.attach_controller(controller)
+    window.open()
+    waiter.callback()
+    cut = trace.artifact()["measurement_cut"]
+    assert cut["boundary"] == "[open,close)"
+    assert cut["close_reason"] == "fixed_observation_horizon"
+    assert cut["snapshot_valid"] is False
+    assert set(cut) >= {"active_executions", "open_lifecycles", "prepared_requests",
+                         "evidence_high_water", "censoring_inventory"}
 
 
 def test_k11_observation_window_natural_close_cancels_waiter():

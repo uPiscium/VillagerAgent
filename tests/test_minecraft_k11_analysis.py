@@ -1,10 +1,17 @@
 from copy import deepcopy
+import hashlib
+import json
 
 from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.minecraft.eac_runtime import MinecraftEACError, MinecraftEACRuntime
-from benchmarks.minecraft.k11_analysis import analyze_trace, replay_admissibility, validate_p0_analysis
+from benchmarks.minecraft.k11_analysis import (
+    analyze_prospective_trace, analyze_trace, replay_admissibility, validate_p0_analysis,
+)
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
-from benchmarks.minecraft.k11_trace import K11TraceRecorder, K11TraceScope, use_scope
+from benchmarks.minecraft.k11_trace import (
+    K11TraceRecorder, K11TraceScope, PROSPECTIVE_TRACE_SCHEMA_VERSION,
+    canonical_trace_bytes, use_scope,
+)
 
 
 def _mine(**kwargs):
@@ -489,3 +496,147 @@ def test_k11_p0_analysis_rejects_malformed_validation_structures() -> None:
         "actions": [],
     })
     assert result["valid"] is False
+
+
+def _prospective(artifact):
+    value = deepcopy(artifact)
+    value["schema_version"] = "minecraft-k11-trace/3"
+    events = value["events"]
+    start = min(event["monotonic_ns"] for event in events)
+    end = max(event["monotonic_ns"] for event in events) + 1
+    in_window = [event for event in events if start <= event["monotonic_ns"] < end]
+    value["measurement_cut"] = {
+        "schema_version": "minecraft-k11-measurement-cut/1",
+        "boundary": "[open,close)",
+        "window_open_monotonic_ns": start, "window_close_monotonic_ns": end,
+        "close_reason": "natural_runtime_terminal", "close_sequence": max(event["seq"] for event in events),
+        "event_prefix_high_water_sequence": max(event["seq"] for event in events),
+        "in_window_event_count": len(in_window),
+        "in_window_event_digest": "sha256:" + hashlib.sha256(canonical_trace_bytes(in_window)).hexdigest(),
+        "snapshot_valid": True, "snapshot_errors": [],
+        "censoring_inventory": {"items": [], "retention": {"capacity": 256}},
+    }
+    return value
+
+
+def test_k11_prospective_identity_and_v1_classification_compatibility() -> None:
+    runtime, trace = _runtime("k11-prospective-compatibility")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    runtime.execute_prepared(_prepare(runtime))
+    legacy = analyze_trace(trace.artifact())
+    prospective = analyze_prospective_trace(_prospective(trace.artifact()))
+    assert prospective["artifact_id"] == "minecraft-k11-prospective-analysis"
+    assert prospective["artifact_version"] == 1
+    assert prospective["taxonomy"] == legacy["taxonomy"]
+    assert prospective["denominators"] == legacy["denominators"]
+
+
+def test_k11_recorder_generated_prospective_analysis_is_eligible() -> None:
+    run_id = "k11-prospective-recorder-analysis"
+    trace = K11TraceRecorder(
+        run_id, schema_version=PROSPECTIVE_TRACE_SCHEMA_VERSION,
+        measurement_identity={
+            "run_id": run_id, "manifest_digest": "a" * 64,
+            "execution_revision": "b" * 40,
+            "runtime_digest": "sha256:" + "c" * 64,
+            "premanifest_identity": "d" * 64,
+            "validation_contract": "minecraft-k11-p0-validation-contract/2",
+            "trace_schema": PROSPECTIVE_TRACE_SCHEMA_VERSION,
+        },
+    )
+    runtime = MinecraftEACRuntime(
+        mode="dual_dag_advisory", run_id=run_id,
+        env_prechecks={"MineBlock": lambda unused: True}, audit_path=None,
+    )
+    instrument_runtime(runtime, trace)
+    opened = 1
+    horizon_seconds = 10_000_000
+    trace.record(
+        "k11.observation_window_opened", source="test", monotonic_ns=opened,
+        payload={
+            "configured_horizon_seconds": horizon_seconds,
+            "horizon_monotonic_ns": opened + horizon_seconds * 1_000_000_000,
+        },
+    )
+    scope = K11TraceScope(
+        run_id, task_id="task-1", actor_id="Alice",
+        agent_step_id="step-1", tool_call_id="tool-1",
+    )
+    with use_scope(scope):
+        trace.record("k11.agent_step_started", source="test")
+        trace.record("k11.model_call_started", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.model_call_completed", source="test", payload={"model_call_id": "model-1"})
+        trace.record("k11.tool_call_entered", source="test")
+        runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+        runtime.execute_prepared(_prepare(runtime))
+        trace.record("k11.tool_call_exited", source="test")
+        trace.record("k11.agent_step_completed", source="test")
+    closed = max(event["monotonic_ns"] for event in trace.events) + 1
+    trace.record_and_cut(
+        "k11.observation_window_closed", source="test", monotonic_ns=closed,
+        reason="natural_runtime_terminal", window_open_monotonic_ns=opened,
+        window_close_monotonic_ns=closed,
+        payload={
+            "reason": "natural_runtime_terminal",
+            "configured_horizon_seconds": horizon_seconds,
+            "window_close_monotonic_ns": closed, "shutdown_requested": False,
+        },
+        active_executions={
+            "items": [], "retention": {
+                "capacity": 128, "retained": 0,
+                "truncated": False, "dropped_count": 0,
+            },
+        },
+    )
+    artifact = trace.artifact()
+    analysis = analyze_trace(artifact)
+    assert analysis["measurement_analysis_eligible"] is True
+    assert validate_p0_analysis(analysis, artifact)["valid"] is True
+
+
+def test_k11_prospective_cut_digest_mismatch_fails_closed() -> None:
+    runtime, trace = _runtime("k11-prospective-cut-mismatch")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    runtime.execute_prepared(_prepare(runtime))
+    artifact = _prospective(trace.artifact())
+    artifact["events"][0]["payload"] = {"tampered": True}
+    try:
+        analyze_trace(artifact)
+    except ValueError as exc:
+        assert "digest" in str(exc)
+    else:
+        raise AssertionError("measurement cut mismatch was accepted")
+
+
+def test_k11_prospective_post_close_events_are_ignored_by_the_bound_cut() -> None:
+    runtime, trace = _runtime("k11-prospective-post-close")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    runtime.execute_prepared(_prepare(runtime))
+    artifact = _prospective(trace.artifact())
+    baseline = analyze_trace(artifact)
+    post_close = deepcopy(artifact["events"][-1])
+    post_close.update({"seq": artifact["measurement_cut"]["event_prefix_high_water_sequence"] + 1,
+                       "event_id": "post-close-evidence",
+                       "event_type": "k11.eac_evidence_ingested",
+                       "monotonic_ns": artifact["measurement_cut"]["window_close_monotonic_ns"] + 1})
+    artifact["events"].append(post_close)
+    assert analyze_trace(artifact)["taxonomy"] == baseline["taxonomy"]
+
+
+def test_k11_prospective_no_primary_and_natural_unresolved_are_ineligible() -> None:
+    runtime, trace = _runtime("k11-prospective-unresolved")
+    runtime.ingest_target_observation("Alice", "MineBlock", {"x": 1, "y": 2, "z": 3})
+    _prepare(runtime)
+    result = analyze_prospective_trace(_prospective(trace.artifact()))
+    assert result["prospective_eligible"] is False
+    assert result["actions"][0]["qc_state"] == "disposition_unresolved"
+
+    empty = _prospective(trace.artifact())
+    empty["events"] = [e for e in empty["events"] if e["event_type"] != "k11.eac_action_prepared"]
+    high_water = max(e["seq"] for e in empty["events"])
+    empty["measurement_cut"]["close_sequence"] = high_water
+    empty["measurement_cut"]["event_prefix_high_water_sequence"] = high_water
+    in_window = [e for e in empty["events"] if empty["measurement_cut"]["window_open_monotonic_ns"] <= e["monotonic_ns"] < empty["measurement_cut"]["window_close_monotonic_ns"]]
+    empty["measurement_cut"]["in_window_event_count"] = len(in_window)
+    empty["measurement_cut"]["in_window_event_digest"] = "sha256:" + hashlib.sha256(canonical_trace_bytes(in_window)).hexdigest()
+    assert analyze_prospective_trace(empty)["prospective_eligible"] is False

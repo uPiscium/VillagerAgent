@@ -3,7 +3,7 @@
 Status: **DRAFT — NOT FROZEN**  
 Protocol identity: `minecraft-eac-k11-natural-prevalence`  
 Draft version: `0.2`<br>
-Issue lineage: `#511`, `#533`<br>
+Issue lineage: `#511`, `#533`, `#535`<br>
 Subject repository: `upiscium/VillagerAgent`  
 Audited base before this draft: `66a904de8af2b0bbaf79071628f06bed91a40078`
 
@@ -141,6 +141,35 @@ Hidden evaluator/world truth does not constitute K11 semantic invalidation unles
 Runtime freshness is not objective world correctness.
 
 ## 9. K11 trace architecture
+
+### 9.1 Prospective measurement cut (#535)
+
+The final prospective trace uses `minecraft-k11-trace/3` and carries one
+top-level `measurement_cut` with schema `minecraft-k11-measurement-cut/1`.
+The exact cut fields are `schema_version`, `boundary` (`[open,close)`),
+`window_open_monotonic_ns`, `window_close_monotonic_ns`, `close_reason`,
+`identity`, `close_sequence`, `event_prefix_high_water_sequence`,
+`in_window_event_count`, `in_window_event_digest` (`sha256:` plus the digest of
+canonical exported in-window events), `evidence_state_event_count`,
+`evidence_state_digest`, `snapshot_state_digest`, `snapshot_valid`,
+`snapshot_errors`, and the bounded `active_executions`, `open_lifecycles`,
+`prepared_requests`, `evidence_high_water`, and `censoring_inventory`
+collections (`items` and complete retention metadata). Analysis fails closed
+on any missing, malformed, or mismatching binding. The prospective analysis
+identity is `minecraft-k11-prospective-analysis/1`; the preserved `/2` trace
+analysis remains `minecraft-k11-trace-analysis-draft` version 1.
+
+`identity` has exactly `run_id`, `manifest_digest`, `execution_revision`,
+`runtime_digest`, `premanifest_identity`, `validation_contract`, and
+`trace_schema`; it is included in `snapshot_state_digest` and independently
+correlated with the parent runner authority.
+
+For a fixed observation horizon, the cut is authoritative: post-close decision,
+native-effect, and evidence events are never allowed to complete or alter an
+action's classification. A natural-terminal unresolved disposition remains
+unresolved and makes the prospective result ineligible; it is not converted to
+censoring. A trace with no primary actions is likewise ineligible, rather than
+being interpreted as zero prevalence.
 
 K11 introduces a dedicated append-only in-memory trace for all new K11 high-frequency instrumentation.
 

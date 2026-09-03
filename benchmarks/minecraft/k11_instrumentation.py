@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from benchmarks.minecraft.k11_trace import (
     K11TraceRecorder,
+    PROSPECTIVE_TRACE_SCHEMA_VERSION,
     K11TraceScope,
     current_scope,
     use_scope,
@@ -274,17 +275,44 @@ class _ObservationWindow:
             self._closed = True
             self._horizon_reached = reason == "fixed_observation_horizon"
             self.closed_at = close_ns
-        self.trace.record(
-            "k11.observation_window_closed",
-            source="GlobalController.run",
-            payload={
-                "reason": reason,
-                "configured_horizon_seconds": self.horizon_seconds,
-                "window_close_monotonic_ns": self.closed_at,
-                "shutdown_requested": shutdown_requested,
-            },
-            monotonic_ns=self.closed_at,
+        payload = {
+            "reason": reason,
+            "configured_horizon_seconds": self.horizon_seconds,
+            "window_close_monotonic_ns": self.closed_at,
+            "shutdown_requested": shutdown_requested,
+        }
+        if self.trace.schema_version != PROSPECTIVE_TRACE_SCHEMA_VERSION:
+            self.trace.record("k11.observation_window_closed", source="GlobalController.run",
+                              payload=payload, monotonic_ns=self.closed_at)
+            return True
+        freeze = getattr(getattr(self, "controller", None), "with_execution_lock_nonblocking", None)
+        if not callable(freeze):
+            self.trace.record_and_cut("k11.observation_window_closed", source="GlobalController.run",
+                                      payload=payload, monotonic_ns=self.closed_at,
+                                      reason=reason, window_open_monotonic_ns=self.opened_at,
+                                      window_close_monotonic_ns=self.closed_at,
+                                      snapshot_errors=["execution snapshot API unavailable"])
+            return True
+        pending_cut = []
+        def begin_cut(snapshot):
+            errors = snapshot.get("errors", []) if isinstance(snapshot, Mapping) else ["malformed execution snapshot"]
+            active = snapshot if isinstance(snapshot, Mapping) else None
+            pending_cut.append(self.trace.begin_record_and_cut(
+                "k11.observation_window_closed",
+                source="GlobalController.run",
+                payload=payload, monotonic_ns=self.closed_at, reason=reason,
+                window_open_monotonic_ns=self.opened_at,
+                window_close_monotonic_ns=self.closed_at,
+                active_executions=active, snapshot_errors=errors,
+            ))
+        freeze(
+            begin_cut,
+            cutoff_monotonic_ns=self.closed_at,
+            seal_admission=True,
         )
+        if not pending_cut:
+            raise RuntimeError("execution snapshot callback did not create measurement cut")
+        self.trace.finalize_record_and_cut(pending_cut[0])
         return True
 
     def _on_horizon(self):

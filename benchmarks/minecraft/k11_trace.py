@@ -11,12 +11,14 @@ import json
 import threading
 import time
 import math
-from contextlib import contextmanager
+from copy import deepcopy
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from itertools import count
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from benchmarks.common.eac.canonical import canonical_bytes, thaw_json
@@ -24,6 +26,22 @@ from benchmarks.common.eac.model import ExactRequest, Proposition, PropositionKe
 
 
 TRACE_SCHEMA_VERSION = "minecraft-k11-trace/2"
+PROSPECTIVE_TRACE_SCHEMA_VERSION = "minecraft-k11-trace/3"
+MEASUREMENT_CUT_SCHEMA_VERSION = "minecraft-k11-measurement-cut/1"
+MEASUREMENT_CUT_KEYS = frozenset({
+    "schema_version", "boundary", "window_open_monotonic_ns",
+    "window_close_monotonic_ns", "close_reason", "identity",
+    "close_sequence", "event_prefix_high_water_sequence",
+    "in_window_event_count", "in_window_event_digest",
+    "evidence_state_event_count", "evidence_state_digest",
+    "snapshot_state_digest", "snapshot_valid", "snapshot_errors",
+    "active_executions", "open_lifecycles", "prepared_requests",
+    "evidence_high_water", "censoring_inventory",
+})
+MEASUREMENT_IDENTITY_KEYS = frozenset({
+    "run_id", "manifest_digest", "execution_revision", "runtime_digest",
+    "premanifest_identity", "validation_contract", "trace_schema",
+})
 PRIMARY_EFFECT_ACTIONS = frozenset({
     "MineBlock",
     "placeBlock",
@@ -48,6 +66,23 @@ K11_EVENT_TYPES = frozenset({
     "k11.observation_window_opened",
     "k11.observation_window_closed",
 })
+
+
+def canonical_trace_bytes(value: Any) -> bytes:
+    """Canonical JSON bytes for trace artifacts, including large monotonic ns."""
+    return json.dumps(
+        plain_value(value), ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _freeze_trace_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            str(key): _freeze_trace_value(item) for key, item in value.items()
+        })
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_trace_value(item) for item in value)
+    return value
 
 WINDOW_REASONS = frozenset({"fixed_observation_horizon", "natural_runtime_terminal"})
 
@@ -407,23 +442,31 @@ def _event_precedes(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool
 
 
 class K11TraceRecorder:
-    """Append-only process-local recorder with no explicit lock.
+    """Append-only process-local recorder.
 
-    K11 currently executes on CPython. ``next(itertools.count)`` and
-    ``list.append`` are serialized by the interpreter lock; exported events are
-    sorted by the explicit sequence. EAC semantic ordering is additionally
-    linearized by the pre-existing ``MinecraftEACRuntime`` RLock at hook sites.
-    P0 must reject the instrumentation if these assumptions do not hold.
+    Legacy ``/2`` ordering remains unchanged. Prospective ``/3`` additionally
+    uses a recorder-local lock so appending the close marker and freezing the
+    measurement cut have one linearization point. This lock is not shared with
+    the EAC runtime and does not create a prepare/evidence/execute barrier.
     """
 
-    def __init__(self, run_id: str):
+    def __init__(self, run_id: str, *, schema_version: str = TRACE_SCHEMA_VERSION,
+                 measurement_identity: Mapping[str, Any] | None = None):
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("K11 trace run_id must be a non-empty string")
         self.run_id = run_id
+        if schema_version not in (TRACE_SCHEMA_VERSION, PROSPECTIVE_TRACE_SCHEMA_VERSION):
+            raise ValueError("unsupported K11 trace schema version")
+        self.schema_version = schema_version
+        self.measurement_identity = plain_value(dict(measurement_identity or {}))
         self._sequence = count(1)
         self._identity_sequence = count(1)
         self.events: list[dict[str, Any]] = []
         self.instrumentation_errors: list[str] = []
+        self._cut_lock = threading.RLock()
+        self._measurement_cut: dict[str, Any] | None = None
+        self._measurement_cut_pending = False
+        self._measurement_cut_pending_token = None
 
     def new_identity(self, kind: str, *, actor_id: str | None = None) -> str:
         ordinal = next(self._identity_sequence)
@@ -440,25 +483,39 @@ class K11TraceRecorder:
     ) -> dict[str, Any] | None:
         """Append one small observed fact; tracing failures are non-authoritative."""
         try:
-            sequence = next(self._sequence)
-            selected_scope = scope if scope is not None else current_scope()
-            event = {
-                "schema_version": TRACE_SCHEMA_VERSION,
-                "run_id": self.run_id,
-                "seq": sequence,
-                "event_id": f"{self.run_id}:k11:{sequence}",
-                "event_type": event_type,
-                "source": source,
-                "task_id": selected_scope.task_id if selected_scope else None,
-                "actor_id": selected_scope.actor_id if selected_scope else None,
-                "agent_step_id": selected_scope.agent_step_id if selected_scope else None,
-                "tool_call_id": selected_scope.tool_call_id if selected_scope else None,
-                "payload": dict(payload or {}),
-                "monotonic_ns": time.monotonic_ns() if monotonic_ns is None else monotonic_ns,
-                "thread_id": threading.get_ident(),
-            }
-            self.events.append(event)
-            return event
+            guard = (
+                self._cut_lock
+                if self.schema_version == PROSPECTIVE_TRACE_SCHEMA_VERSION
+                else nullcontext()
+            )
+            with guard:
+                sequence = next(self._sequence)
+                selected_scope = scope if scope is not None else current_scope()
+                event = {
+                    "schema_version": self.schema_version,
+                    "run_id": self.run_id,
+                    "seq": sequence,
+                    "event_id": f"{self.run_id}:k11:{sequence}",
+                    "event_type": event_type,
+                    "source": source,
+                    "task_id": selected_scope.task_id if selected_scope else None,
+                    "actor_id": selected_scope.actor_id if selected_scope else None,
+                    "agent_step_id": selected_scope.agent_step_id if selected_scope else None,
+                    "tool_call_id": selected_scope.tool_call_id if selected_scope else None,
+                    "payload": (
+                        plain_value(dict(payload or {}))
+                        if self.schema_version == PROSPECTIVE_TRACE_SCHEMA_VERSION
+                        else dict(payload or {})
+                    ),
+                    "monotonic_ns": time.monotonic_ns() if monotonic_ns is None else monotonic_ns,
+                    "thread_id": threading.get_ident(),
+                }
+                if self.schema_version == PROSPECTIVE_TRACE_SCHEMA_VERSION:
+                    stored_event = _freeze_trace_value(event)
+                    self.events.append(stored_event)
+                    return plain_value(stored_event)
+                self.events.append(event)
+                return event
         except BaseException as exc:
             try:
                 self.instrumentation_errors.append(type(exc).__name__)
@@ -467,20 +524,209 @@ class K11TraceRecorder:
             return None
 
     def artifact(self) -> dict[str, Any]:
+        guard = (
+            self._cut_lock
+            if self.schema_version == PROSPECTIVE_TRACE_SCHEMA_VERSION
+            else nullcontext()
+        )
+        with guard:
+            raw_events = list(self.events)
+            instrumentation_errors = list(self.instrumentation_errors)
+            measurement_cut = deepcopy(self._measurement_cut)
         events: list[dict[str, Any]] = []
-        for raw in sorted(self.events, key=lambda item: item.get("seq", 0)):
+        for raw in sorted(raw_events, key=lambda item: item.get("seq", 0)):
             event = plain_value(raw)
             request = event.get("payload", {}).get("exact_request")
             if isinstance(request, Mapping):
                 event["payload"]["exact_request_digest"] = exact_request_digest(request)
             events.append(event)
-        return {
-            "schema_version": TRACE_SCHEMA_VERSION,
+        result = {
+            "schema_version": self.schema_version,
             "run_id": self.run_id,
             "event_count": len(events),
-            "instrumentation_errors": list(self.instrumentation_errors),
+            "instrumentation_errors": instrumentation_errors,
             "events": events,
         }
+        if self.schema_version == PROSPECTIVE_TRACE_SCHEMA_VERSION:
+            result["measurement_cut"] = measurement_cut
+        return result
+
+    def measurement_cut(self, *, reason: str = "explicit",
+                        window_open_monotonic_ns: int | None = None,
+                        window_close_monotonic_ns: int | None = None,
+                        active_executions: Mapping[str, Any] | None = None,
+                        snapshot_errors: list[str] | None = None,
+                        _frozen_raw_events: list[Mapping[str, Any]] | None = None,
+                        _pending_token=None) -> dict[str, Any]:
+        """Atomically close the recorder and return a prospective prefix.
+
+        The cut owns both the last append and the close operation.  Callers get
+        an independent projection; later mutation of it cannot affect the
+        recorder. Diagnostics may continue appending after the cut.
+        """
+        if self.schema_version != PROSPECTIVE_TRACE_SCHEMA_VERSION:
+            raise ValueError("measurement cuts require prospective trace schema /3")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("measurement cut reason must be a non-empty string")
+        with self._cut_lock:
+            if (self._measurement_cut_pending
+                    and _pending_token is not self._measurement_cut_pending_token):
+                raise ValueError("measurement cut is owned by another pending operation")
+            if self._measurement_cut is None:
+                if _frozen_raw_events is None:
+                    events = _export_trace_events(self.events)
+                else:
+                    events = _export_trace_events(_frozen_raw_events)
+                opened = window_open_monotonic_ns
+                closed = window_close_monotonic_ns
+                if opened is None:
+                    opened = min((e.get("monotonic_ns", 0) for e in events), default=0)
+                if closed is None:
+                    closed = max((e.get("monotonic_ns", 0) for e in events), default=opened)
+                in_window = [e for e in events if opened <= e.get("monotonic_ns", -1) < closed]
+                close_rows = [e for e in events if e.get("event_type") == "k11.observation_window_closed"]
+                high_water = (close_rows[-1].get("seq") if close_rows else
+                              (events[-1]["seq"] if events else 0))
+                digest = "sha256:" + hashlib.sha256(canonical_trace_bytes(in_window)).hexdigest()
+                errors = list(snapshot_errors or [])
+                required_identity = (
+                    "run_id", "manifest_digest", "execution_revision", "runtime_digest",
+                    "premanifest_identity", "validation_contract", "trace_schema",
+                )
+                if any(
+                    not isinstance(self.measurement_identity.get(key), str)
+                    or not self.measurement_identity.get(key)
+                    for key in required_identity
+                ):
+                    errors.append("measurement identity unavailable")
+                if (not isinstance(active_executions, Mapping)
+                        or not isinstance(active_executions.get("items"), list)
+                        or not isinstance(active_executions.get("retention"), Mapping)):
+                    errors.append("active execution snapshot unavailable")
+                cut_items = _prospective_inventories(
+                    events, opened, closed, active_executions, reason=reason,
+                )
+                evidence_events = [
+                    event for event in events
+                    if event.get("event_type") == "k11.eac_evidence_ingested"
+                    and isinstance(event.get("seq"), int)
+                    and event["seq"] <= high_water
+                    and isinstance(event.get("monotonic_ns"), int)
+                    and event["monotonic_ns"] < closed
+                ]
+                snapshot_projection = {
+                    name: cut_items[name] for name in (
+                        "active_executions", "open_lifecycles", "prepared_requests",
+                        "evidence_high_water", "censoring_inventory",
+                    )
+                }
+                snapshot_projection["identity"] = self.measurement_identity
+                if any(value["retention"]["dropped_count"] for value in cut_items.values()):
+                    errors.append("prospective inventory overflow")
+                self._measurement_cut = {
+                    "schema_version": MEASUREMENT_CUT_SCHEMA_VERSION,
+                    "boundary": "[open,close)",
+                    "window_open_monotonic_ns": opened,
+                    "window_close_monotonic_ns": closed,
+                    "close_reason": reason,
+                    "identity": deepcopy(self.measurement_identity),
+                    "close_sequence": high_water,
+                    "event_prefix_high_water_sequence": high_water,
+                    "in_window_event_count": len(in_window),
+                    "in_window_event_digest": digest,
+                    "evidence_state_event_count": len(evidence_events),
+                    "evidence_state_digest": "sha256:" + hashlib.sha256(
+                        canonical_trace_bytes(evidence_events)
+                    ).hexdigest(),
+                    "snapshot_state_digest": "sha256:" + hashlib.sha256(
+                        canonical_trace_bytes(snapshot_projection)
+                    ).hexdigest(),
+                    "snapshot_valid": not errors,
+                    "snapshot_errors": errors,
+                    **cut_items,
+                }
+            cut = deepcopy(self._measurement_cut)
+            prefix = self.artifact()
+            result = {
+                "schema_version": PROSPECTIVE_TRACE_SCHEMA_VERSION,
+                "run_id": self.run_id,
+                "measurement_cut": cut,
+                "events": prefix["events"],
+                "event_count": len(prefix["events"]),
+                "instrumentation_errors": prefix["instrumentation_errors"],
+            }
+            return result
+
+    def begin_record_and_cut(self, event_type: str, *, source: str,
+                             payload: Mapping[str, Any] | None = None,
+                             scope: K11TraceScope | None = None,
+                             monotonic_ns: int | None = None,
+                             reason: str = "explicit",
+                             window_open_monotonic_ns: int | None = None,
+                             window_close_monotonic_ns: int | None = None,
+                             active_executions: Mapping[str, Any] | None = None,
+                             snapshot_errors: list[str] | None = None) -> dict[str, Any]:
+        """Linearize the close and copy its raw prefix without hashing it."""
+        with self._cut_lock:
+            if self._measurement_cut is not None or self._measurement_cut_pending:
+                raise ValueError("measurement cut is already pending or complete")
+            self.record(
+                event_type, source=source, payload=payload, scope=scope,
+                monotonic_ns=monotonic_ns,
+            )
+            self._measurement_cut_pending = True
+            token = object()
+            self._measurement_cut_pending_token = token
+            return {
+                "token": token,
+                "raw_events": list(self.events),
+                "reason": reason,
+                "window_open_monotonic_ns": window_open_monotonic_ns,
+                "window_close_monotonic_ns": window_close_monotonic_ns,
+                "active_executions": deepcopy(active_executions),
+                "snapshot_errors": list(snapshot_errors or []),
+            }
+
+    def finalize_record_and_cut(self, pending: Mapping[str, Any]) -> dict[str, Any]:
+        """Build inventories and digests after the controller lock is released."""
+        try:
+            return self.measurement_cut(
+                reason=pending["reason"],
+                window_open_monotonic_ns=pending["window_open_monotonic_ns"],
+                window_close_monotonic_ns=pending["window_close_monotonic_ns"],
+                active_executions=pending["active_executions"],
+                snapshot_errors=pending["snapshot_errors"],
+                _frozen_raw_events=list(pending["raw_events"]),
+                _pending_token=pending.get("token"),
+            )
+        finally:
+            with self._cut_lock:
+                if pending.get("token") is self._measurement_cut_pending_token:
+                    self._measurement_cut_pending = False
+                    self._measurement_cut_pending_token = None
+
+    def record_and_cut(self, event_type: str, *, source: str,
+                       payload: Mapping[str, Any] | None = None,
+                       scope: K11TraceScope | None = None,
+                       monotonic_ns: int | None = None,
+                       reason: str = "explicit",
+                       window_open_monotonic_ns: int | None = None,
+                       window_close_monotonic_ns: int | None = None,
+                       active_executions: Mapping[str, Any] | None = None,
+                       snapshot_errors: list[str] | None = None) -> dict[str, Any]:
+        """Append the boundary marker and close in one recorder critical section."""
+        pending = self.begin_record_and_cut(
+            event_type, source=source, payload=payload, scope=scope,
+            monotonic_ns=monotonic_ns, reason=reason,
+            window_open_monotonic_ns=window_open_monotonic_ns,
+            window_close_monotonic_ns=window_close_monotonic_ns,
+            active_executions=active_executions, snapshot_errors=snapshot_errors,
+        )
+        return self.finalize_record_and_cut(pending)
+
+    close_cut = measurement_cut
+    prospective_artifact = measurement_cut
+    cut = measurement_cut
 
     def write_json(self, path: str | Path) -> None:
         """Persist only after the measured runtime section has completed."""
@@ -492,8 +738,478 @@ class K11TraceRecorder:
         )
 
 
+def _retained(items, capacity=256):
+    items = list(items)
+    return {"items": items[:capacity], "retention": {
+        "capacity": capacity, "retained": min(len(items), capacity),
+        "truncated": len(items) > capacity,
+        "dropped_count": max(0, len(items) - capacity),
+    }}
+
+
+def _export_trace_events(raw_events) -> list[dict[str, Any]]:
+    events = []
+    for raw in sorted(raw_events, key=lambda item: item.get("seq", 0)):
+        event = plain_value(raw)
+        request = event.get("payload", {}).get("exact_request")
+        if isinstance(request, Mapping):
+            event["payload"]["exact_request_digest"] = exact_request_digest(request)
+        events.append(event)
+    return events
+
+
+def _prospective_inventories(
+    events, opened, closed, active_executions=None, *, reason="fixed_observation_horizon",
+):
+    """Bounded, replay-safe inventories for the prospective cut."""
+    limit = 256
+    if type(opened) is not int or type(closed) is not int or opened >= closed:
+        opened, closed = 0, 0
+    in_window = [
+        e for e in events if isinstance(e, Mapping)
+        and isinstance(e.get("monotonic_ns"), int)
+        and opened <= e["monotonic_ns"] < closed
+    ]
+    def ids(kind: str, field: str = "candidate_id") -> list[str]:
+        values = []
+        for event in in_window:
+            if event.get("event_type") != kind:
+                continue
+            payload = event.get("payload", {})
+            request = payload.get("exact_request", {}) if isinstance(payload, Mapping) else {}
+            value = request.get(field) if isinstance(request, Mapping) else None
+            if isinstance(value, str) and value and value not in values:
+                values.append(value)
+        return values
+    prepared = ids("k11.eac_action_prepared")
+    disposed = ids("k11.eac_execution_decision_attempted")
+    scoped = {"events": in_window}
+    for event in in_window:
+        if event.get("event_type") != "k11.eac_action_prepared":
+            continue
+        if derive_positive_disposition(scoped, event) is not None:
+            request = event.get("payload", {}).get("exact_request", {})
+            if isinstance(request, Mapping) and isinstance(request.get("candidate_id"), str):
+                disposed.append(request["candidate_id"])
+    lifecycle_starts = {"k11.agent_step_started": "agent_step_id", "k11.tool_call_entered": "tool_call_id", "k11.model_call_started": "model_call_id"}
+    open_items = []
+    for start_type, field in lifecycle_starts.items():
+        def lifecycle_id(event):
+            if field in {"agent_step_id", "tool_call_id"}:
+                return event.get(field)
+            payload = event.get("payload")
+            return payload.get(field) if isinstance(payload, Mapping) else None
+        starts = {lifecycle_id(e): e for e in in_window if e.get("event_type") == start_type if lifecycle_id(e)}
+        terminal_types = {"k11.agent_step_started": ("k11.agent_step_completed",), "k11.tool_call_entered": ("k11.tool_call_exited",), "k11.model_call_started": ("k11.model_call_completed", "k11.model_call_failed")}[start_type]
+        if terminal_types:
+            done = {lifecycle_id(e) for e in in_window if e.get("event_type") in terminal_types}
+            for value, event in starts.items():
+                if value not in done:
+                    payload = event.get("payload", {})
+                    open_items.append({"kind": field, "id": value,
+                                       "start_sequence": event.get("seq"),
+                                       "start_monotonic_ns": event.get("monotonic_ns"),
+                                       "scope": {key: event.get(key) for key in ("actor_id", "task_id", "agent_step_id", "tool_call_id")},
+                                       "action": payload.get("tool_name") if isinstance(payload, Mapping) else None})
+    open_count = len(open_items)
+    entered = {
+        e["payload"]["exact_request"]["candidate_id"]: e
+        for e in in_window
+        if e.get("event_type") == "k11.eac_native_effect_entered"
+        and isinstance(e.get("payload"), Mapping)
+        and isinstance(e["payload"].get("exact_request"), Mapping)
+        and isinstance(e["payload"]["exact_request"].get("candidate_id"), str)
+        and e["payload"]["exact_request"]["candidate_id"]
+    }
+    completed = {
+        e["payload"]["exact_request"].get("candidate_id")
+        for e in in_window
+        if e.get("event_type") == "k11.eac_native_effect_completed"
+        and isinstance(e.get("payload"), Mapping)
+        and isinstance(e["payload"].get("exact_request"), Mapping)
+        and isinstance(e["payload"]["exact_request"].get("candidate_id"), str)
+        and e["payload"]["exact_request"]["candidate_id"]
+    }
+    for value, event in entered.items():
+        if value and value not in completed:
+            request = event.get("payload", {}).get("exact_request")
+            action = request.get("action") if isinstance(request, Mapping) else None
+            open_items.append({"kind": "native", "id": value,
+                               "start_sequence": event.get("seq"),
+                               "start_monotonic_ns": event.get("monotonic_ns"),
+                               "scope": {key: event.get(key) for key in ("actor_id", "task_id", "agent_step_id", "tool_call_id")},
+                               "action": (action.get("identity")
+                                          if isinstance(action, Mapping) else None)})
+    open_count = len(open_items)
+    open_items = sorted(open_items, key=lambda item: (item.get("kind", ""), str(item.get("id", ""))))
+    prepared_items = []
+    for event in in_window:
+        if event.get("event_type") != "k11.eac_action_prepared":
+            continue
+        payload = event.get("payload", {})
+        request = payload.get("exact_request") if isinstance(payload, Mapping) else None
+        if isinstance(request, Mapping):
+            prepared_items.append({"exact_request": request,
+                                   "digest": exact_request_digest(request),
+                                   "start_sequence": event.get("seq"),
+                                   "start_monotonic_ns": event.get("monotonic_ns"),
+                                   "scope": {key: event.get(key) for key in ("actor_id", "task_id", "agent_step_id", "tool_call_id")},
+                                   "disposition_known_at_cut": request.get("candidate_id") in disposed})
+    censored = []
+    for item in prepared_items:
+        if not item["disposition_known_at_cut"]:
+            request = item["exact_request"]
+            censored.append({"kind": "prepared", "id": request.get("candidate_id"),
+                             "start_sequence": item["start_sequence"], "start_monotonic_ns": item["start_monotonic_ns"],
+                             "scope": item["scope"], "action": request.get("action"),
+                              "censor_reason": reason})
+    for item in open_items:
+        censored.append({**item, "censor_reason": reason})
+    evidence_by_key = {}
+    evidence_prefix = [
+        event for event in events if isinstance(event, Mapping)
+        if event.get("event_type") == "k11.eac_evidence_ingested"
+        and isinstance(event.get("monotonic_ns"), int)
+        and event["monotonic_ns"] < closed
+    ]
+    for event in evidence_prefix:
+        if event.get("event_type") == "k11.eac_evidence_ingested":
+            payload = event.get("payload", {})
+            key = (event.get("actor_id"), payload.get("source_stream_id"))
+            current = evidence_by_key.get(key)
+            revision = payload.get("revision")
+            newer = (current is not None and isinstance(revision, int)
+                     and isinstance(current.get("revision"), int)
+                     and revision > current["revision"])
+            if current is None or newer:
+                evidence_by_key[key] = {"actor_id": key[0], "source_stream_id": key[1],
+                                        "revision": revision, "high_water_sequence": event.get("seq")}
+    evidence = list(evidence_by_key.values())
+    active_snapshot = active_executions if isinstance(active_executions, Mapping) else {}
+    active_items = active_snapshot.get("items")
+    if not isinstance(active_items, list):
+        active_items = []
+    execution_items = [
+        dict(item) for item in active_items
+        if isinstance(item, Mapping)
+    ]
+    execution_retention = active_snapshot.get("retention")
+    execution_collection = (
+        {"items": execution_items, "retention": dict(execution_retention)}
+        if isinstance(execution_retention, Mapping)
+        else _retained(execution_items, capacity=128)
+    )
+    return {
+        "active_executions": execution_collection,
+        "open_lifecycles": _retained(open_items),
+        "prepared_requests": _retained(prepared_items),
+        "evidence_high_water": _retained(evidence),
+        "censoring_inventory": _retained(censored),
+    }
+
+
+def _validate_prospective_trace(
+    artifact: Mapping[str, Any], *, require_primary: bool = False,
+) -> dict[str, Any]:
+    """Fail-closed validation for a recorder-owned prospective measurement cut."""
+    errors: list[str] = []
+    if artifact.get("schema_version") != PROSPECTIVE_TRACE_SCHEMA_VERSION:
+        errors.append("prospective trace schema is invalid")
+    events = artifact.get("events")
+    cut = artifact.get("measurement_cut")
+    if not isinstance(events, list) or not isinstance(cut, Mapping):
+        return {"valid": False, "errors": errors + ["measurement cut is malformed"]}
+    if any(not isinstance(event, Mapping) for event in events):
+        return {"valid": False, "errors": errors + ["prospective trace event is malformed"]}
+    if any(not isinstance(event.get("payload"), Mapping) for event in events):
+        return {"valid": False, "errors": errors + ["prospective trace payload is malformed"]}
+    candidate_events = {
+        "k11.eac_action_prepared", "k11.eac_execution_decision_attempted",
+        "k11.eac_native_effect_entered", "k11.eac_native_effect_completed",
+        "k11.eac_action_terminal",
+    }
+    for event in events:
+        if event.get("event_type") not in candidate_events:
+            continue
+        request = event["payload"].get("exact_request")
+        candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
+        if candidate_id is not None and (
+            not isinstance(candidate_id, str) or not candidate_id
+        ):
+            return {
+                "valid": False,
+                "errors": errors + ["prospective candidate identity is malformed"],
+                "warnings": [],
+            }
+    artifact_run_id = artifact.get("run_id")
+    if not isinstance(artifact_run_id, str) or not artifact_run_id:
+        errors.append("prospective trace run identity is invalid")
+    if any(event.get("run_id") != artifact_run_id for event in events):
+        errors.append("prospective trace event run identity is not correlated")
+    if any(event.get("schema_version") != PROSPECTIVE_TRACE_SCHEMA_VERSION for event in events):
+        errors.append("prospective trace event schema identity is not correlated")
+    if cut.get("schema_version") != MEASUREMENT_CUT_SCHEMA_VERSION:
+        errors.append("measurement cut schema is invalid")
+    if set(cut) != MEASUREMENT_CUT_KEYS:
+        errors.append("measurement cut field set is invalid")
+    high_water = cut.get("event_prefix_high_water_sequence")
+    if type(high_water) is not int:
+        errors.append("measurement cut high-water mark is invalid")
+    opened, closed = cut.get("window_open_monotonic_ns"), cut.get("window_close_monotonic_ns")
+    in_window = [e for e in events if isinstance(e, Mapping) and isinstance(e.get("monotonic_ns"), int)
+                 and isinstance(opened, int) and isinstance(closed, int)
+                 and opened <= e["monotonic_ns"] < closed]
+    expected = "sha256:" + hashlib.sha256(canonical_trace_bytes(in_window)).hexdigest()
+    if cut.get("in_window_event_digest") != expected:
+        errors.append("measurement cut prefix digest is invalid")
+    if cut.get("boundary") != "[open,close)" or not isinstance(opened, int) or not isinstance(closed, int) or opened >= closed:
+        errors.append("measurement cut boundary metadata is invalid")
+    if cut.get("in_window_event_count") != len(in_window):
+        errors.append("measurement cut event count is invalid")
+    if artifact.get("event_count") != len(events):
+        errors.append("prospective artifact event count is invalid")
+    close_events = [e for e in events if e.get("event_type") == "k11.observation_window_closed"]
+    open_events = [e for e in events if e.get("event_type") == "k11.observation_window_opened"]
+    close_seq = close_events[0].get("seq") if len(close_events) == 1 else None
+    if close_seq != cut.get("close_sequence"):
+        errors.append("measurement cut close sequence is invalid")
+    if close_seq != high_water:
+        errors.append("measurement cut event prefix high-water is invalid")
+    if len(close_events) != 1 or not isinstance(close_events[0].get("payload"), Mapping) or close_events[0]["payload"].get("reason") != cut.get("close_reason"):
+        errors.append("measurement cut close metadata is invalid")
+    if (len(open_events) != 1 or open_events[0].get("monotonic_ns") != opened
+            or len(close_events) != 1 or close_events[0].get("monotonic_ns") != closed
+            or close_events[0].get("payload", {}).get("window_close_monotonic_ns") != closed):
+        errors.append("measurement cut bounds do not match observation window")
+    if any(isinstance(e.get("seq"), int) and e["seq"] > close_seq
+           and isinstance(e.get("monotonic_ns"), int) and e["monotonic_ns"] < closed
+           for e in events if isinstance(e, Mapping) and isinstance(close_seq, int)):
+        errors.append("late pre-close event invalidates prospective cut")
+    measured_events = [
+        event for event in events
+        if event.get("event_type") == "k11.observation_window_closed"
+        or (isinstance(event.get("seq"), int) and isinstance(high_water, int)
+            and event["seq"] <= high_water
+            and isinstance(event.get("monotonic_ns"), int)
+            and isinstance(closed, int) and event["monotonic_ns"] < closed)
+    ]
+    generic = validate_trace({
+        "schema_version": TRACE_SCHEMA_VERSION, "run_id": artifact.get("run_id"),
+        "events": [{**event, "schema_version": TRACE_SCHEMA_VERSION}
+                   for event in measured_events],
+    })
+    errors.extend(generic["errors"])
+    bounds = observation_window_bounds({"events": events})
+    expected_inventories = _prospective_inventories(
+        events, opened, closed, cut.get("active_executions"),
+        reason=cut.get("close_reason"),
+    )
+    evidence_events = [
+        event for event in events
+        if event.get("event_type") == "k11.eac_evidence_ingested"
+        and isinstance(event.get("seq"), int)
+        and isinstance(high_water, int) and event["seq"] <= high_water
+        and isinstance(event.get("monotonic_ns"), int)
+        and isinstance(closed, int) and event["monotonic_ns"] < closed
+    ]
+    expected_evidence_digest = "sha256:" + hashlib.sha256(
+        canonical_trace_bytes(evidence_events)
+    ).hexdigest()
+    if (cut.get("evidence_state_event_count") != len(evidence_events)
+            or cut.get("evidence_state_digest") != expected_evidence_digest):
+        errors.append("measurement cut evidence state binding is invalid")
+    lifecycle_specs = (
+        ("agent", "k11.agent_step_started", ("k11.agent_step_completed",),
+         lambda event: event.get("agent_step_id")),
+        ("tool", "k11.tool_call_entered", ("k11.tool_call_exited",),
+         lambda event: event.get("tool_call_id")),
+        ("model", "k11.model_call_started",
+         ("k11.model_call_completed", "k11.model_call_failed"),
+         lambda event: event.get("payload", {}).get("model_call_id")),
+        ("native", "k11.eac_native_effect_entered",
+         ("k11.eac_native_effect_completed",), _candidate_id),
+    )
+    for label, start_type, terminal_types, identity in lifecycle_specs:
+        starts_by_id: dict[Any, list[Mapping[str, Any]]] = {}
+        terminals_by_id: dict[Any, list[Mapping[str, Any]]] = {}
+        for event in in_window:
+            if event.get("event_type") == start_type:
+                lifecycle_id = identity(event)
+                if not isinstance(lifecycle_id, str) or not lifecycle_id:
+                    errors.append(f"prospective {label} lifecycle lacks identity")
+                    continue
+                starts_by_id.setdefault(lifecycle_id, []).append(event)
+            elif event.get("event_type") in terminal_types:
+                lifecycle_id = identity(event)
+                if not isinstance(lifecycle_id, str) or not lifecycle_id:
+                    errors.append(f"prospective {label} lifecycle lacks identity")
+                    continue
+                terminals_by_id.setdefault(lifecycle_id, []).append(event)
+        for lifecycle_id, starts in starts_by_id.items():
+            if lifecycle_id is None:
+                continue
+            terminals = terminals_by_id.get(lifecycle_id, [])
+            if len(starts) != 1 or len(terminals) > 1:
+                errors.append(f"prospective {label} lifecycle {lifecycle_id} is not one-to-one")
+            elif terminals and (
+                not isinstance(starts[0].get("seq"), int)
+                or not isinstance(terminals[0].get("seq"), int)
+                or starts[0]["seq"] >= terminals[0]["seq"]
+            ):
+                errors.append(f"prospective {label} lifecycle {lifecycle_id} is misordered")
+    for name in ("active_executions", "open_lifecycles", "prepared_requests",
+                 "evidence_high_water", "censoring_inventory"):
+        value = cut.get(name)
+        if (not isinstance(value, Mapping) or set(value) != {"items", "retention"}
+                or not isinstance(value.get("items"), list)):
+            errors.append(f"measurement cut {name} inventory is malformed")
+            continue
+        retention = value.get("retention")
+        if not isinstance(retention, Mapping) or set(retention) != {"capacity", "retained", "truncated", "dropped_count"}:
+            errors.append(f"measurement cut {name} retention is malformed")
+        else:
+            capacity = retention.get("capacity")
+            retained = retention.get("retained")
+            truncated = retention.get("truncated")
+            dropped = retention.get("dropped_count")
+            if (type(capacity) is not int or capacity < 0
+                    or type(retained) is not int or retained < 0
+                    or type(truncated) is not bool
+                    or type(dropped) is not int or dropped < 0):
+                errors.append(f"measurement cut {name} retention is malformed")
+            elif (retained != len(value["items"])
+                  or truncated is not (dropped > 0)
+                  or capacity < len(value["items"])):
+                errors.append(f"measurement cut {name} retention is inconsistent")
+            if type(dropped) is int and dropped > 0:
+                errors.append(f"measurement cut {name} inventory overflow")
+    for name in ("open_lifecycles", "prepared_requests", "evidence_high_water", "censoring_inventory"):
+        if cut.get(name) != expected_inventories[name]:
+            errors.append(f"measurement cut {name} inventory does not match frozen prefix")
+    snapshot_projection = {
+        name: cut.get(name) for name in (
+            "active_executions", "open_lifecycles", "prepared_requests",
+            "evidence_high_water", "censoring_inventory",
+        )
+    }
+    snapshot_projection["identity"] = cut.get("identity")
+    expected_snapshot_digest = "sha256:" + hashlib.sha256(
+        canonical_trace_bytes(snapshot_projection)
+    ).hexdigest()
+    if cut.get("snapshot_state_digest") != expected_snapshot_digest:
+        errors.append("measurement cut snapshot state digest is invalid")
+    identity = cut.get("identity")
+    required_identity = (
+        "run_id", "manifest_digest", "execution_revision", "runtime_digest",
+        "premanifest_identity", "validation_contract", "trace_schema",
+    )
+    if (not isinstance(identity, Mapping) or set(identity) != MEASUREMENT_IDENTITY_KEYS
+            or any(not isinstance(identity.get(key), str) or not identity.get(key)
+                   for key in required_identity)
+            or identity.get("run_id") != artifact_run_id
+            or identity.get("trace_schema") != PROSPECTIVE_TRACE_SCHEMA_VERSION):
+        errors.append("measurement cut identity binding is invalid")
+    active = cut.get("active_executions")
+    active_scopes = set()
+    if isinstance(active, Mapping):
+        active_items = active.get("items")
+        if not isinstance(active_items, list):
+            active_items = []
+        for item in active_items:
+            if (not isinstance(item, Mapping)
+                    or any(not isinstance(item.get(key), str) or not item.get(key)
+                           for key in ("execution_id", "task_id", "actor_id"))):
+                errors.append("measurement cut active execution identity is malformed")
+                continue
+            active_scopes.add((item["task_id"], item["actor_id"]))
+    open_collection = cut.get("open_lifecycles")
+    open_agent_scopes = set()
+    if isinstance(open_collection, Mapping) and isinstance(open_collection.get("items"), list):
+        for item in open_collection["items"]:
+            if not isinstance(item, Mapping):
+                continue
+            scope = item.get("scope")
+            if item.get("kind") == "agent_step_id" and isinstance(scope, Mapping):
+                open_agent_scopes.add((scope.get("task_id"), scope.get("actor_id")))
+    if active_scopes != open_agent_scopes:
+        errors.append("measurement cut active executions do not match open agent lifecycles")
+    if any(
+        type(value.get("retention", {}).get("dropped_count")) is int
+        and value["retention"]["dropped_count"] > 0
+        for value in expected_inventories.values()
+        if isinstance(value, Mapping) and isinstance(value.get("retention"), Mapping)
+    ):
+        errors.append("prospective inventory overflow")
+    if cut.get("snapshot_valid") is not True or cut.get("snapshot_errors"):
+        errors.append("prospective snapshot is invalid")
+    unresolved = expected_inventories["censoring_inventory"]["items"]
+    if bounds and bounds[2] == "fixed_observation_horizon" and unresolved:
+        # An in-flight lifecycle is an explicitly censored observation, not a
+        # malformed terminal lifecycle.
+        candidate_ids = {item.get("id") for item in unresolved
+                         if isinstance(item, Mapping) and item.get("kind") == "prepared"}
+        allowed = []
+        for error in errors:
+            if any(error.startswith(f"candidate {candidate_id} ") for candidate_id in candidate_ids):
+                if error.endswith("lacks exactly one disposition") or error.endswith("native entry/completion count differs"):
+                    continue
+            allowed.append(error)
+        errors[:] = allowed
+    if bounds and bounds[2] == "fixed_observation_horizon":
+        decisions = {
+            _candidate_id(event) for event in in_window
+            if event.get("event_type") == "k11.eac_execution_decision_attempted"
+        }
+        open_native = {
+            item.get("id") for item in unresolved
+            if isinstance(item, Mapping) and item.get("kind") == "native"
+        }
+        filtered = []
+        for error in errors:
+            if any(
+                error == f"candidate {candidate_id} has 0 terminal events"
+                for candidate_id in decisions if candidate_id
+            ):
+                continue
+            if any(
+                error == f"candidate {candidate_id} native entry/completion count differs"
+                for candidate_id in open_native if candidate_id
+            ):
+                continue
+            filtered.append(error)
+        errors[:] = filtered
+    if unresolved and (bounds is None or bounds[2] != "fixed_observation_horizon"):
+        errors.append("unresolved candidates require explicit fixed-horizon censoring")
+    if bounds and bounds[2] == "natural_runtime_terminal" and unresolved:
+        errors.append("natural-terminal prospective cut has unresolved candidates")
+    primary_prepared = []
+    for item in expected_inventories["prepared_requests"]["items"]:
+        request = item.get("exact_request") if isinstance(item, Mapping) else None
+        action = request.get("action") if isinstance(request, Mapping) else None
+        if isinstance(action, Mapping) and action.get("identity") in PRIMARY_EFFECT_ACTIONS:
+            primary_prepared.append(item)
+    if require_primary and not primary_prepared:
+        errors.append("prospective trace lacks a primary preparation")
+    return {"valid": not errors, "errors": errors, "warnings": generic.get("warnings", [])}
+
+
+def validate_prospective_trace(
+    artifact: Mapping[str, Any], *, require_primary: bool = False,
+) -> dict[str, Any]:
+    """Validate an untrusted prospective artifact without propagating shape errors."""
+    try:
+        return _validate_prospective_trace(artifact, require_primary=require_primary)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return {
+            "valid": False,
+            "errors": ["prospective trace structure is malformed"],
+            "warnings": [],
+        }
+
 def validate_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     """Validate P0 trace completeness without making prevalence claims."""
+    if artifact.get("schema_version") == PROSPECTIVE_TRACE_SCHEMA_VERSION:
+        return validate_prospective_trace(artifact)
     events = artifact.get("events")
     errors: list[str] = []
     warnings: list[str] = []
@@ -689,6 +1405,8 @@ def validate_p0_trace(artifact: Mapping[str, Any]) -> dict[str, Any]:
     validator is the admission gate for a pilot run: aggregate event presence is
     not sufficient, and every primary request must remain exactly correlated.
     """
+    if artifact.get("schema_version") == PROSPECTIVE_TRACE_SCHEMA_VERSION:
+        return validate_prospective_trace(artifact, require_primary=True)
     generic = validate_trace(artifact)
     errors = list(generic["errors"])
     events = artifact.get("events") if isinstance(artifact, Mapping) else None

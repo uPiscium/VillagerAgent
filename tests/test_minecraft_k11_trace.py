@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from benchmarks.common.eac import Proposition, PropositionKey
 from benchmarks.minecraft.eac_runtime import MinecraftEACError, MinecraftEACRuntime
 from benchmarks.minecraft.k11_instrumentation import instrument_runtime
@@ -12,7 +14,44 @@ from benchmarks.minecraft.k11_trace import (
     valid_evidence_ingestion,
     validate_p0_trace,
     validate_trace,
+    PROSPECTIVE_TRACE_SCHEMA_VERSION,
+    TRACE_SCHEMA_VERSION,
+    validate_prospective_trace,
 )
+
+
+def test_k11_recorder_selects_legacy_and_prospective_schema_and_retains_after_cut():
+    legacy = K11TraceRecorder("legacy")
+    legacy.record("k11.agent_step_started", source="test", monotonic_ns=1)
+    assert legacy.artifact()["schema_version"] == TRACE_SCHEMA_VERSION
+
+    recorder = K11TraceRecorder("prospective", schema_version=PROSPECTIVE_TRACE_SCHEMA_VERSION)
+    recorder.record("k11.observation_window_opened", source="test", monotonic_ns=1,
+                    payload={"configured_horizon_seconds": 1, "horizon_monotonic_ns": 1_000_000_001})
+    cut = recorder.record_and_cut("k11.observation_window_closed", source="test",
+        monotonic_ns=2, reason="natural_runtime_terminal",
+        window_open_monotonic_ns=1, window_close_monotonic_ns=2)
+    recorder.record("k11.agent_step_completed", source="test", monotonic_ns=3)
+    assert cut["schema_version"] == PROSPECTIVE_TRACE_SCHEMA_VERSION
+    assert len(recorder.artifact()["events"]) == 3
+    assert len(cut["events"]) == 2
+    assert validate_prospective_trace(cut)["valid"] is False  # no-primary is strict
+
+
+def test_k11_prospective_cut_digest_is_immutable_and_rejects_late_preclose_event():
+    recorder = K11TraceRecorder("prospective-late", schema_version=PROSPECTIVE_TRACE_SCHEMA_VERSION)
+    recorder.record("k11.observation_window_opened", source="test", monotonic_ns=1,
+                    payload={"configured_horizon_seconds": 1, "horizon_monotonic_ns": 1_000_000_001})
+    recorder.record_and_cut("k11.observation_window_closed", source="test", monotonic_ns=3,
+                            reason="natural_runtime_terminal", window_open_monotonic_ns=1,
+                            window_close_monotonic_ns=3)
+    recorder.record("k11.agent_step_completed", source="test", monotonic_ns=2)
+    artifact = recorder.artifact()
+    assert len(artifact["events"]) == 3
+    validation = validate_prospective_trace(artifact)
+    assert any("late pre-close" in error for error in validation["errors"])
+    artifact["measurement_cut"]["in_window_event_digest"] = "sha256:" + "0" * 64
+    assert validate_prospective_trace(artifact)["valid"] is False
 
 
 def _mine(*, player_name, x, y, z, emotion=None, murmur=""):
@@ -154,6 +193,196 @@ def _complete_p0_artifact(run_id="k11-p0-complete"):
         trace.record("k11.tool_call_exited", source="test")
         trace.record("k11.agent_step_completed", source="test")
     return _with_natural_window(trace.artifact())
+
+
+def _as_prospective(artifact, *, close_reason=None):
+    identity = {
+        "run_id": artifact["run_id"],
+        "manifest_digest": "a" * 64,
+        "execution_revision": "b" * 40,
+        "runtime_digest": "sha256:" + "c" * 64,
+        "premanifest_identity": "d" * 64,
+        "validation_contract": "minecraft-k11-p0-validation-contract/2",
+        "trace_schema": PROSPECTIVE_TRACE_SCHEMA_VERSION,
+    }
+    recorder = K11TraceRecorder(
+        artifact["run_id"], schema_version=PROSPECTIVE_TRACE_SCHEMA_VERSION,
+        measurement_identity=identity,
+    )
+    opened_ns = next(
+        event["monotonic_ns"] for event in artifact["events"]
+        if event["event_type"] == "k11.observation_window_opened"
+    )
+    for event in artifact["events"]:
+        scope = K11TraceScope(
+            artifact["run_id"], task_id=event.get("task_id"),
+            actor_id=event.get("actor_id"), agent_step_id=event.get("agent_step_id"),
+            tool_call_id=event.get("tool_call_id"),
+        )
+        if event["event_type"] == "k11.observation_window_closed":
+            reason = close_reason or event["payload"]["reason"]
+            payload = {**event["payload"], "reason": reason}
+            prior = [
+                row for row in artifact["events"]
+                if row["monotonic_ns"] < event["monotonic_ns"]
+            ]
+            completed_steps = {
+                row.get("agent_step_id") for row in prior
+                if row["event_type"] == "k11.agent_step_completed"
+            }
+            active_items = [
+                {
+                    "execution_id": f"test-execution:{row['agent_step_id']}",
+                    "task_id": str(row["task_id"]),
+                    "actor_id": row["actor_id"],
+                }
+                for row in prior
+                if row["event_type"] == "k11.agent_step_started"
+                and row.get("agent_step_id") not in completed_steps
+            ]
+            recorder.record_and_cut(
+                event["event_type"], source=event["source"], payload=payload,
+                scope=scope, monotonic_ns=event["monotonic_ns"], reason=reason,
+                window_open_monotonic_ns=opened_ns,
+                window_close_monotonic_ns=event["monotonic_ns"],
+                active_executions={
+                    "items": active_items, "retention": {
+                        "capacity": 128, "retained": len(active_items),
+                        "truncated": False, "dropped_count": 0,
+                    },
+                },
+            )
+        else:
+            recorder.record(
+                event["event_type"], source=event["source"], payload=event["payload"],
+                scope=scope, monotonic_ns=event["monotonic_ns"],
+            )
+    return recorder.artifact()
+
+
+def test_k11_prospective_complete_and_fixed_censored_traces_validate():
+    complete = _as_prospective(_complete_p0_artifact("prospective-complete"))
+    assert validate_trace(complete)["valid"] is True
+    assert validate_p0_trace(complete)["valid"] is True
+
+    fixed = _with_fixed_close_after(
+        _complete_p0_artifact("prospective-fixed-censor"),
+        "k11.eac_action_prepared",
+    )
+    censored = _as_prospective(fixed)
+    assert censored["measurement_cut"]["censoring_inventory"]["items"]
+    assert validate_trace(censored)["valid"] is True
+    assert validate_p0_trace(censored)["valid"] is True
+
+    decision_before_close = _as_prospective(_with_fixed_close_after(
+        _complete_p0_artifact("prospective-post-decision-cleanup"),
+        "k11.eac_execution_decision_attempted",
+    ))
+    assert validate_p0_trace(decision_before_close)["valid"] is True
+
+    native_before_close = _as_prospective(_with_fixed_close_after(
+        _complete_p0_artifact("prospective-post-native-cleanup"),
+        "k11.eac_native_effect_entered",
+    ))
+    assert any(
+        item["kind"] == "native"
+        for item in native_before_close["measurement_cut"]["censoring_inventory"]["items"]
+    )
+    assert validate_p0_trace(native_before_close)["valid"] is True
+
+    natural_unresolved = _as_prospective(fixed, close_reason="natural_runtime_terminal")
+    assert validate_trace(natural_unresolved)["valid"] is False
+
+
+def test_k11_prospective_cut_rejects_window_and_snapshot_identity_tampering():
+    artifact = _as_prospective(_complete_p0_artifact("prospective-tamper"))
+    artifact["measurement_cut"]["window_open_monotonic_ns"] += 1
+    assert any(
+        "bounds do not match" in error
+        for error in validate_trace(artifact)["errors"]
+    )
+
+    artifact = _as_prospective(_complete_p0_artifact("prospective-snapshot-tamper"))
+    artifact["measurement_cut"]["identity"]["manifest_digest"] = "e" * 64
+    assert any(
+        "snapshot state digest" in error
+        for error in validate_trace(artifact)["errors"]
+    )
+
+
+def test_k11_prospective_inventory_overflow_fails_closed():
+    artifact = _as_prospective(_complete_p0_artifact("prospective-overflow"))
+    retention = artifact["measurement_cut"]["prepared_requests"]["retention"]
+    retention["dropped_count"] = 1
+    retention["truncated"] = True
+
+    result = validate_trace(artifact)
+
+    assert result["valid"] is False
+    assert "measurement cut prepared_requests inventory overflow" in result["errors"]
+
+
+def test_k11_prospective_validation_rejects_malformed_payload_and_pending_cut_theft():
+    artifact = _as_prospective(_complete_p0_artifact("prospective-malformed"))
+    artifact["events"][-1]["payload"] = []
+    assert validate_trace(artifact)["valid"] is False
+
+    malformed_request = _as_prospective(_complete_p0_artifact("prospective-request"))
+    next(
+        event for event in malformed_request["events"]
+        if event["event_type"] == "k11.eac_native_effect_completed"
+    )["payload"]["exact_request"] = []
+    assert validate_trace(malformed_request)["valid"] is False
+
+    malformed_candidate = _as_prospective(
+        _complete_p0_artifact("prospective-candidate")
+    )
+    next(
+        event for event in malformed_candidate["events"]
+        if event["event_type"] == "k11.eac_native_effect_completed"
+    )["payload"]["exact_request"]["candidate_id"] = []
+    assert validate_trace(malformed_candidate)["valid"] is False
+
+    malformed_snapshot = _as_prospective(_complete_p0_artifact("prospective-snapshot"))
+    malformed_snapshot["measurement_cut"]["active_executions"] = []
+    assert validate_trace(malformed_snapshot)["valid"] is False
+
+    malformed_snapshot_items = _as_prospective(
+        _complete_p0_artifact("prospective-snapshot-items")
+    )
+    malformed_snapshot_items["measurement_cut"]["active_executions"]["items"] = None
+    assert validate_trace(malformed_snapshot_items)["valid"] is False
+
+    malformed_retention = _as_prospective(_complete_p0_artifact("prospective-retention"))
+    malformed_retention["measurement_cut"]["prepared_requests"]["retention"][
+        "dropped_count"
+    ] = "zero"
+    assert validate_trace(malformed_retention)["valid"] is False
+
+    malformed_action = _as_prospective(_complete_p0_artifact("prospective-action"))
+    next(
+        event for event in malformed_action["events"]
+        if event["event_type"] == "k11.eac_action_prepared"
+    )["payload"]["exact_request"]["action"] = []
+    assert validate_trace(malformed_action)["valid"] is False
+
+    malformed_bounds = _as_prospective(_complete_p0_artifact("prospective-bounds"))
+    malformed_bounds["measurement_cut"]["window_close_monotonic_ns"] = None
+    assert validate_trace(malformed_bounds)["valid"] is False
+
+    recorder = K11TraceRecorder(
+        "prospective-pending", schema_version=PROSPECTIVE_TRACE_SCHEMA_VERSION,
+    )
+    pending = recorder.begin_record_and_cut(
+        "k11.observation_window_closed", source="test", payload={},
+        monotonic_ns=2, window_open_monotonic_ns=1,
+        window_close_monotonic_ns=2,
+    )
+    with pytest.raises(ValueError, match="owned by another"):
+        recorder.measurement_cut(
+            window_open_monotonic_ns=1, window_close_monotonic_ns=2,
+        )
+    recorder.finalize_record_and_cut(pending)
 
 
 def _complete_zero_evidence_p0_artifact(run_id="k11-p0-zero-evidence"):
