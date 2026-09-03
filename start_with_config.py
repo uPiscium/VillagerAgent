@@ -151,6 +151,7 @@ def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = N
             else {"configured": False, "read_only_projection": True}
         ),
         "bridge_cleanup": dict(getattr(env, "bridge_cleanup_result", {}) or {}),
+        "runtime_failure_chain": getattr(env, "runtime_failure_chain", None),
         "minecraft_bridge_diagnostics": bridge_diagnostics,
         "collection_errors": collection_errors,
         "error": error,
@@ -187,10 +188,31 @@ def _runtime_checkpoint_result(env=None, tm=None, controller=None, *, attempt_id
 
 
 def _apply_runtime_cleanup_failure(result: dict, error: BaseException) -> dict:
-    if not isinstance(error, MinecraftBridgeCleanupError):
-        return result
+    cleanup_error = error if isinstance(error, MinecraftBridgeCleanupError) else None
+    if isinstance(cleanup_error, MinecraftBridgeCleanupError):
+        cleanup_failure = {
+            "error_type": type(cleanup_error).__name__,
+            "cleanup_result": dict(cleanup_error.cleanup_result),
+        }
+        primary_failure = (
+            {"error_type": type(error).__name__}
+            if cleanup_error is not error else None
+        )
+    else:
+        failure_chain = result.get("runtime_failure_chain")
+        if not isinstance(failure_chain, dict):
+            return result
+        cleanup_failure = failure_chain.get("cleanup_failure")
+        primary_failure = failure_chain.get("primary_failure")
+        if not isinstance(cleanup_failure, dict):
+            return result
+    cleanup_result = cleanup_failure.get("cleanup_result")
     result["score"] = {}
-    result["bridge_cleanup"] = dict(error.cleanup_result)
+    result["cleanup_failure"] = dict(cleanup_failure)
+    if isinstance(cleanup_result, dict):
+        result["bridge_cleanup"] = dict(cleanup_result)
+    if isinstance(primary_failure, dict):
+        result["primary_failure"] = dict(primary_failure)
     return result
 
 

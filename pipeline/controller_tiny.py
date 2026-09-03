@@ -3,6 +3,11 @@ import time
 import traceback
 import inspect
 import queue
+import os
+import sys
+from collections import OrderedDict
+from copy import deepcopy
+from types import MappingProxyType
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -68,10 +73,32 @@ class TaskExecutionGroup:
     feedback_interrupted: bool = False
     feedback_interruption: dict = field(default_factory=dict)
     feedback_worker: threading.Thread | None = None
+    phase_history: dict[str, list[dict]] = field(default_factory=dict)
+    phase_history_truncated: dict[str, int] = field(default_factory=dict)
+    phase_history_sequence: int = 0
+    execution_ids: dict[str, str] = field(default_factory=dict)
+    execution_started_markers: dict[str, dict] = field(default_factory=dict)
+    execution_completion_markers: dict[str, dict] = field(default_factory=dict)
 
 
 class ControllerShutdownError(RuntimeError):
     pass
+
+
+class _ExecutionWorkerInvocation:
+    """Callable wrapper that preserves the historical executor submit shape."""
+
+    def __init__(self, controller, group, agent, kwargs):
+        self.controller = controller
+        self.group = group
+        self.agent = agent
+        self.kwargs = kwargs
+        self.__self__ = agent
+
+    def __call__(self, task, **_submitted_kwargs):
+        return self.controller._run_execution_worker(
+            self.group, self.agent, self.kwargs, task,
+        )
 
 
 class JudgedTaskFailure(RuntimeError):
@@ -116,6 +143,12 @@ class GlobalController:
     STATE_DRAINING = "draining"
     STATE_RECONCILING = "reconciling"
     STATE_SHUTDOWN = "shutdown"
+    EXECUTION_HISTORY_LIMIT = 64
+    EXECUTION_HISTORY_TOTAL_LIMIT = 1024
+    EXECUTION_LIFECYCLE_LIMIT = EXECUTION_HISTORY_LIMIT + 2
+    EXECUTION_ACTOR_LIMIT = 64
+    SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT = 128
+    SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT = 128
     def __init__(self, llm_config: dict, task_manager: TaskManager, data_manager: DataManager, env: VillagerBench,
                  silent: bool = False, max_workers=4, tm_llm_config: dict = None, dm_llm_config: dict = None,
                  base_agent_config: dict = None, all_tools=None, minecraft_dual_dag_config: dict | None = None,
@@ -196,6 +229,9 @@ class GlobalController:
         # init thread pool
         self.executor = ThreadPoolExecutor(max_workers=max_workers)  # 可以根据需要调整max_workers的数量
         self._started_execution_groups: list[TaskExecutionGroup] = []
+        self._execution_history_index = OrderedDict()
+        self._execution_history_dropped_count = 0
+        self._next_execution_diagnostic_id = 0
 
         # init max task time
         self.max_task_time = 60 * 30 # 3min
@@ -222,6 +258,8 @@ class GlobalController:
         self.shutdown_complete = False
         self.movement_shutdown_result = None
         self.shutdown_context = None
+        self.shutdown_diagnostics = None
+        self._shutdown_authoritative_verdict = None
         self._result_claim_cursor = 0
         self._post_processing_interruption_ledger = {}
         self._feedback_interruption_ledger = {}
@@ -242,6 +280,10 @@ class GlobalController:
                     if future is None or future.done():
                         continue
                     token.set()
+                    if agent_name not in group.cancellation_requested:
+                        self._record_execution_history(
+                            group, agent_name, "token_requested",
+                        )
                     group.cancellation_requested.add(agent_name)
                     group.cancellation_requested_at.setdefault(agent_name, time.time())
             self._post_processing_cancellation_token().set()
@@ -252,12 +294,122 @@ class GlobalController:
     def _all_execution_groups(self):
         return list(getattr(self, "_started_execution_groups", ()))
 
+    def _bounded_diagnostic_groups(self):
+        groups = self._all_execution_groups()
+        incomplete = [group for group in groups if not group.completed]
+        selected = incomplete[-self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT:]
+        remaining = self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT - len(selected)
+        if remaining > 0:
+            completed = [group for group in groups if group.completed]
+            selected = completed[-remaining:] + selected
+        return selected, max(0, len(groups) - len(selected))
+
+    @staticmethod
+    def _redact_diagnostic_label(value) -> str:
+        value = str(value)
+        if len(value) > 80 or not all(
+            character.isalnum() or character in "_-.:" for character in value
+        ):
+            return "redacted"
+        return value
+
+    def _allocate_execution_diagnostic_id_locked(self) -> str:
+        self._next_execution_diagnostic_id = getattr(
+            self, "_next_execution_diagnostic_id", 0,
+        ) + 1
+        return f"execution-{self._next_execution_diagnostic_id:08d}"
+
+    def _record_execution_history(
+        self, group: TaskExecutionGroup, agent_name: str, event: str, *, phase=None,
+    ) -> None:
+        with self._execution_state_lock:
+            self._record_execution_history_locked(
+                group, agent_name, event, phase=phase,
+            )
+
+    def _record_execution_history_locked(
+        self, group: TaskExecutionGroup, agent_name: str, event: str, *, phase=None,
+    ) -> None:
+        """Record bounded metadata only; never include payloads or model content."""
+        group.phase_history_sequence += 1
+        entry = {
+            "sequence": group.phase_history_sequence,
+            "monotonic_ns": time.monotonic_ns(),
+            "execution_id": group.execution_ids.get(agent_name),
+            "event": self._redact_diagnostic_label(event),
+        }
+        if phase is not None:
+            entry["phase"] = self._redact_diagnostic_label(phase)
+        history = group.phase_history.setdefault(agent_name, [])
+        history.append(entry)
+        history_index = getattr(self, "_execution_history_index", None)
+        if history_index is None:
+            history_index = self._execution_history_index = OrderedDict()
+        history_key = (id(group), agent_name, entry["sequence"])
+        history_index[history_key] = (group, agent_name)
+        overflow = len(history) - self.EXECUTION_HISTORY_LIMIT
+        if overflow > 0:
+            removed = history[:overflow]
+            del history[:overflow]
+            for removed_entry in removed:
+                history_index.pop(
+                    (id(group), agent_name, removed_entry["sequence"]), None,
+                )
+            group.phase_history_truncated[agent_name] = (
+                group.phase_history_truncated.get(agent_name, 0) + overflow
+            )
+            self._execution_history_dropped_count = getattr(
+                self, "_execution_history_dropped_count", 0,
+            ) + overflow
+        while len(history_index) > self.EXECUTION_HISTORY_TOTAL_LIMIT:
+            (_, _, sequence), (old_group, old_agent) = history_index.popitem(
+                last=False
+            )
+            old_history = old_group.phase_history.get(old_agent, [])
+            for index, old_entry in enumerate(old_history):
+                if old_entry["sequence"] == sequence:
+                    del old_history[index]
+                    old_group.phase_history_truncated[old_agent] = (
+                        old_group.phase_history_truncated.get(old_agent, 0) + 1
+                    )
+                    self._execution_history_dropped_count = getattr(
+                        self, "_execution_history_dropped_count", 0,
+                    ) + 1
+                    break
+
+    def _record_future_completion(
+        self, group: TaskExecutionGroup, agent_name: str,
+    ) -> None:
+        """CPython dict assignment is GIL-serialized and never waits on controller locks."""
+        group.execution_completion_markers[agent_name] = {
+            "event": "future_completed",
+            "execution_id": group.execution_ids[agent_name],
+            "monotonic_ns": time.monotonic_ns(),
+        }
+
+    def _run_execution_worker(self, group, agent, kwargs, task):
+        # This is intentionally the first worker-side operation.
+        group.execution_started_markers[agent.name] = {
+            "event": "future_started",
+            "execution_id": group.execution_ids[agent.name],
+            "monotonic_ns": time.monotonic_ns(),
+            "thread_identity": threading.get_ident(),
+            "native_thread_identity": threading.get_native_id(),
+        }
+        return agent.step(task, **kwargs)
+
     def _phase_callback(self, group, agent_name):
         def update(phase):
             phase = str(phase)
             with self._execution_state_lock:
                 group.cancellation_phases[agent_name] = phase
+                self._record_execution_history(
+                    group, agent_name, "phase", phase=phase,
+                )
                 if group.cancellation_tokens[agent_name].is_set() or self._execution_admission_closed():
+                    self._record_execution_history(
+                        group, agent_name, "token_acknowledged", phase=phase,
+                    )
                     operation = "confirmed" if any(marker in phase for marker in ("after", "_end", "return")) else "not_active"
                     raise AgentExecutionCancelledError(
                         phase=phase, blocking_operation_termination=operation,
@@ -519,6 +671,9 @@ class GlobalController:
                         raise ControllerShutdownError(
                             f"Task {group.task.description} submission interrupted by controller shutdown"
                         )
+                    group.execution_ids[agent.name] = (
+                        self._allocate_execution_diagnostic_id_locked()
+                    )
                     supports_cancellation = getattr(
                         agent, "supports_cooperative_cancellation", None,
                     )
@@ -536,6 +691,9 @@ class GlobalController:
                                 group, agent.name,
                             ),
                         }
+                    self._record_execution_history(
+                        group, agent.name, "submission_created",
+                    )
                     try:
                         parameters = inspect.signature(agent.step).parameters
                         if not any(p.kind == inspect.Parameter.VAR_KEYWORD
@@ -543,7 +701,24 @@ class GlobalController:
                             kwargs = {k: v for k, v in kwargs.items() if k in parameters}
                     except (TypeError, ValueError):
                         pass
-                    group.futures[agent.name] = self.executor.submit(agent.step, group.task, **kwargs)
+                    try:
+                        future = self.executor.submit(
+                            _ExecutionWorkerInvocation(
+                                self, group, agent, kwargs,
+                            ),
+                            group.task,
+                            **kwargs,
+                        )
+                    except BaseException:
+                        self._record_execution_history(
+                            group, agent.name, "submission_failed",
+                        )
+                        raise
+                    group.futures[agent.name] = future
+                    future.add_done_callback(
+                        lambda completed, execution_group=group, name=agent.name:
+                        self._record_future_completion(execution_group, name)
+                    )
                     self.logger.info(f"Agent {agent.name} is executing task now ...")
                 group.submission_complete = True
 
@@ -726,10 +901,18 @@ class GlobalController:
                     group.cancellation_requested.add(agent_name)
                     group.cancellation_requested_at[agent_name] = now
                     group.timeout_details[agent_name]["cancellation_requested"] = True
+                    self._record_execution_history(
+                        group, agent_name, "token_requested",
+                    )
 
         for agent_name in group.cancellation_requested:
             snapshot = future_snapshots[agent_name]
             if snapshot["done"] and self._is_cancellation_acknowledgement(snapshot):
+                if agent_name not in group.cancellation_acknowledged:
+                    self._record_execution_history(
+                        group, agent_name, "token_acknowledged",
+                        phase=group.cancellation_phases.get(agent_name, "unknown"),
+                    )
                 group.cancellation_acknowledged.add(agent_name)
                 group.timeout_details[agent_name]["cancellation_acknowledged"] = True
 
@@ -1620,6 +1803,8 @@ class GlobalController:
         self._first_failure = None
         self.controller_state = self.STATE_RUNNING
         self.shutdown_complete = False
+        self.shutdown_diagnostics = None
+        self._shutdown_authoritative_verdict = None
         self._controller_threads = [
             threading.Thread(
                 name=f"controller-{name}",
@@ -1644,7 +1829,8 @@ class GlobalController:
 
         self._request_shutdown()
         self.controller_state = self.STATE_SHUTDOWN
-        deadline = time.monotonic() + self.shutdown_grace_period
+        shutdown_started_monotonic = time.monotonic()
+        deadline = shutdown_started_monotonic + self.shutdown_grace_period
         movement_cancel_budget = max(0.0, self.shutdown_grace_period / 2.0)
         self.movement_shutdown_result = self._cancel_active_movements_for_shutdown(
             timeout_seconds=movement_cancel_budget,
@@ -1657,10 +1843,17 @@ class GlobalController:
                 break
             thread.join(remaining)
 
+        authoritative_capture_started_monotonic_ns = time.monotonic_ns()
+        authoritative_threads = [*started_threads, *executor_threads]
+        authoritative_thread_states = [{
+            "name": thread.name,
+            "identity": thread.ident,
+            "native_identity": getattr(thread, "native_id", None),
+            "alive": thread.is_alive(),
+        } for thread in authoritative_threads]
         alive_threads = [
-            thread.name
-            for thread in [*started_threads, *executor_threads]
-            if thread.is_alive()
+            state["name"] for state in authoritative_thread_states
+            if state["alive"]
         ]
         (
             interrupted_task_ids,
@@ -1669,17 +1862,128 @@ class GlobalController:
             incomplete_submission_task_ids,
             undrained_queues,
         ) = self._finalize_shutdown_groups()
+        try:
+            frozen_execution_diagnostics = self._freeze_execution_diagnostics()
+        except Exception as error:
+            frozen_execution_diagnostics = {
+                "execution_groups": {
+                    "items": [],
+                    "retention": self._retention_metadata(
+                        self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT, 0, 0,
+                    ),
+                },
+                "execution_cancellation": [],
+                "controller_history_retention": self._retention_metadata(
+                    self.EXECUTION_HISTORY_TOTAL_LIMIT, 0, 0,
+                ),
+                "diagnostic_collection_error": {
+                    "collector": "execution_snapshot",
+                    "error_type": type(error).__name__,
+                },
+            }
+        frozen_terminal_barrier = self._freeze_terminal_barrier_context()
+        provider_termination_unconfirmed_task_ids = list(getattr(
+            self, "_provider_termination_unconfirmed_task_ids", [],
+        ))
         shutdown_complete = (
             not alive_threads
             and not active_task_ids
             and not incomplete_submission_task_ids
             and not undrained_queues
-            and not getattr(
-                self, "_provider_termination_unconfirmed_task_ids", [],
-            )
+            and not provider_termination_unconfirmed_task_ids
             and self.movement_shutdown_result.get("terminal") is True
         )
+        shutdown_failure_message = None
+        if not shutdown_complete and self._first_failure is None:
+            shutdown_failure_message = "Controller shutdown incomplete"
+            if alive_threads:
+                shutdown_failure_message += (
+                    f"; live threads: {', '.join(alive_threads)}"
+                )
+            if undrained_queues:
+                shutdown_failure_message += (
+                    f"; undrained queues: {', '.join(undrained_queues)}"
+                )
+        primary_failure = (
+            {
+                "thread": self._first_failure[2]["thread"],
+                "error_type": self._first_failure[2]["error_type"],
+            }
+            if self._first_failure is not None
+            else {
+                "thread": "run",
+                "error_type": "ControllerShutdownError",
+            } if shutdown_failure_message is not None
+            else None
+        )
+        authoritative_basis = deepcopy({
+            "capture_started_monotonic_ns": (
+                authoritative_capture_started_monotonic_ns
+            ),
+            "threads": {
+                "items": authoritative_thread_states[
+                    :self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT
+                ],
+                "retention": self._retention_metadata(
+                    self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                    min(
+                        len(authoritative_thread_states),
+                        self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                    ),
+                    max(
+                        0,
+                        len(authoritative_thread_states)
+                        - self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                    ),
+                ),
+            },
+            "live_threads": list(alive_threads),
+            "undrained_queues": list(undrained_queues),
+            "interrupted_task_ids": list(interrupted_task_ids),
+            "active_task_ids": list(active_task_ids),
+            "active_agent_ids": list(active_agent_ids),
+            "incomplete_submission_task_ids": list(
+                incomplete_submission_task_ids
+            ),
+            "provider_termination_unconfirmed_task_ids": (
+                provider_termination_unconfirmed_task_ids
+            ),
+            "movement_cancellation": self.movement_shutdown_result,
+            "terminal_barrier": frozen_terminal_barrier,
+            "primary_failure": primary_failure,
+            **frozen_execution_diagnostics,
+        })
+        authoritative_capture_completed_monotonic_ns = time.monotonic_ns()
+        authoritative_basis["capture_completed_monotonic_ns"] = (
+            authoritative_capture_completed_monotonic_ns
+        )
+        authoritative_verdict = {
+            "shutdown_complete": shutdown_complete,
+            "shutdown_started_monotonic_ns": int(
+                shutdown_started_monotonic * 1_000_000_000
+            ),
+            "deadline_monotonic_ns": int(deadline * 1_000_000_000),
+            "verdict_frozen_at_monotonic_ns": (
+                authoritative_capture_completed_monotonic_ns
+            ),
+            "authoritative_basis": authoritative_basis,
+        }
+        # This value is assigned once. Later diagnostic completion cannot revise it.
+        self._shutdown_authoritative_verdict = self._deep_freeze(
+            deepcopy(authoritative_verdict)
+        )
         self.shutdown_complete = shutdown_complete
+        if shutdown_failure_message is not None:
+            error = ControllerShutdownError(shutdown_failure_message)
+            # Shutdown is already requested. A direct GIL-serialized assignment
+            # avoids any post-deadline lock acquisition before stack capture.
+            if self._first_failure is None:
+                self._first_failure = (error, error.__traceback__, {
+                    "thread": "run",
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                    "traceback": "",
+                })
         self.shutdown_context = {
             "shutdown_complete": shutdown_complete,
             "controller_state": self.controller_state,
@@ -1695,65 +1999,78 @@ class GlobalController:
             "feedback_interrupted": list(
                 getattr(self, "_feedback_interruption_ledger", {}).values()
             ),
-            "provider_termination_unconfirmed_task_ids": list(
-                getattr(self, "_provider_termination_unconfirmed_task_ids", [])
+            "provider_termination_unconfirmed_task_ids": (
+                provider_termination_unconfirmed_task_ids
             ),
-            "terminal_barrier": self._terminal_barrier_context(),
+            "terminal_barrier": frozen_terminal_barrier,
             "movement_cancellation": self.movement_shutdown_result,
-            "tool_runtime": self._tool_runtime_context(),
-            "execution_cancellation": self._execution_cancellation_context(),
+            "execution_cancellation": frozen_execution_diagnostics[
+                "execution_cancellation"
+            ],
         }
+        try:
+            execution_ids_by_thread = {}
+            for execution_group in frozen_execution_diagnostics[
+                "execution_groups"
+            ]["items"]:
+                for execution in execution_group["executions"]["items"]:
+                    if execution["future"]["done"]:
+                        continue
+                    started = next((
+                        item for item in execution["lifecycle"]["items"]
+                        if item["event"] == "future_started"
+                    ), None)
+                    if started is not None:
+                        execution_ids_by_thread.setdefault(
+                            started.get("thread_identity"), []
+                        ).append(execution["execution_id"])
+            diagnostic_threads, thread_enumeration = (
+                self._bounded_shutdown_diagnostic_threads(
+                    [
+                        thread for thread, state in zip(
+                            authoritative_threads, authoritative_thread_states,
+                        ) if state["alive"]
+                    ]
+                )
+            )
+            post_verdict_diagnostics = self._capture_post_verdict_thread_stacks(
+                diagnostic_threads,
+                execution_ids_by_thread=execution_ids_by_thread,
+            )
+            post_verdict_diagnostics.update(thread_enumeration)
+        except Exception as error:
+            post_verdict_diagnostics = {
+                "captured_at_monotonic_ns": time.monotonic_ns(),
+                "threads": {
+                    "items": [],
+                    "retention": self._retention_metadata(
+                        self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT, 0, 0,
+                    ),
+                },
+                "diagnostic_collection_error": {
+                    "collector": "thread_stacks",
+                    "error_type": type(error).__name__,
+                },
+            }
+        post_verdict_diagnostics["tool_runtime"] = (
+            self._bounded_tool_runtime_context()
+        )
+        self.shutdown_context["tool_runtime"] = post_verdict_diagnostics[
+            "tool_runtime"
+        ]
+        self.shutdown_diagnostics = {
+            "schema_version": "controller-shutdown-diagnostics/2",
+            "verdict": authoritative_verdict,
+            "post_verdict": post_verdict_diagnostics,
+        }
+        self.shutdown_context["diagnostics"] = self.shutdown_diagnostics
         if not shutdown_complete:
-            message = "Controller shutdown incomplete"
-            if alive_threads:
-                message += f"; live threads: {', '.join(alive_threads)}"
-            if undrained_queues:
-                message += f"; undrained queues: {', '.join(undrained_queues)}"
-            if self._first_failure is None:
-                self._record_failure("run", ControllerShutdownError(message))
-            self._first_failure[2].update({
-                "shutdown_complete": shutdown_complete,
-                "live_threads": alive_threads,
-                "undrained_queues": undrained_queues,
-                "interrupted_task_ids": interrupted_task_ids,
-                "active_task_ids": active_task_ids,
-                "active_agent_ids": active_agent_ids,
-                "incomplete_submission_task_ids": incomplete_submission_task_ids,
-                "post_processing_interrupted": list(
-                    getattr(self, "_post_processing_interruption_ledger", {}).values()
-                ),
-                "feedback_interrupted": list(
-                    getattr(self, "_feedback_interruption_ledger", {}).values()
-                ),
-                "provider_termination_unconfirmed_task_ids": list(
-                    getattr(self, "_provider_termination_unconfirmed_task_ids", [])
-                ),
-                "terminal_barrier": self._terminal_barrier_context(),
-                "movement_cancellation": self.movement_shutdown_result,
-                "tool_runtime": self._tool_runtime_context(),
-                "execution_cancellation": self._execution_cancellation_context(),
-            })
-            setattr(self._first_failure[0], "controller_shutdown_context", {
-                "shutdown_complete": shutdown_complete,
-                "live_threads": alive_threads,
-                "undrained_queues": undrained_queues,
-                "interrupted_task_ids": interrupted_task_ids,
-                "active_task_ids": active_task_ids,
-                "active_agent_ids": active_agent_ids,
-                "incomplete_submission_task_ids": incomplete_submission_task_ids,
-                "post_processing_interrupted": list(
-                    getattr(self, "_post_processing_interruption_ledger", {}).values()
-                ),
-                "feedback_interrupted": list(
-                    getattr(self, "_feedback_interruption_ledger", {}).values()
-                ),
-                "provider_termination_unconfirmed_task_ids": list(
-                    getattr(self, "_provider_termination_unconfirmed_task_ids", [])
-                ),
-                "terminal_barrier": self._terminal_barrier_context(),
-                "movement_cancellation": self.movement_shutdown_result,
-                "tool_runtime": self._tool_runtime_context(),
-            })
+            self._first_failure[2].update(self.shutdown_context)
+            setattr(
+                self._first_failure[0],
+                "controller_shutdown_context",
+                dict(self.shutdown_context),
+            )
 
         try:
             self.task_manager.checkpoint_runtime_state(raise_on_error=True)
@@ -1809,6 +2126,334 @@ class GlobalController:
             "active_agents": [name for name, future in group.futures.items()
                               if not future.done()],
         } for group in self._all_execution_groups()]
+
+    @staticmethod
+    def _retention_metadata(capacity: int, retained: int, dropped_count: int) -> dict:
+        return {
+            "capacity": capacity,
+            "retained": retained,
+            "truncated": dropped_count > 0,
+            "dropped_count": dropped_count,
+        }
+
+    @staticmethod
+    def _deep_freeze(value):
+        if isinstance(value, dict):
+            return MappingProxyType({
+                key: GlobalController._deep_freeze(item)
+                for key, item in value.items()
+            })
+        if isinstance(value, list):
+            return tuple(GlobalController._deep_freeze(item) for item in value)
+        return value
+
+    @staticmethod
+    def _diagnostic_execution_state(group, agent_name: str) -> dict:
+        started = group.execution_started_markers.get(agent_name)
+        completed = group.execution_completion_markers.get(agent_name)
+        return {
+            "done": completed is not None,
+            "running": started is not None and completed is None,
+            "cancelled_before_start": completed is not None and started is None,
+        }
+
+    def _freeze_execution_diagnostics(self, *, blocking=False) -> dict:
+        """Copy primitive execution state while holding its existing state lock."""
+        if not self._execution_state_lock.acquire(blocking=blocking):
+            return {
+                "execution_groups": {
+                    "items": [],
+                    "retention": self._retention_metadata(
+                        self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT, 0, 0,
+                    ),
+                },
+                "execution_cancellation": [],
+                "controller_history_retention": self._retention_metadata(
+                    self.EXECUTION_HISTORY_TOTAL_LIMIT, 0, 0,
+                ),
+                "diagnostic_collection_error": {
+                    "collector": "execution_snapshot",
+                    "error_type": "ExecutionStateLockUnavailable",
+                },
+            }
+        try:
+            groups = []
+            selected_groups, truncated_groups = self._bounded_diagnostic_groups()
+            for group in selected_groups:
+                all_agent_names = sorted(
+                    set(group.execution_ids)
+                    | set(group.futures)
+                    | set(group.cancellation_tokens)
+                    | set(group.phase_history)
+                )
+                retained_agent_names = all_agent_names[:self.EXECUTION_ACTOR_LIMIT]
+                executions = []
+                for name in retained_agent_names:
+                    lifecycle = [
+                        dict(entry) for entry in group.phase_history.get(name, [])
+                    ]
+                    requested_at_monotonic_ns = next((
+                        entry["monotonic_ns"] for entry in reversed(lifecycle)
+                        if entry["event"] == "token_requested"
+                    ), None)
+                    for marker in (
+                        group.execution_started_markers.get(name),
+                        group.execution_completion_markers.get(name),
+                    ):
+                        if marker is not None:
+                            lifecycle.append(dict(marker))
+                    lifecycle.sort(key=lambda entry: entry["monotonic_ns"])
+                    lifecycle_dropped = group.phase_history_truncated.get(name, 0)
+                    if len(lifecycle) > self.EXECUTION_LIFECYCLE_LIMIT:
+                        overflow = len(lifecycle) - self.EXECUTION_LIFECYCLE_LIMIT
+                        lifecycle = lifecycle[-self.EXECUTION_LIFECYCLE_LIMIT:]
+                        lifecycle_dropped += overflow
+                    token = group.cancellation_tokens.get(name)
+                    executions.append({
+                        "execution_id": group.execution_ids.get(name),
+                        "task_id": group.task.id,
+                        "actor_id": name,
+                        "future": self._diagnostic_execution_state(group, name),
+                        "token": {
+                            "requested": bool(token is not None and token.is_set()),
+                            "requested_at_monotonic_ns": (
+                                requested_at_monotonic_ns
+                            ),
+                            "requested_at_wall_time": group.cancellation_requested_at.get(name),
+                            "acknowledged": name in group.cancellation_acknowledged,
+                        },
+                        "latest_phase": group.cancellation_phases.get(name),
+                        "lifecycle": {
+                            "items": lifecycle,
+                            "retention": self._retention_metadata(
+                                self.EXECUTION_LIFECYCLE_LIMIT,
+                                len(lifecycle),
+                                lifecycle_dropped,
+                            ),
+                        },
+                    })
+                groups.append({
+                    "task_id": group.task.id,
+                    "submission_complete": bool(group.submission_complete),
+                    "executions": {
+                        "items": executions,
+                        "retention": self._retention_metadata(
+                            self.EXECUTION_ACTOR_LIMIT,
+                            len(executions),
+                            len(all_agent_names) - len(executions),
+                        ),
+                    },
+                })
+            execution_cancellation = []
+            for group in groups:
+                executions = group["executions"]["items"]
+                execution_cancellation.append({
+                    "task_id": group["task_id"],
+                    "requested": sorted(
+                        item["actor_id"] for item in executions
+                        if item["token"]["requested"]
+                    ),
+                    "acknowledged": sorted(
+                        item["actor_id"] for item in executions
+                        if item["token"]["acknowledged"]
+                    ),
+                    "phases": {
+                        item["actor_id"]: item["latest_phase"]
+                        for item in executions if item["latest_phase"] is not None
+                    },
+                    "active_agents": sorted(
+                        item["actor_id"] for item in executions
+                        if not item["future"]["done"]
+                    ),
+                })
+            retained_history = len(getattr(self, "_execution_history_index", ()))
+            dropped_history = getattr(
+                self, "_execution_history_dropped_count", 0,
+            )
+            return {
+                "execution_groups": {
+                    "items": groups,
+                    "retention": self._retention_metadata(
+                        self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT,
+                        len(groups),
+                        truncated_groups,
+                    ),
+                },
+                "execution_cancellation": execution_cancellation,
+                "controller_history_retention": self._retention_metadata(
+                    self.EXECUTION_HISTORY_TOTAL_LIMIT,
+                    retained_history,
+                    dropped_history,
+                ),
+            }
+        finally:
+            self._execution_state_lock.release()
+
+    def _freeze_terminal_barrier_context(self) -> dict:
+        if not self._execution_state_lock.acquire(blocking=False):
+            return {
+                "diagnostic_collection_error": {
+                    "collector": "terminal_barrier",
+                    "error_type": "ExecutionStateLockUnavailable",
+                },
+            }
+        try:
+            return {
+                "pending": self._judger_terminal_pending,
+                "observed": self._judger_terminal_observed,
+                "detected_at": self._judger_terminal_detected_at,
+                "active_tool_actions": self._active_tool_actions,
+                "tool_drain_timed_out": self._tool_drain_timed_out,
+            }
+        finally:
+            self._execution_state_lock.release()
+
+    def _bounded_tool_runtime_context(self) -> dict:
+        snapshot = getattr(
+            getattr(self, "env", None),
+            "get_tool_runtime_context_snapshot",
+            None,
+        )
+        if not callable(snapshot):
+            return {
+                "diagnostic_collection_error": {
+                    "collector": "tool_runtime",
+                    "error_type": "NonBlockingSnapshotUnavailable",
+                },
+            }
+        try:
+            context = snapshot()
+        except Exception as error:
+            return {
+                "diagnostic_collection_error": {
+                    "collector": "tool_runtime",
+                    "error_type": type(error).__name__,
+                },
+            }
+        return context if isinstance(context, dict) else {}
+
+    def _bounded_shutdown_diagnostic_threads(self, base_threads):
+        threads = list(base_threads)
+        enumeration_error = None
+        if self._execution_state_lock.acquire(blocking=False):
+            try:
+                groups, _ = self._bounded_diagnostic_groups()
+                for group in groups:
+                    threads.extend(tuple(group.reflection_workers.values()))
+                    if group.feedback_worker is not None:
+                        threads.append(group.feedback_worker)
+            except RuntimeError:
+                enumeration_error = {
+                    "collector": "post_processing_threads",
+                    "error_type": "ConcurrentThreadRegistryMutation",
+                }
+            finally:
+                self._execution_state_lock.release()
+        else:
+            enumeration_error = {
+                "collector": "post_processing_threads",
+                "error_type": "ExecutionStateLockUnavailable",
+            }
+        truncated = max(0, len(threads) - self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT)
+        retained = min(len(threads), self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT)
+        result = {
+            "thread_candidates_retention": self._retention_metadata(
+                self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT, retained, truncated,
+            ),
+        }
+        if enumeration_error is not None:
+            result["thread_enumeration_error"] = enumeration_error
+        return threads[:self.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT], result
+
+    @staticmethod
+    def _sanitized_stack_path(filename: str) -> str:
+        source_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        absolute = os.path.abspath(filename)
+        try:
+            if os.path.commonpath((source_root, absolute)) == source_root:
+                return os.path.relpath(absolute, source_root)
+        except ValueError:
+            pass
+        return os.path.basename(absolute)
+
+    @staticmethod
+    def _capture_post_verdict_thread_stacks(
+        threads, *, execution_ids_by_thread=None,
+    ) -> dict:
+        """Capture bounded stack coordinates without locals or source text."""
+        captured_at_monotonic_ns = time.monotonic_ns()
+        current_frames = sys._current_frames()
+        thread_states = [
+            (thread, thread.ident, thread.is_alive()) for thread in threads
+        ]
+        snapshots = []
+        seen = set()
+        execution_ids_by_thread = execution_ids_by_thread or {}
+        for thread, identity, alive_at_capture in thread_states:
+            key = (thread.name, identity)
+            if key in seen:
+                continue
+            seen.add(key)
+            frame = current_frames.get(identity) if alive_at_capture else None
+            stack = []
+            dropped_frames = 0
+            if frame is not None:
+                frames = []
+                current = frame
+                total_frames = 0
+                while current is not None:
+                    if len(frames) < 64:
+                        frames.append(current)
+                    total_frames += 1
+                    current = current.f_back
+                dropped_frames = max(0, total_frames - 64)
+                stack = [{
+                    "file": GlobalController._sanitized_stack_path(
+                        item.f_code.co_filename
+                    ),
+                    "line": item.f_lineno,
+                    "function": item.f_code.co_name,
+                } for item in reversed(frames[:64])]
+            snapshots.append({
+                "name": thread.name,
+                "identity": identity,
+                "native_identity": getattr(thread, "native_id", None),
+                "alive_at_capture": alive_at_capture,
+                "stack_state": (
+                    "captured" if frame is not None
+                    else "frame_unavailable" if alive_at_capture
+                    else "thread_not_alive"
+                ),
+                "execution_ids": {
+                    "items": list(execution_ids_by_thread.get(identity, ()))[:64],
+                    "retention": GlobalController._retention_metadata(
+                        64,
+                        min(len(execution_ids_by_thread.get(identity, ())), 64),
+                        max(
+                            0,
+                            len(execution_ids_by_thread.get(identity, ())) - 64,
+                        ),
+                    ),
+                },
+                "stack": {
+                    "items": stack,
+                    "retention": GlobalController._retention_metadata(
+                        64, len(stack), dropped_frames,
+                    ),
+                },
+            })
+        return {
+            "captured_at_monotonic_ns": captured_at_monotonic_ns,
+            "threads": {
+                "items": snapshots,
+                "retention": GlobalController._retention_metadata(
+                    GlobalController.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                    len(snapshots),
+                    max(0, len(threads) - len(snapshots)),
+                ),
+            },
+            "redaction": "coordinates_only_no_locals_no_source_text",
+        }
 
     def _terminal_barrier_context(self) -> dict:
         with self._tool_action_condition:

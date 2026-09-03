@@ -10,6 +10,7 @@ import start_with_config
 from env.minecraft_client import MinecraftBridgeCleanupError
 from env.runtime_execution import RuntimeExecution
 from env.runtime_paths import RuntimePaths
+from pipeline.controller_tiny import ControllerShutdownError
 
 
 def test_runtime_result_preserves_observed_agent_iteration_limit():
@@ -330,6 +331,79 @@ def test_bridge_cleanup_failure_suppresses_successful_score():
 
     assert result["score"] == {}
     assert result["bridge_cleanup"] == cleanup
+    assert result["cleanup_failure"]["error_type"] == "MinecraftBridgeCleanupError"
+
+
+def test_cleanup_failure_is_structured_separately_from_primary_runtime_error():
+    cleanup = {
+        "processes": {"Alice": {"alive_after_kill": True}},
+        "cleanup_complete": False,
+    }
+    cleanup_error = MinecraftBridgeCleanupError(
+        "cleanup failed", cleanup_result=cleanup,
+    )
+    primary_error = ControllerShutdownError("controller shutdown incomplete")
+    result = {
+        "score": {"status": "success", "score": 100},
+        "runtime_failure_chain": {
+            "primary_failure": {"error_type": "ControllerShutdownError"},
+            "cleanup_failure": {
+                "error_type": "MinecraftBridgeCleanupError",
+                "cleanup_result": cleanup,
+            },
+        },
+    }
+
+    start_with_config._apply_runtime_cleanup_failure(result, primary_error)
+
+    assert result["score"] == {}
+    assert result["primary_failure"] == {
+        "error_type": "ControllerShutdownError",
+    }
+    assert result["cleanup_failure"] == {
+        "error_type": "MinecraftBridgeCleanupError",
+        "cleanup_result": cleanup,
+    }
+
+
+def test_cleanup_failure_can_be_read_from_explicit_runtime_failure_chain():
+    cleanup = {"processes": {}, "cleanup_complete": False}
+    result = {
+        "score": {"status": "success"},
+        "runtime_failure_chain": {
+            "primary_failure": {"error_type": "ControllerShutdownError"},
+            "cleanup_failure": {
+                "error_type": "MinecraftBridgeCleanupError",
+                "cleanup_result": cleanup,
+            },
+        },
+    }
+
+    start_with_config._apply_runtime_cleanup_failure(
+        result, ControllerShutdownError("shutdown incomplete"),
+    )
+
+    assert result["primary_failure"]["error_type"] == "ControllerShutdownError"
+    assert result["cleanup_failure"]["cleanup_result"] == cleanup
+    assert result["score"] == {}
+
+
+def test_generic_cleanup_failure_is_preserved_without_bridge_result():
+    result = {
+        "score": {"status": "success"},
+        "runtime_failure_chain": {
+            "primary_failure": {"error_type": "RuntimeError"},
+            "cleanup_failure": {"error_type": "OSError"},
+        },
+    }
+
+    start_with_config._apply_runtime_cleanup_failure(
+        result, RuntimeError("primary failure"),
+    )
+
+    assert result["score"] == {}
+    assert result["primary_failure"] == {"error_type": "RuntimeError"}
+    assert result["cleanup_failure"] == {"error_type": "OSError"}
 
 
 def test_judged_runtime_validator_accepts_consistent_success():

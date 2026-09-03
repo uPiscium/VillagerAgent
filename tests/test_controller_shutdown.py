@@ -1,4 +1,5 @@
 import logging
+import sys
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -14,8 +15,9 @@ from pipeline.controller_tiny import (
     TaskExecutionGroup,
 )
 from env.minecraft_client import MinecraftActionLogError, MinecraftToolTimeoutError
-from env.minecraft_client import ToolActionBlockedError
+from env.minecraft_client import AgentExecutionCancelledError, ToolActionBlockedError
 from pipeline.runtime_events import InMemoryRuntimeEventRecorder
+from pipeline.agent import BaseAgent
 from pipeline.task_manager import TaskManager
 from type_define.graph import Task
 
@@ -969,6 +971,764 @@ def test_non_cooperative_timeout_run_checkpoints_running_lifecycle():
     assert group.terminal_state_persisted is False
     assert group.completed is False
     assert sink.events[-1]["event_type"] == "run_failed"
+
+
+@pytest.mark.parametrize(
+    "held_phase",
+    ["tool_end", "before_retry", "before_agent_status", "before_database_update"],
+)
+def test_shutdown_snapshot_preserves_last_phase_before_held_boundary(held_phase):
+    controller, _, _ = _controller()
+    release = threading.Event()
+    entered = threading.Event()
+    task = Task("Held cooperative boundary", {})
+
+    class Agent:
+        name = "Alice"
+
+        @staticmethod
+        def supports_cooperative_cancellation():
+            return True
+
+        @staticmethod
+        def step(_task, *, cancellation_token, phase_callback):
+            phase_callback(held_phase)
+            entered.set()
+            release.wait()
+            phase_callback("next_boundary")
+
+    group = TaskExecutionGroup(task=task, agents=[Agent()])
+    controller.start_execution_group(group)
+    assert entered.wait(1)
+
+    controller._request_shutdown()
+    frozen = controller._freeze_execution_diagnostics()
+
+    try:
+        snapshot = frozen["execution_groups"]["items"][0]["executions"]["items"][0]
+        assert snapshot["latest_phase"] == held_phase
+        assert snapshot["future"]["done"] is False
+        assert snapshot["token"] == {
+            "requested": True,
+            "requested_at_monotonic_ns": snapshot["lifecycle"]["items"][-1][
+                "monotonic_ns"
+            ],
+            "requested_at_wall_time": group.cancellation_requested_at["Alice"],
+            "acknowledged": False,
+        }
+        assert snapshot["execution_id"] == "execution-00000001"
+        assert [entry["event"] for entry in snapshot["lifecycle"]["items"]] == [
+            "submission_created",
+            "future_started",
+            "phase",
+            "token_requested",
+        ]
+        assert {
+            entry["execution_id"] for entry in snapshot["lifecycle"]["items"]
+        } == {snapshot["execution_id"]}
+    finally:
+        release.set()
+        with pytest.raises(AgentExecutionCancelledError):
+            group.futures["Alice"].result(timeout=1)
+        controller.executor.shutdown(wait=True)
+
+
+def test_execution_history_is_bounded_monotonic_and_redacts_unsafe_labels():
+    controller, _, _ = _controller()
+    task = Task("Bounded diagnostics", {})
+    group = TaskExecutionGroup(task=task, agents=[])
+
+    with controller._execution_state_lock:
+        for index in range(controller.EXECUTION_HISTORY_LIMIT + 5):
+            controller._record_execution_history_locked(
+                group,
+                "Alice",
+                "phase",
+                phase=(
+                    "secret payload with spaces"
+                    if index == controller.EXECUTION_HISTORY_LIMIT + 4
+                    else f"phase_{index}"
+                ),
+            )
+
+    history = group.phase_history["Alice"]
+    assert len(history) == controller.EXECUTION_HISTORY_LIMIT
+    assert group.phase_history_truncated == {"Alice": 5}
+    assert [item["sequence"] for item in history] == sorted(
+        item["sequence"] for item in history
+    )
+    assert [item["monotonic_ns"] for item in history] == sorted(
+        item["monotonic_ns"] for item in history
+    )
+    assert history[-1]["phase"] == "redacted"
+    assert "secret payload with spaces" not in str(history)
+
+
+def test_execution_history_has_controller_wide_bound():
+    controller, _, _ = _controller()
+    groups = [
+        TaskExecutionGroup(task=Task(f"History {index}", {}), agents=[])
+        for index in range(20)
+    ]
+
+    with controller._execution_state_lock:
+        for group in groups:
+            for index in range(controller.EXECUTION_HISTORY_LIMIT):
+                controller._record_execution_history_locked(
+                    group, "Alice", "phase", phase=f"phase_{index}",
+                )
+
+    assert sum(
+        len(entries)
+        for group in groups
+        for entries in group.phase_history.values()
+    ) == controller.EXECUTION_HISTORY_TOTAL_LIMIT
+    assert len(controller._execution_history_index) == (
+        controller.EXECUTION_HISTORY_TOTAL_LIMIT
+    )
+
+
+def test_shutdown_execution_snapshot_bounds_historical_groups():
+    controller, _, _ = _controller()
+    groups = [
+        TaskExecutionGroup(task=Task(f"Completed {index}", {}), agents=[])
+        for index in range(controller.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT + 12)
+    ]
+    for group in groups:
+        group.completed = True
+    controller._started_execution_groups = groups
+
+    snapshot = controller._freeze_execution_diagnostics()
+
+    assert len(snapshot["execution_groups"]["items"]) == (
+        controller.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT
+    )
+    assert snapshot["execution_groups"]["retention"] == {
+        "capacity": controller.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT,
+        "retained": controller.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT,
+        "truncated": True,
+        "dropped_count": 12,
+    }
+
+
+def test_post_verdict_diagnostics_cannot_change_frozen_shutdown_failure():
+    controller, checkpoints, _ = _controller()
+    controller.shutdown_grace_period = 0.02
+    release = threading.Event()
+    running = threading.Event()
+
+    def held_worker():
+        running.set()
+        release.wait()
+
+    future = controller.executor.submit(held_worker)
+    assert running.wait(1)
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    def slow_capture(_threads, **_kwargs):
+        release.set()
+        future.result(timeout=1)
+        return {
+            "captured_at_monotonic_ns": time.monotonic_ns(),
+            "threads": {"items": [], "retention": {
+                "capacity": controller.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                "retained": 0, "truncated": False, "dropped_count": 0,
+            }},
+        }
+
+    controller._capture_post_verdict_thread_stacks = slow_capture
+
+    with pytest.raises(ControllerShutdownError, match="shutdown incomplete"):
+        controller.run()
+
+    assert controller.shutdown_complete is False
+    assert controller.shutdown_context["shutdown_complete"] is False
+    assert controller.shutdown_diagnostics["verdict"]["shutdown_complete"] is False
+    assert controller.shutdown_diagnostics["verdict"][
+        "authoritative_basis"
+    ]["live_threads"]
+    assert checkpoints == ["checkpoint"]
+
+
+def test_post_verdict_collection_failure_does_not_change_success_or_checkpoint():
+    controller, checkpoints, sink = _controller()
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+    controller._capture_post_verdict_thread_stacks = lambda _threads, **_kwargs: (
+        _ for _ in ()
+    ).throw(RuntimeError("diagnostics unavailable"))
+
+    controller.run()
+
+    assert controller.shutdown_complete is True
+    assert controller.shutdown_diagnostics["post_verdict"][
+        "diagnostic_collection_error"
+    ] == {
+        "collector": "thread_stacks",
+        "error_type": "RuntimeError",
+    }
+    assert checkpoints == ["checkpoint"]
+    assert sink.events[-1]["event_type"] == "run_completed"
+
+
+def test_tool_runtime_diagnostics_require_nonblocking_snapshot_after_verdict():
+    controller, checkpoints, _ = _controller()
+    calls = []
+    controller.env = SimpleNamespace(
+        get_tool_runtime_context=lambda: calls.append(True),
+    )
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    controller.run()
+
+    assert controller.shutdown_context["tool_runtime"] == {
+        "diagnostic_collection_error": {
+            "collector": "tool_runtime",
+            "error_type": "NonBlockingSnapshotUnavailable",
+        },
+    }
+    assert calls == []
+    assert checkpoints == ["checkpoint"]
+
+
+def test_execution_snapshot_does_not_block_on_held_state_lock():
+    controller, _, _ = _controller()
+    release = threading.Event()
+    locked = threading.Event()
+
+    def hold_lock():
+        with controller._execution_state_lock:
+            locked.set()
+            release.wait()
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert locked.wait(1)
+    try:
+        snapshot = controller._freeze_execution_diagnostics()
+    finally:
+        release.set()
+        thread.join(1)
+
+    assert snapshot["diagnostic_collection_error"] == {
+        "collector": "execution_snapshot",
+        "error_type": "ExecutionStateLockUnavailable",
+    }
+
+
+def test_future_snapshot_does_not_use_held_future_lock():
+    future = Future()
+    release = threading.Event()
+    locked = threading.Event()
+
+    def hold_lock():
+        with future._condition:
+            locked.set()
+            release.wait()
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert locked.wait(1)
+    group = TaskExecutionGroup(task=Task("Snapshot", {}), agents=[])
+    group.execution_ids["Alice"] = "execution-00000001"
+    group.execution_started_markers["Alice"] = {
+        "event": "future_started",
+        "execution_id": "execution-00000001",
+        "monotonic_ns": time.monotonic_ns(),
+    }
+    try:
+        snapshot = GlobalController._diagnostic_execution_state(group, "Alice")
+    finally:
+        release.set()
+        thread.join(1)
+
+    assert snapshot == {
+        "done": False,
+        "running": True,
+        "cancelled_before_start": False,
+    }
+
+
+def test_post_verdict_capture_includes_reflection_and_feedback_workers():
+    controller, _, _ = _controller()
+    release = threading.Event()
+    running = threading.Event()
+
+    def held_post_processing():
+        running.set()
+        release.wait()
+
+    reflection = threading.Thread(
+        target=held_post_processing, name="controller-reflection-Alice", daemon=True,
+    )
+    feedback = threading.Thread(
+        target=held_post_processing, name="controller-feedback", daemon=True,
+    )
+    reflection.start()
+    feedback.start()
+    assert running.wait(1)
+    group = TaskExecutionGroup(task=Task("Post processing", {}), agents=[])
+    group.completed = True
+    group.reflection_workers["Alice"] = reflection
+    group.feedback_worker = feedback
+    controller._started_execution_groups = [group]
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    try:
+        controller.run()
+        names = {
+            item["name"]
+            for item in controller.shutdown_diagnostics[
+                "post_verdict"
+            ]["threads"]["items"]
+        }
+        assert "controller-reflection-Alice" in names
+        assert "controller-feedback" in names
+    finally:
+        release.set()
+        reflection.join(1)
+        feedback.join(1)
+
+
+def test_post_verdict_stack_capture_contains_coordinates_but_no_locals():
+    release = threading.Event()
+    running = threading.Event()
+
+    def worker():
+        secret_local = "must-not-be-captured"
+        running.set()
+        release.wait()
+        return secret_local
+
+    thread = threading.Thread(target=worker, name="diagnostic-worker")
+    thread.start()
+    assert running.wait(1)
+    try:
+        diagnostics = GlobalController._capture_post_verdict_thread_stacks([thread])
+    finally:
+        release.set()
+        thread.join(1)
+
+    snapshot = diagnostics["threads"]["items"][0]
+    assert snapshot["name"] == "diagnostic-worker"
+    assert snapshot["stack"]["items"]
+    assert set(snapshot["stack"]["items"][-1]) == {"file", "line", "function"}
+    assert any(
+        frame["file"] == "tests/test_controller_shutdown.py"
+        for frame in snapshot["stack"]["items"]
+    )
+    assert all(
+        not frame["file"].startswith("/")
+        for frame in snapshot["stack"]["items"]
+    )
+    assert "must-not-be-captured" not in str(diagnostics)
+
+
+def test_stack_retention_reports_exact_dropped_frame_count():
+    release = threading.Event()
+    running = threading.Event()
+
+    def recurse(depth):
+        if depth:
+            return recurse(depth - 1)
+        running.set()
+        release.wait()
+
+    thread = threading.Thread(target=lambda: recurse(80), name="deep-stack")
+    thread.start()
+    assert running.wait(1)
+    try:
+        frame = sys._current_frames()[thread.ident]
+        total_frames = 0
+        while frame is not None:
+            total_frames += 1
+            frame = frame.f_back
+        diagnostics = GlobalController._capture_post_verdict_thread_stacks([thread])
+    finally:
+        release.set()
+        thread.join(1)
+
+    retention = diagnostics["threads"]["items"][0]["stack"]["retention"]
+    assert retention == {
+        "capacity": 64,
+        "retained": min(total_frames, 64),
+        "truncated": total_frames > 64,
+        "dropped_count": max(0, total_frames - 64),
+    }
+
+
+@pytest.mark.parametrize(
+    ("held_operation", "expected_phase", "expected_frame"),
+    [
+        ("agent_status", "before_agent_status", "agent_status"),
+        ("update_database", "before_database_update", "update_database"),
+    ],
+)
+def test_normal_step_held_boundary_is_correlated_end_to_end(
+    held_operation, expected_phase, expected_frame,
+):
+    controller, checkpoints, _ = _controller()
+    controller.shutdown_grace_period = 0.03
+    entered = threading.Event()
+    release = threading.Event()
+
+    class HeldEnvironment:
+        running = True
+
+        @staticmethod
+        def step(_name, _prompt, **_kwargs):
+            return "done", {"action_list": [], "final_answer": "done"}
+
+        @staticmethod
+        def agent_status(name):
+            if held_operation == "agent_status":
+                entered.set()
+                release.wait()
+            return {"status": True, "message": {"my_name": name}}
+
+    class HeldDataManager:
+        @staticmethod
+        def query_env_with_task(_description, agent_query=False):
+            return "environment"
+
+        @staticmethod
+        def query_history(_name):
+            return "history"
+
+        @staticmethod
+        def query_other_agent_state(_name):
+            return "other"
+
+        @staticmethod
+        def update_database(_payload):
+            if held_operation == "update_database":
+                entered.set()
+                release.wait()
+
+    environment = HeldEnvironment()
+    manager = HeldDataManager()
+    agent = BaseAgent(
+        llm=object(), env=environment, data_manager=manager,
+        name="Alice", silent=True,
+    )
+    task = Task("Held normal step", {"document": "public"})
+    task._agent = ["Alice"]
+    task.id = f"held-{held_operation}"
+    group = TaskExecutionGroup(task=task, agents=[agent])
+    controller.start_execution_group(group)
+    assert entered.wait(1)
+    controller.assignment["Alice"] = task.id
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    try:
+        with pytest.raises(ControllerShutdownError, match="shutdown incomplete"):
+            controller.run()
+        verdict = controller.shutdown_diagnostics["verdict"]
+        basis = verdict["authoritative_basis"]
+        execution = basis["execution_groups"]["items"][0][
+            "executions"
+        ]["items"][0]
+        lifecycle = execution["lifecycle"]["items"]
+        assert execution["execution_id"] == "execution-00000001"
+        assert execution["latest_phase"] == expected_phase
+        assert execution["future"] == {
+            "done": False,
+            "running": True,
+            "cancelled_before_start": False,
+        }
+        assert [item["event"] for item in lifecycle[:3]] == [
+            "submission_created", "future_started", "phase",
+        ]
+        assert lifecycle[-1]["event"] == "token_requested"
+        assert {item["execution_id"] for item in lifecycle} == {
+            execution["execution_id"]
+        }
+        assert verdict["shutdown_complete"] is False
+        assert verdict["verdict_frozen_at_monotonic_ns"] == basis[
+            "capture_completed_monotonic_ns"
+        ]
+        assert basis["capture_started_monotonic_ns"] <= basis[
+            "capture_completed_monotonic_ns"
+        ]
+        assert controller.shutdown_diagnostics["post_verdict"][
+            "captured_at_monotonic_ns"
+        ] >= verdict["verdict_frozen_at_monotonic_ns"]
+        stacks = controller.shutdown_diagnostics["post_verdict"][
+            "threads"
+        ]["items"]
+        held_thread = next(
+            thread_snapshot for thread_snapshot in stacks
+            if any(
+                frame["function"] == expected_frame
+                for frame in thread_snapshot["stack"]["items"]
+            )
+        )
+        assert held_thread["execution_ids"]["items"] == [
+            execution["execution_id"]
+        ]
+    finally:
+        release.set()
+        group.futures["Alice"].result(timeout=1)
+        for thread in controller.executor._threads:
+            thread.join(1)
+
+    assert controller.shutdown_complete is False
+    assert controller._shutdown_authoritative_verdict["shutdown_complete"] is False
+    with pytest.raises(TypeError):
+        controller._shutdown_authoritative_verdict["shutdown_complete"] = True
+    assert group.execution_completion_markers["Alice"]["execution_id"] == (
+        execution["execution_id"]
+    )
+    assert checkpoints == ["checkpoint"]
+
+
+@pytest.mark.parametrize("held_phase", ["tool_end", "before_retry"])
+def test_phase_hold_is_correlated_through_verdict_and_stack(held_phase):
+    controller, _, _ = _controller()
+    controller.shutdown_grace_period = 0.03
+    entered = threading.Event()
+    release = threading.Event()
+    task = Task(f"Held {held_phase}", {})
+
+    def held_after_phase():
+        entered.set()
+        release.wait()
+
+    class Agent:
+        name = "Alice"
+
+        @staticmethod
+        def supports_cooperative_cancellation():
+            return True
+
+        @staticmethod
+        def step(_task, *, cancellation_token, phase_callback):
+            phase_callback(held_phase)
+            held_after_phase()
+            phase_callback("next_boundary")
+
+    group = TaskExecutionGroup(task=task, agents=[Agent()])
+    controller.start_execution_group(group)
+    assert entered.wait(1)
+    controller.assignment["Alice"] = task.id
+    controller.execute_tasks = controller._request_shutdown
+    controller.worker = controller.shutdown_event.wait
+    controller.process_completed_tasks = controller.shutdown_event.wait
+
+    try:
+        with pytest.raises(ControllerShutdownError, match="shutdown incomplete"):
+            controller.run()
+        verdict = controller.shutdown_diagnostics["verdict"]
+        execution = verdict["authoritative_basis"]["execution_groups"][
+            "items"
+        ][0]["executions"]["items"][0]
+        assert execution["execution_id"] == "execution-00000001"
+        assert execution["latest_phase"] == held_phase
+        assert [
+            item["event"] for item in execution["lifecycle"]["items"]
+        ] == [
+            "submission_created", "future_started", "phase", "token_requested",
+        ]
+        held_thread = next(
+            thread_snapshot
+            for thread_snapshot in controller.shutdown_diagnostics[
+                "post_verdict"
+            ]["threads"]["items"]
+            if any(
+                frame["function"] == "held_after_phase"
+                for frame in thread_snapshot["stack"]["items"]
+            )
+        )
+        assert held_thread["execution_ids"]["items"] == [
+            execution["execution_id"]
+        ]
+    finally:
+        release.set()
+        with pytest.raises(AgentExecutionCancelledError):
+            group.futures["Alice"].result(timeout=1)
+        for thread in controller.executor._threads:
+            thread.join(1)
+
+    assert controller.shutdown_complete is False
+    assert group.execution_completion_markers["Alice"]["execution_id"] == (
+        execution["execution_id"]
+    )
+
+
+def test_completion_callback_never_waits_for_controller_execution_lock():
+    controller, _, _ = _controller()
+    release_worker = threading.Event()
+    worker_started = threading.Event()
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+    task = Task("Nonblocking completion", {})
+
+    class Agent:
+        name = "Alice"
+
+        @staticmethod
+        def supports_cooperative_cancellation():
+            return False
+
+        @staticmethod
+        def step(_task):
+            worker_started.set()
+            release_worker.wait()
+            return "done", {}
+
+    group = TaskExecutionGroup(task=task, agents=[Agent()])
+    controller.start_execution_group(group)
+    assert worker_started.wait(1)
+
+    def hold_controller_lock():
+        with controller._execution_state_lock:
+            lock_held.set()
+            release_lock.wait()
+
+    lock_owner = threading.Thread(target=hold_controller_lock)
+    lock_owner.start()
+    assert lock_held.wait(1)
+    release_worker.set()
+    assert group.futures["Alice"].result(timeout=0.2) == ("done", {})
+    assert group.execution_completion_markers["Alice"]["event"] == (
+        "future_completed"
+    )
+    release_lock.set()
+    lock_owner.join(1)
+    controller.executor.shutdown(wait=True)
+
+
+def test_execution_ids_are_monotonic_and_follow_worker_lifecycle():
+    controller, _, _ = _controller()
+    task = Task("Two executions", {})
+
+    class Agent:
+        def __init__(self, name):
+            self.name = name
+
+        @staticmethod
+        def supports_cooperative_cancellation():
+            return False
+
+        def step(self, _task):
+            return self.name, {}
+
+    group = TaskExecutionGroup(
+        task=task, agents=[Agent("Alice"), Agent("Bob")],
+    )
+    controller.start_execution_group(group)
+    for future in group.futures.values():
+        future.result(timeout=1)
+
+    assert group.execution_ids == {
+        "Alice": "execution-00000001",
+        "Bob": "execution-00000002",
+    }
+    for name in ("Alice", "Bob"):
+        execution_id = group.execution_ids[name]
+        assert group.execution_started_markers[name]["execution_id"] == execution_id
+        assert group.execution_completion_markers[name]["execution_id"] == execution_id
+        frozen = controller._freeze_execution_diagnostics()
+        executions = frozen["execution_groups"]["items"][0][
+            "executions"
+        ]["items"]
+        execution = next(
+            item for item in executions if item["actor_id"] == name
+        )
+        assert execution["execution_id"] == execution_id
+        assert [
+            item["event"] for item in execution["lifecycle"]["items"]
+        ] == ["submission_created", "future_started", "future_completed"]
+    controller.executor.shutdown(wait=True)
+
+
+def test_enabled_and_disabled_post_verdict_diagnostics_preserve_same_verdict():
+    def execute(*, diagnostics_enabled):
+        controller, _, _ = _controller()
+        controller.executor.shutdown(wait=True)
+        controller.executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="diagnostic-parity",
+        )
+        controller.shutdown_grace_period = 0.02
+        release = threading.Event()
+        running = threading.Event()
+        task = Task("Diagnostic parity", {})
+        task.id = "diagnostic-parity-task"
+
+        def held_worker():
+            running.set()
+            release.wait()
+
+        future = controller.executor.submit(held_worker)
+        assert running.wait(1)
+        group = TaskExecutionGroup(
+            task=task,
+            agents=[SimpleNamespace(name="Alice")],
+            futures={"Alice": future},
+            submission_complete=True,
+        )
+        controller._started_execution_groups = [group]
+        controller.result_queue = [group]
+        controller.assignment = {"Alice": task.id}
+        controller.execute_tasks = controller._request_shutdown
+        controller.worker = controller.shutdown_event.wait
+        controller.process_completed_tasks = controller.shutdown_event.wait
+        if not diagnostics_enabled:
+            controller._bounded_shutdown_diagnostic_threads = (
+                lambda _threads: ([], {
+                    "thread_candidates_retention": {
+                        "capacity": controller.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                        "retained": 0,
+                        "truncated": False,
+                        "dropped_count": 0,
+                    },
+                })
+            )
+            controller._capture_post_verdict_thread_stacks = lambda _threads, **_kwargs: {
+                "captured_at_monotonic_ns": time.monotonic_ns(),
+                "threads": {"items": [], "retention": {
+                    "capacity": controller.SHUTDOWN_DIAGNOSTIC_THREAD_LIMIT,
+                    "retained": 0,
+                    "truncated": False,
+                    "dropped_count": 0,
+                }},
+                "state": "disabled",
+            }
+            controller._bounded_tool_runtime_context = lambda: {
+                "state": "disabled",
+            }
+        try:
+            with pytest.raises(ControllerShutdownError):
+                controller.run()
+            basis = controller.shutdown_diagnostics["verdict"][
+                "authoritative_basis"
+            ]
+            return {
+                "shutdown_complete": controller.shutdown_complete,
+                "live_threads": basis["live_threads"],
+                "active_task_ids": basis["active_task_ids"],
+                "active_agent_ids": basis["active_agent_ids"],
+                "incomplete_submission_task_ids": basis[
+                    "incomplete_submission_task_ids"
+                ],
+                "undrained_queues": basis["undrained_queues"],
+            }
+        finally:
+            release.set()
+            future.result(timeout=1)
+            for thread in controller.executor._threads:
+                thread.join(1)
+
+    assert execute(diagnostics_enabled=True) == execute(diagnostics_enabled=False)
 
 
 def _judged_reconciliation_controller(status="success", task_count=1):

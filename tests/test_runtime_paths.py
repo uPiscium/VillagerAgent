@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from env.minecraft_client import (
     timeit,
 )
 from env.runtime_paths import RuntimePaths, atomic_write_json, read_json_artifact
+from pipeline.controller_tiny import ControllerShutdownError
 from env.minecraft_bridge_diagnostics import (
     MOVEMENT_FAILURE_REASON_HEADER,
     MOVEMENT_TERMINAL_HEADER,
@@ -442,12 +444,46 @@ def test_bridge_cleanup_escalates_to_bounded_kill():
     ]
     assert result["cleanup_complete"] is True
     assert result["processes"]["Alice"]["alive_after_kill"] is False
+    metadata = result["processes"]["Alice"]
+    assert metadata["pid"] == 1234
+    assert "process_group_id" in metadata
+    assert "session_id" in metadata
+    assert metadata["initial_poll"]["returncode"] is None
+    assert metadata["initial_poll"]["completed"] is True
+    assert metadata["terminate"]["attempted"] is True
+    assert metadata["terminate"]["completed"] is True
+    assert metadata["terminate_wait"]["budget_seconds"] == 0.2
+    assert metadata["terminate_wait"]["timed_out"] is True
+    assert metadata["post_terminate_poll"]["returncode"] is None
+    assert metadata["kill"]["attempted"] is True
+    assert metadata["kill"]["completed"] is True
+    assert metadata["kill_wait"]["budget_seconds"] == 0.1
+    assert metadata["kill_wait"]["completed"] is True
+    assert metadata["kill_wait"]["returncode"] == 0
+    assert metadata["final_poll"]["returncode"] == 0
+    for stage_name in (
+        "initial_poll", "terminate", "terminate_wait", "post_terminate_poll",
+        "kill", "kill_wait", "final_poll",
+    ):
+        stage = metadata[stage_name]
+        if stage["attempted"]:
+            assert isinstance(stage["elapsed_ns"], int)
+            assert stage["elapsed_ns"] >= 0
+    assert metadata["exit_code"] == 0
+    assert result["process_retention"] == {
+        "capacity": 64,
+        "retained": 1,
+        "truncated": False,
+        "dropped_count": 0,
+    }
 
 
-def test_bridge_cleanup_failure_preserves_process_mapping():
+def test_bridge_cleanup_failure_preserves_process_mapping(tmp_path):
     process = _FakeBridgeProcess(exit_on_kill=False)
     MinecraftAgent.agent_process["Alice"] = process
-    MinecraftAgent.runtime_paths_by_name["Alice"] = RuntimePaths.legacy()
+    MinecraftAgent.runtime_paths_by_name["Alice"] = RuntimePaths.isolated(
+        tmp_path / "attempt"
+    )
 
     try:
         with pytest.raises(MinecraftBridgeCleanupError) as raised:
@@ -457,11 +493,75 @@ def test_bridge_cleanup_failure_preserves_process_mapping():
         assert raised.value.cleanup_result["processes"]["Alice"]["alive_after_kill"] is True
         assert MinecraftAgent.agent_process["Alice"] is process
         assert "Alice" in MinecraftAgent.runtime_paths_by_name
+        assert MinecraftAgent._bridge_diagnostic_recorders == {}
     finally:
         MinecraftAgent.agent_process.clear()
         MinecraftAgent.runtime_paths_by_name.clear()
         MinecraftAgent.name2port.clear()
         MinecraftAgent.last_bridge_cleanup = None
+
+
+def test_bridge_cleanup_records_signal_errors_and_all_stage_timings(tmp_path):
+    class ErrorProcess(_FakeBridgeProcess):
+        def terminate(self):
+            self.calls.append("terminate")
+            raise OSError("sensitive terminate detail")
+
+        def kill(self):
+            self.calls.append("kill")
+            raise RuntimeError("sensitive kill detail")
+
+    process = ErrorProcess(exit_on_kill=False)
+    MinecraftAgent.agent_process["Alice"] = process
+    MinecraftAgent.runtime_paths_by_name["Alice"] = RuntimePaths.isolated(
+        tmp_path / "attempt"
+    )
+
+    try:
+        with pytest.raises(MinecraftBridgeCleanupError) as raised:
+            MinecraftAgent.kill(
+                terminate_grace_seconds=0.01, kill_grace_seconds=0.01,
+            )
+        metadata = raised.value.cleanup_result["processes"]["Alice"]
+        assert metadata["terminate"]["error_type"] == "OSError"
+        assert metadata["terminate"]["error_text"] == "operation_failed"
+        assert metadata["terminate_wait"]["timed_out"] is True
+        assert metadata["post_terminate_poll"]["returncode"] is None
+        assert metadata["kill"]["error_type"] == "RuntimeError"
+        assert metadata["kill"]["error_text"] == "operation_failed"
+        assert metadata["kill_wait"]["timed_out"] is True
+        assert metadata["final_poll"]["returncode"] is None
+        for stage_name in (
+            "initial_poll", "terminate", "terminate_wait",
+            "post_terminate_poll", "kill", "kill_wait", "final_poll",
+        ):
+            stage = metadata[stage_name]
+            assert stage["attempted"] is True
+            assert isinstance(stage["started_monotonic_ns"], int)
+            assert isinstance(stage["completed_monotonic_ns"], int)
+            assert isinstance(stage["elapsed_ns"], int)
+        assert "sensitive" not in str(metadata)
+        assert MinecraftAgent._bridge_diagnostic_recorders == {}
+    finally:
+        MinecraftAgent.agent_process.clear()
+        MinecraftAgent.runtime_paths_by_name.clear()
+        MinecraftAgent.name2port.clear()
+        MinecraftAgent.last_bridge_cleanup = None
+
+
+def test_tool_runtime_snapshot_marks_active_diagnostics_as_not_finalized():
+    previous = MinecraftAgent.last_bridge_diagnostics
+    MinecraftAgent.last_bridge_diagnostics = None
+    try:
+        snapshot = MinecraftAgent.tool_runtime_snapshot()
+    finally:
+        MinecraftAgent.last_bridge_diagnostics = previous
+
+    assert snapshot["snapshot_source"] == "in_memory_only"
+    assert snapshot["bridge_diagnostics"] is None
+    assert snapshot["bridge_diagnostics_state"] == (
+        "not_finalized_active_recorder_snapshot_unavailable"
+    )
 
 
 def test_environment_stop_is_idempotent_and_keeps_cleanup_result(monkeypatch):
@@ -503,6 +603,147 @@ def test_environment_stop_does_not_repeat_cleanup_failure(monkeypatch):
         environment.stop()
     assert environment.stop() is cleanup
     assert calls == [True]
+
+
+def test_environment_run_preserves_primary_error_and_attaches_cleanup_failure(tmp_path):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = True
+    environment.logger = logging.getLogger("test-environment-error-chain")
+    environment.runtime_paths = RuntimePaths.isolated(tmp_path / "attempt")
+    environment.runtime_paths.ensure_directories()
+    cleanup_result = {
+        "processes": {"Alice": {"alive_after_kill": True}},
+        "cleanup_complete": False,
+    }
+    cleanup_error = MinecraftBridgeCleanupError(
+        "cleanup failed", cleanup_result=cleanup_result,
+    )
+    environment.stop = lambda: (_ for _ in ()).throw(cleanup_error)
+    primary_error = RuntimeError("controller failed")
+
+    with pytest.raises(RuntimeError) as raised:
+        with environment.run():
+            raise primary_error
+
+    assert raised.value is primary_error
+    assert raised.value.__cause__ is cleanup_error
+    assert raised.value.cleanup_error is cleanup_error
+    assert raised.value.cleanup_failure == {
+        "error_type": "MinecraftBridgeCleanupError",
+        "cleanup_result": cleanup_result,
+    }
+    assert environment.runtime_cleanup_failure == raised.value.cleanup_failure
+
+
+def test_controller_error_and_real_bridge_nonexit_cleanup_remain_separate(tmp_path):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = True
+    environment.running = True
+    environment.bridge_cleanup_result = None
+    environment.bridge_cleanup_error = None
+    environment.logger = logging.getLogger("test-controller-bridge-error-chain")
+    environment.runtime_paths = RuntimePaths.isolated(tmp_path / "attempt")
+    environment.runtime_paths.ensure_directories()
+    process = _FakeBridgeProcess(exit_on_kill=False)
+    MinecraftAgent.agent_process["Alice"] = process
+    MinecraftAgent.runtime_paths_by_name["Alice"] = environment.runtime_paths
+    primary_error = ControllerShutdownError("shutdown incomplete")
+
+    try:
+        with pytest.raises(ControllerShutdownError) as raised:
+            with environment.run():
+                raise primary_error
+
+        assert raised.value is primary_error
+        assert isinstance(raised.value.__cause__, MinecraftBridgeCleanupError)
+        chain = environment.runtime_failure_chain
+        assert chain["primary_failure"] == {
+            "error_type": "ControllerShutdownError",
+        }
+        cleanup = chain["cleanup_failure"]["cleanup_result"]
+        assert cleanup["cleanup_complete"] is False
+        assert cleanup["processes"]["Alice"]["kill_wait"]["timed_out"] is True
+        assert cleanup["processes"]["Alice"]["final_poll"]["returncode"] is None
+    finally:
+        MinecraftAgent.agent_process.clear()
+        MinecraftAgent.runtime_paths_by_name.clear()
+        MinecraftAgent.name2port.clear()
+        MinecraftAgent.last_bridge_cleanup = None
+
+
+def test_environment_run_records_generic_cleanup_failure_with_primary(tmp_path):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = True
+    environment.logger = logging.getLogger("test-environment-generic-cleanup")
+    environment.runtime_paths = RuntimePaths.isolated(tmp_path / "attempt")
+    environment.runtime_paths.ensure_directories()
+    cleanup_error = OSError("cleanup failed")
+    environment.stop = lambda: (_ for _ in ()).throw(cleanup_error)
+    primary_error = RuntimeError("controller failed")
+
+    with pytest.raises(RuntimeError) as raised:
+        with environment.run():
+            raise primary_error
+
+    assert raised.value is primary_error
+    assert raised.value.__cause__ is cleanup_error
+    assert environment.runtime_failure_chain == {
+        "primary_failure": {"error_type": "RuntimeError"},
+        "cleanup_failure": {"error_type": "OSError"},
+    }
+
+
+def test_environment_run_records_cleanup_only_generic_failure(tmp_path):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = True
+    environment.logger = logging.getLogger("test-environment-cleanup-only")
+    environment.runtime_paths = RuntimePaths.isolated(tmp_path / "attempt")
+    environment.runtime_paths.ensure_directories()
+    cleanup_error = OSError("cleanup failed")
+    environment.stop = lambda: (_ for _ in ()).throw(cleanup_error)
+
+    with pytest.raises(OSError) as raised:
+        with environment.run():
+            pass
+
+    assert raised.value is cleanup_error
+    assert environment.runtime_failure_chain == {
+        "primary_failure": None,
+        "cleanup_failure": {"error_type": "OSError"},
+    }
+
+
+def test_environment_run_cleans_up_after_base_exception(tmp_path):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = True
+    environment.logger = logging.getLogger("test-environment-base-exception")
+    environment.runtime_paths = RuntimePaths.isolated(tmp_path / "attempt")
+    environment.runtime_paths.ensure_directories()
+    cleanup_calls = []
+    environment.stop = lambda: cleanup_calls.append(True)
+    interrupt = KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt) as raised:
+        with environment.run():
+            raise interrupt
+
+    assert raised.value is interrupt
+    assert cleanup_calls == [True]
+
+
+def test_environment_run_clears_stale_failure_chain(tmp_path):
+    environment = object.__new__(VillagerBench)
+    environment._virtual_debug = True
+    environment.logger = logging.getLogger("test-environment-failure-reset")
+    environment.runtime_paths = RuntimePaths.isolated(tmp_path / "attempt")
+    environment.runtime_paths.ensure_directories()
+    environment.runtime_failure_chain = {"cleanup_failure": {"stale": True}}
+    environment.runtime_cleanup_failure = {"stale": True}
+    environment.stop = lambda: None
+
+    with environment.run():
+        assert environment.runtime_failure_chain is None
+        assert environment.runtime_cleanup_failure is None
 
 
 def test_action_log_uses_injected_paths_without_activation(tmp_path):

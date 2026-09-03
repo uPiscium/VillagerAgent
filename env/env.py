@@ -103,6 +103,10 @@ class VillagerBench:
           
     @contextmanager
     def run(self, server_debug: bool = False, fast_api=False):
+        self.runtime_failure_chain = None
+        self.runtime_cleanup_failure = None
+        primary_error = None
+        primary_traceback = None
         try:
             if not self._virtual_debug:
                 self.launch(debug=server_debug, fast_api=fast_api)
@@ -111,13 +115,18 @@ class VillagerBench:
                 self.logger.info("[virtual debug mode, env not launched]")
             self.launch_time = time.time()
             yield
-        except Exception as e:
+        except BaseException as e:
             tb = traceback.format_exc()
             self.logger.error(f"Exception occurred: {e}\n{tb}")
+            primary_error = e
+            primary_traceback = e.__traceback__
+
+        cleanup_error = None
+        try:
             self.stop()
-            raise
+        except Exception as error:
+            cleanup_error = error
         finally:
-            self.stop()
             paths = self._paths()
             state_result = read_json_artifact(paths.state)
             if state_result.state == "valid" and isinstance(state_result.value, dict):
@@ -127,11 +136,50 @@ class VillagerBench:
             if paths.env_cache.exists():
                 atomic_write_json(paths.env_cache, [])
 
+        if primary_error is not None:
+            if isinstance(cleanup_error, Exception):
+                cleanup_failure = {
+                    "error_type": type(cleanup_error).__name__,
+                }
+                if isinstance(cleanup_error, MinecraftBridgeCleanupError):
+                    cleanup_failure["cleanup_result"] = dict(
+                        cleanup_error.cleanup_result
+                    )
+                self.runtime_cleanup_failure = cleanup_failure
+                self.runtime_failure_chain = {
+                    "primary_failure": {
+                        "error_type": type(primary_error).__name__,
+                    },
+                    "cleanup_failure": cleanup_failure,
+                }
+                try:
+                    setattr(primary_error, "cleanup_error", cleanup_error)
+                    setattr(primary_error, "cleanup_failure", cleanup_failure)
+                except (AttributeError, TypeError):
+                    pass
+                raise primary_error.with_traceback(primary_traceback) from cleanup_error
+            raise primary_error.with_traceback(primary_traceback)
+        if cleanup_error is not None:
+            if isinstance(cleanup_error, Exception):
+                cleanup_failure = {
+                    "error_type": type(cleanup_error).__name__,
+                }
+                if isinstance(cleanup_error, MinecraftBridgeCleanupError):
+                    cleanup_failure["cleanup_result"] = dict(
+                        cleanup_error.cleanup_result
+                    )
+                self.runtime_cleanup_failure = cleanup_failure
+                self.runtime_failure_chain = {
+                    "primary_failure": None,
+                    "cleanup_failure": cleanup_failure,
+                }
+            raise cleanup_error
+
     def stop(self):
         if self.bridge_cleanup_result is not None:
             return self.bridge_cleanup_result
         if not self.running:
-            return {"processes": {}, "cleanup_complete": True}
+            return Agent.empty_bridge_cleanup_result()
         try:
             self.bridge_cleanup_result = Agent.kill()
             return self.bridge_cleanup_result
@@ -698,6 +746,9 @@ class VillagerBench:
 
     def get_tool_runtime_context(self) -> dict:
         return Agent.tool_runtime_context()
+
+    def get_tool_runtime_context_snapshot(self) -> dict:
+        return Agent.tool_runtime_snapshot()
 
     def get_minecraft_bridge_diagnostics(self) -> dict:
         return (

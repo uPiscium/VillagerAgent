@@ -159,6 +159,7 @@ DEFAULT_MINECRAFT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MINECRAFT_READ_TIMEOUT_SECONDS = 30.0
 DEFAULT_BRIDGE_TERMINATE_GRACE_SECONDS = 2.0
 DEFAULT_BRIDGE_KILL_GRACE_SECONDS = 1.0
+BRIDGE_CLEANUP_PROCESS_DIAGNOSTIC_LIMIT = 64
 DEFAULT_MOVEMENT_CANCEL_CONNECT_TIMEOUT_SECONDS = 0.5
 DEFAULT_MOVEMENT_CANCEL_READ_TIMEOUT_SECONDS = 2.0
 
@@ -786,6 +787,23 @@ class Agent():
             ),
         }
 
+    @classmethod
+    def tool_runtime_snapshot(cls) -> dict:
+        """Return an in-memory-only projection for post-verdict diagnostics."""
+        return {
+            "http_timeout_seconds": {
+                "connect": cls.minecraft_connect_timeout_seconds,
+                "read": cls.minecraft_read_timeout_seconds,
+            },
+            "last_tool_timeout": deepcopy(cls.last_tool_timeout),
+            "bridge_diagnostics": deepcopy(cls.last_bridge_diagnostics),
+            "bridge_diagnostics_state": (
+                "finalized" if cls.last_bridge_diagnostics is not None
+                else "not_finalized_active_recorder_snapshot_unavailable"
+            ),
+            "snapshot_source": "in_memory_only",
+        }
+
     @staticmethod
     def get_url_prefix(runtime_paths: RuntimePaths) -> dict:
         url_prefix_path = runtime_paths.url_prefix
@@ -1106,6 +1124,20 @@ class Agent():
         }
 
     @classmethod
+    def empty_bridge_cleanup_result(cls) -> dict:
+        return {
+            "processes": {},
+            "process_retention": {
+                "capacity": BRIDGE_CLEANUP_PROCESS_DIAGNOSTIC_LIMIT,
+                "retained": 0,
+                "truncated": False,
+                "dropped_count": 0,
+            },
+            "incomplete_process_count": 0,
+            "cleanup_complete": True,
+        }
+
+    @classmethod
     def kill(
         cls,
         *,
@@ -1120,53 +1152,200 @@ class Agent():
         ):
             return cls.last_bridge_cleanup
         process_results = {}
+        process_count = 0
+        incomplete_process_count = 0
         paths_snapshot = dict(cls.runtime_paths_by_name)
+
+        def stage(*, budget_seconds=None):
+            return {
+                "attempted": False,
+                "completed": False,
+                "timed_out": False,
+                "budget_seconds": budget_seconds,
+                "started_monotonic_ns": None,
+                "completed_monotonic_ns": None,
+                "elapsed_ns": None,
+                "error_type": None,
+                "error_text": None,
+                "returncode": None,
+            }
+
+        def begin(item):
+            item["attempted"] = True
+            item["started_monotonic_ns"] = time.monotonic_ns()
+
+        def finish(item):
+            item["completed_monotonic_ns"] = time.monotonic_ns()
+            item["elapsed_ns"] = (
+                item["completed_monotonic_ns"] - item["started_monotonic_ns"]
+            )
+
+        def fail(item, error):
+            item["error_type"] = type(error).__name__
+            item["error_text"] = "operation_failed"
+
         for name, process in tuple(cls.agent_process.items()):
+            process_count += 1
+            pid = getattr(process, "pid", None)
             metadata = {
-                "pid": getattr(process, "pid", None),
+                "pid": pid,
+                "process_group_id": None,
+                "session_id": None,
+                "identity_collection_errors": [],
+                "initial_poll": stage(),
+                "terminate": stage(),
+                "terminate_wait": stage(
+                    budget_seconds=terminate_grace_seconds
+                ),
+                "post_terminate_poll": stage(),
+                "kill": stage(),
+                "kill_wait": stage(budget_seconds=kill_grace_seconds),
+                "final_poll": stage(),
+                "exit_code": None,
                 "terminated": False,
                 "killed": False,
                 "alive_after_kill": False,
             }
-            if process.poll() is None:
-                process.terminate()
-                metadata["terminated"] = True
-                cls.record_bridge_diagnostic(
-                    name, "bridge_process_terminate_sent", actor=name,
-                    endpoint_identity=f"actor:{name}", pid=getattr(process, "pid", None),
-                )
-                try:
-                    process.wait(timeout=terminate_grace_seconds)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    metadata["killed"] = True
-                    cls.record_bridge_diagnostic(
-                        name, "bridge_process_kill_sent", actor=name,
-                        endpoint_identity=f"actor:{name}", pid=getattr(process, "pid", None),
-                    )
+            initial_poll = None
+            begin(metadata["initial_poll"])
+            try:
+                initial_poll = process.poll()
+                metadata["initial_poll"]["returncode"] = initial_poll
+                metadata["initial_poll"]["completed"] = True
+            except Exception as error:
+                fail(metadata["initial_poll"], error)
+            finally:
+                finish(metadata["initial_poll"])
+            if initial_poll is None:
+                for field_name, collector in (
+                    ("process_group_id", getattr(os, "getpgid", None)),
+                    ("session_id", getattr(os, "getsid", None)),
+                ):
+                    if not callable(collector) or not isinstance(pid, int):
+                        continue
                     try:
-                        process.wait(timeout=kill_grace_seconds)
+                        metadata[field_name] = collector(pid)
+                    except (OSError, ValueError) as error:
+                        metadata["identity_collection_errors"].append({
+                            "field": field_name,
+                            "error_type": type(error).__name__,
+                        })
+                begin(metadata["terminate"])
+                try:
+                    process.terminate()
+                    metadata["terminate"]["completed"] = True
+                    metadata["terminated"] = True
+                    cls.record_bridge_diagnostic(
+                        name, "bridge_process_terminate_sent", actor=name,
+                        endpoint_identity=f"actor:{name}", pid=pid,
+                    )
+                except Exception as error:
+                    fail(metadata["terminate"], error)
+                finally:
+                    finish(metadata["terminate"])
+
+                begin(metadata["terminate_wait"])
+                try:
+                    metadata["terminate_wait"]["returncode"] = process.wait(
+                        timeout=terminate_grace_seconds
+                    )
+                    metadata["terminate_wait"]["completed"] = True
+                except subprocess.TimeoutExpired:
+                    metadata["terminate_wait"]["timed_out"] = True
+                except Exception as error:
+                    fail(metadata["terminate_wait"], error)
+                finally:
+                    finish(metadata["terminate_wait"])
+
+                post_terminate_poll = None
+                begin(metadata["post_terminate_poll"])
+                try:
+                    post_terminate_poll = process.poll()
+                    metadata["post_terminate_poll"]["returncode"] = (
+                        post_terminate_poll
+                    )
+                    metadata["post_terminate_poll"]["completed"] = True
+                except Exception as error:
+                    fail(metadata["post_terminate_poll"], error)
+                finally:
+                    finish(metadata["post_terminate_poll"])
+
+                if post_terminate_poll is None:
+                    begin(metadata["kill"])
+                    try:
+                        process.kill()
+                        metadata["kill"]["completed"] = True
+                        metadata["killed"] = True
+                        cls.record_bridge_diagnostic(
+                            name, "bridge_process_kill_sent", actor=name,
+                            endpoint_identity=f"actor:{name}", pid=pid,
+                        )
+                    except Exception as error:
+                        fail(metadata["kill"], error)
+                    finally:
+                        finish(metadata["kill"])
+
+                    begin(metadata["kill_wait"])
+                    try:
+                        metadata["kill_wait"]["returncode"] = process.wait(
+                            timeout=kill_grace_seconds
+                        )
+                        metadata["kill_wait"]["completed"] = True
                     except subprocess.TimeoutExpired:
-                        pass
-            metadata["alive_after_kill"] = process.poll() is None
+                        metadata["kill_wait"]["timed_out"] = True
+                    except Exception as error:
+                        fail(metadata["kill_wait"], error)
+                    finally:
+                        finish(metadata["kill_wait"])
+
+            final_poll = None
+            begin(metadata["final_poll"])
+            try:
+                final_poll = process.poll()
+                metadata["final_poll"]["returncode"] = final_poll
+                metadata["final_poll"]["completed"] = True
+            except Exception as error:
+                fail(metadata["final_poll"], error)
+            finally:
+                finish(metadata["final_poll"])
+            metadata["exit_code"] = final_poll
+            metadata["alive_after_kill"] = final_poll is None
             cls.record_bridge_diagnostic(
                 name,
                 "bridge_process_still_alive" if metadata["alive_after_kill"]
                 else "bridge_process_exited",
                 actor=name, endpoint_identity=f"actor:{name}",
-                pid=getattr(process, "pid", None), exit_code=process.poll(),
+                pid=pid, exit_code=final_poll,
                 result="alive" if metadata["alive_after_kill"] else "exited",
             )
-            process_results[name] = metadata
+            if metadata["alive_after_kill"]:
+                incomplete_process_count += 1
+            if len(process_results) < BRIDGE_CLEANUP_PROCESS_DIAGNOSTIC_LIMIT:
+                process_results[name] = metadata
+            elif metadata["alive_after_kill"]:
+                completed_name = next((
+                    retained_name
+                    for retained_name, retained in process_results.items()
+                    if not retained["alive_after_kill"]
+                ), None)
+                if completed_name is not None:
+                    process_results.pop(completed_name)
+                    process_results[name] = metadata
 
         cleanup_result = {
             "processes": process_results,
-            "cleanup_complete": not any(
-                item["alive_after_kill"] for item in process_results.values()
-            ),
+            "process_retention": {
+                "capacity": BRIDGE_CLEANUP_PROCESS_DIAGNOSTIC_LIMIT,
+                "retained": len(process_results),
+                "truncated": process_count > len(process_results),
+                "dropped_count": process_count - len(process_results),
+            },
+            "incomplete_process_count": incomplete_process_count,
+            "cleanup_complete": incomplete_process_count == 0,
         }
         cls.last_bridge_cleanup = cleanup_result
         cls.last_bridge_diagnostics = cls.bridge_diagnostics_summary(paths_snapshot)
+        cls._close_bridge_diagnostic_recorders()
         if not cleanup_result["cleanup_complete"]:
             raise MinecraftBridgeCleanupError(
                 "Minecraft bridge subprocess cleanup did not complete",
@@ -1181,7 +1360,6 @@ class Agent():
             cls.agent_process.clear()
         with cls._action_log_locks_guard:
             cls._action_log_locks.clear()
-        cls._close_bridge_diagnostic_recorders()
         cls.last_tool_timeout = None
         return cleanup_result
 
