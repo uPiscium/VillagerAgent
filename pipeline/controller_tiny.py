@@ -32,6 +32,18 @@ from env.minecraft_client import (
 from env.minecraft_dual_dag import rank_minecraft_runtime_tasks
 from env.runtime_paths import RuntimePaths, atomic_write_json
 import logging
+from contextvars import ContextVar
+
+
+_execution_identity: ContextVar[dict | None] = ContextVar(
+    "villageragent_execution_identity", default=None,
+)
+
+
+def current_execution_diagnostic_identity():
+    """Return the current execution identity without exposing mutable state."""
+    identity = _execution_identity.get()
+    return MappingProxyType(dict(identity)) if identity is not None else None
 
 
 @dataclass
@@ -440,9 +452,20 @@ class GlobalController:
             "execution_id": group.execution_ids[agent_name],
             "monotonic_ns": time.monotonic_ns(),
         }
+        sink = getattr(self, "_k11_late_diagnostic_sink", None)
+        if callable(sink):
+            try:
+                sink()
+            except Exception as exc:
+                self._k11_late_diagnostic_sink_error = type(exc).__name__
 
     def _run_execution_worker(self, group, agent, kwargs, task):
-        # This is intentionally the first worker-side operation.
+        identity = {
+            "execution_id": group.execution_ids[agent.name],
+            "task_id": task.id,
+            "actor_id": agent.name,
+        }
+        # This remains the first worker-side operation.
         group.execution_started_markers[agent.name] = {
             "event": "future_started",
             "execution_id": group.execution_ids[agent.name],
@@ -450,7 +473,13 @@ class GlobalController:
             "thread_identity": threading.get_ident(),
             "native_thread_identity": threading.get_native_id(),
         }
-        return agent.step(task, **kwargs)
+        if not callable(getattr(self, "get_k11_provider_ledger_snapshot", None)):
+            return agent.step(task, **kwargs)
+        token = _execution_identity.set(identity)
+        try:
+            return agent.step(task, **kwargs)
+        finally:
+            _execution_identity.reset(token)
 
     def _phase_callback(self, group, agent_name):
         def update(phase):
@@ -2343,6 +2372,147 @@ class GlobalController:
             }
         finally:
             self._execution_state_lock.release()
+
+    def snapshot_execution_ledger(self) -> dict:
+        """Return a read-only, non-waiting execution ledger for diagnostics."""
+        if not self._execution_state_lock.acquire(blocking=False):
+            return {
+                "schema_version": "controller-late-execution-ledger/1",
+                "captured_at_monotonic_ns": time.monotonic_ns(),
+                "groups": {"items": [], "retention": self._retention_metadata(
+                    self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT, 0, 0,
+                )},
+                "diagnostic_collection_error": {
+                    "collector": "execution_ledger",
+                    "error_type": "ExecutionStateLockUnavailable",
+                },
+            }
+        try:
+            selected, group_dropped = self._bounded_diagnostic_groups()
+            group_refs = []
+            for group in selected:
+                names = sorted(set(group.execution_ids) | set(group.futures)
+                               | set(group.phase_history)
+                               | set(group.cancellation_tokens))
+                retained_names = names[:self.EXECUTION_ACTOR_LIMIT]
+                group_refs.append({
+                    "task_id": group.task.id,
+                    "completed": bool(group.completed),
+                    "submission_complete": bool(group.submission_complete),
+                    "terminal_state_persisted": bool(group.terminal_state_persisted),
+                    "post_processing_complete": bool(group.post_processing_complete),
+                    "shutdown_reconciled": bool(group.shutdown_reconciled),
+                    "assignments_released": bool(group.assignments_released),
+                    "names": retained_names,
+                    "dropped": len(names) - len(retained_names),
+                    "futures": {name: group.futures.get(name) for name in retained_names},
+                    "ids": {name: group.execution_ids.get(name) for name in retained_names},
+                    "started": {name: dict(group.execution_started_markers[name])
+                                for name in retained_names
+                                if isinstance(group.execution_started_markers.get(name), dict)},
+                    "completed_markers": {name: dict(group.execution_completion_markers[name])
+                                          for name in retained_names
+                                          if isinstance(group.execution_completion_markers.get(name), dict)},
+                    "phases": {name: [dict(entry) for entry in group.phase_history.get(name, [])]
+                               for name in retained_names},
+                    "phase_dropped": {name: group.phase_history_truncated.get(name, 0)
+                                      for name in retained_names},
+                    "latest_phase": {name: group.cancellation_phases.get(name)
+                                     for name in retained_names},
+                    "requested": set(group.cancellation_requested),
+                    "acknowledged": set(group.cancellation_acknowledged),
+                    "requested_wall": dict(group.cancellation_requested_at),
+                })
+        except Exception as exc:
+            return {
+                "schema_version": "controller-late-execution-ledger/1",
+                "captured_at_monotonic_ns": time.monotonic_ns(),
+                "groups": {"items": [], "retention": self._retention_metadata(
+                    self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT, 0, 0,
+                )},
+                "diagnostic_collection_error": {
+                    "collector": "execution_ledger",
+                    "error_type": type(exc).__name__,
+                },
+            }
+        finally:
+            self._execution_state_lock.release()
+
+        groups = []
+        errors = []
+        for ref in group_refs:
+            executions = []
+            for name in ref["names"]:
+                future = ref["futures"].get(name)
+                future_state = {"done": False, "cancelled": False, "running": False}
+                if future is None:
+                    errors.append({"collector": "execution_ledger", "error_type": "MalformedFuture"})
+                else:
+                    try:
+                        future_state = {"done": bool(future.done()),
+                                        "cancelled": bool(future.cancelled()),
+                                        "running": bool(future.running())}
+                    except Exception as exc:
+                        errors.append({"collector": "execution_ledger", "error_type": type(exc).__name__})
+                lifecycle = list(ref["phases"].get(name, []))
+                lifecycle.extend([ref["started"][name]] if name in ref["started"] else [])
+                lifecycle.extend([ref["completed_markers"][name]] if name in ref["completed_markers"] else [])
+                lifecycle.sort(key=lambda item: item.get("monotonic_ns", 0))
+                dropped = ref["phase_dropped"].get(name, 0)
+                if len(lifecycle) > self.EXECUTION_LIFECYCLE_LIMIT:
+                    dropped += len(lifecycle) - self.EXECUTION_LIFECYCLE_LIMIT
+                    lifecycle = lifecycle[-self.EXECUTION_LIFECYCLE_LIMIT:]
+                requested_ns = next((entry.get("monotonic_ns") for entry in reversed(lifecycle)
+                                     if entry.get("event") == "token_requested"),
+                                    None)
+                acknowledged_ns = next((entry.get("monotonic_ns") for entry in reversed(lifecycle)
+                                        if entry.get("event") == "token_acknowledged"),
+                                       None)
+                executions.append({
+                    "execution_id": ref["ids"].get(name), "task_id": ref["task_id"], "actor_id": name,
+                    "future": future_state,
+                    "future_started": ref["started"].get(name),
+                    "future_completed": ref["completed_markers"].get(name),
+                    "cancellation": {
+                        "requested": name in ref["requested"],
+                        "acknowledged": name in ref["acknowledged"],
+                        "requested_at_monotonic_ns": requested_ns,
+                        "acknowledged_at_monotonic_ns": acknowledged_ns,
+                        "requested_at_wall_time": ref["requested_wall"].get(name),
+                    },
+                    "latest_phase": ref["latest_phase"].get(name),
+                    "lifecycle": {"items": lifecycle, "retention": self._retention_metadata(
+                        self.EXECUTION_LIFECYCLE_LIMIT, len(lifecycle), dropped,
+                    )},
+                })
+            groups.append({
+                "task_id": ref["task_id"],
+                "executions": {"items": executions, "retention": self._retention_metadata(
+                    self.EXECUTION_ACTOR_LIMIT, len(executions), ref["dropped"],
+                )},
+                "reconciliation": {"group_completed": ref["completed"],
+                    "shutdown_reconciled": ref["shutdown_reconciled"],
+                    "assignments_released": ref["assignments_released"],
+                    "terminal_state_persisted": ref["terminal_state_persisted"],
+                    "post_processing_complete": ref["post_processing_complete"],
+                    "execution_terminal_reconciled": bool(executions) and all(
+                        item["future"]["done"] is True
+                        and item["future"]["running"] is False
+                        and isinstance(item["future_completed"], dict)
+                        and item["future_completed"].get("execution_id")
+                        == item["execution_id"]
+                        for item in executions
+                    ),
+                },
+            })
+        result = {"schema_version": "controller-late-execution-ledger/1",
+                  "captured_at_monotonic_ns": time.monotonic_ns(),
+                  "groups": {"items": groups, "retention": self._retention_metadata(
+                      self.SHUTDOWN_DIAGNOSTIC_GROUP_LIMIT, len(groups), group_dropped,
+                  )}}
+        if errors:
+            result["diagnostic_collection_error"] = errors
+        return result
 
     def _freeze_terminal_barrier_context(self) -> dict:
         if not self._execution_state_lock.acquire(blocking=False):

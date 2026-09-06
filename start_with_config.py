@@ -1,10 +1,12 @@
 import argparse
+from copy import deepcopy
 import json
 import math
 import os
 import sys
 import time
 import inspect
+import threading
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path, PurePosixPath
@@ -59,12 +61,157 @@ def _safe_collect(collector, *, field_name: str, default):
 
 
 def _controller_snapshot(controller) -> dict:
-    return {
+    snapshot = {
         "shutdown_complete": bool(getattr(controller, "shutdown_complete", False)),
         "state": getattr(controller, "controller_state", None),
         "context": getattr(controller, "shutdown_context", None),
         "active_assignments": dict(getattr(controller, "assignment", {})),
     }
+    provider_collector = getattr(controller, "get_k11_provider_ledger_snapshot", None)
+    late_identity = getattr(controller, "_k11_late_cleanup_identity", None)
+    context = snapshot["context"]
+    diagnostics = context.get("diagnostics") if isinstance(context, dict) else None
+    verdict = diagnostics.get("verdict") if isinstance(diagnostics, dict) else None
+    if (not callable(provider_collector) or not isinstance(late_identity, dict)
+            or not isinstance(verdict, dict)):
+        return snapshot
+    ledger = {
+        "schema_version": "controller-late-execution-ledger/1",
+        "captured_at_monotonic_ns": time.monotonic_ns(),
+        "groups": {"items": [], "retention": {
+            "capacity": 0, "retained": 0, "truncated": False, "dropped_count": 0,
+        }},
+        "diagnostic_collection_error": {
+            "collector": "execution_ledger",
+            "error_type": "Unavailable",
+        },
+    }
+    collector = getattr(controller, "snapshot_execution_ledger", None)
+    if callable(collector):
+        try:
+            candidate = collector()
+            if isinstance(candidate, dict):
+                ledger = candidate
+            else:
+                ledger["diagnostic_collection_error"] = {
+                    "collector": "execution_ledger", "error_type": "MalformedSnapshot",
+                }
+        except Exception as exc:
+            ledger["diagnostic_collection_error"] = {
+                "collector": "execution_ledger", "error_type": type(exc).__name__,
+            }
+    provider_ledger = {
+        "schema_version": "k11-execution-provider-ledger/1",
+        "captured_at_monotonic_ns": time.monotonic_ns(),
+        "operations": {"items": [], "retention": {
+            "capacity": 0, "retained": 0, "truncated": False,
+            "dropped_count": 0,
+        }},
+        "unresolved": {"items": [], "retention": {
+            "capacity": 0, "retained": 0, "truncated": False,
+            "dropped_count": 0,
+        }},
+        "diagnostic_collection_error": {
+            "collector": "provider_ledger", "error_type": "Unavailable",
+        },
+    }
+    try:
+        candidate = provider_collector()
+        if isinstance(candidate, dict):
+            provider_ledger = candidate
+        else:
+            provider_ledger["diagnostic_collection_error"] = {
+                "collector": "provider_ledger", "error_type": "MalformedSnapshot",
+            }
+    except Exception as exc:
+        provider_ledger["diagnostic_collection_error"] = {
+            "collector": "provider_ledger", "error_type": type(exc).__name__,
+        }
+    snapshot.update({
+        "execution_ledger": ledger,
+        "provider_ledger": provider_ledger,
+        "late_movement": {
+            "captured_at_monotonic_ns": time.monotonic_ns(),
+            "result": deepcopy(getattr(controller, "movement_shutdown_result", None)),
+        },
+    })
+    lifecycle_collector = getattr(controller, "get_k11_late_lifecycle_snapshot", None)
+    if callable(lifecycle_collector):
+        try:
+            candidate = lifecycle_collector()
+            snapshot["late_lifecycle_ledger"] = (
+                candidate if isinstance(candidate, dict) else {
+                    "diagnostic_collection_error": {
+                        "collector": "late_lifecycle_ledger",
+                        "error_type": "MalformedSnapshot",
+                    },
+                }
+            )
+        except Exception as exc:
+            snapshot["late_lifecycle_ledger"] = {
+                "diagnostic_collection_error": {
+                    "collector": "late_lifecycle_ledger",
+                    "error_type": type(exc).__name__,
+                },
+            }
+    return snapshot
+
+
+def _configure_k11_late_diagnostic_sink(
+    controller, runtime_result_path, identity,
+) -> None:
+    provider_collector = getattr(controller, "get_k11_provider_ledger_snapshot", None)
+    execution_collector = getattr(controller, "snapshot_execution_ledger", None)
+    lifecycle_collector = getattr(controller, "get_k11_late_lifecycle_snapshot", None)
+    if (not runtime_result_path or not callable(provider_collector)
+            or not callable(execution_collector)
+            or not callable(lifecycle_collector)
+            or not isinstance(identity, dict)):
+        return
+    controller._k11_late_cleanup_identity = dict(identity)
+    path = Path(runtime_result_path).with_name("k11_late_runtime_diagnostics.json")
+    writer_lock = threading.Lock()
+    writer_event = threading.Event()
+    writer_state = {"thread": None}
+
+    def collect_and_write():
+        while True:
+            writer_event.clear()
+            atomic_write_json(path, {
+                "schema_version": "k11-late-runtime-diagnostics/1",
+                "identity": dict(identity),
+                "captured_at_monotonic_ns": time.monotonic_ns(),
+                "execution_ledger": execution_collector(),
+                "provider_ledger": provider_collector(),
+                "late_lifecycle_ledger": lifecycle_collector(),
+                "late_movement": {
+                    "captured_at_monotonic_ns": time.monotonic_ns(),
+                    "result": deepcopy(
+                        getattr(controller, "movement_shutdown_result", None)
+                    ),
+                },
+            })
+            with writer_lock:
+                if writer_event.is_set():
+                    continue
+                writer_state["thread"] = None
+                return
+
+    def persist_late_diagnostics():
+        with writer_lock:
+            writer_event.set()
+            writer = writer_state["thread"]
+            if writer is not None and writer.is_alive():
+                return
+            writer = threading.Thread(
+                target=collect_and_write,
+                name="k11-late-diagnostics-writer",
+                daemon=False,
+            )
+            writer_state["thread"] = writer
+            writer.start()
+
+    controller._k11_late_diagnostic_sink = persist_late_diagnostics
 
 
 def _runtime_result(env=None, tm=None, controller=None, *, error: str | None = None, error_type: str | None = None, attempt_id: str | None = None, task_name: str | None = None) -> dict:
@@ -374,7 +521,7 @@ def _with_runtime_paths(function):
 
 
 @_with_runtime_paths
-def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None, position_convention: str | None = None, runtime_execution=None, controller_reasoning_effort: str | None = None):
+def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num: int, dig_needed: bool, max_task_num: int, task_goal: str, document_file: str | None, host: str, port: int, task_name: str, role: str = "same", api_key_list: list | None = None, document: dict | None = None, minecraft_dual_dag_config: dict | None = None, runtime_result_path: str | None = None, task_scenario: str | None = None, runtime_event_path: str | None = None, emit_controller_terminal_event: bool = True, runtime_paths: RuntimePaths | None = None, attempt_id: str | None = None, require_action_evidence: bool = True, seed_contract: dict | None = None, world_initialization: str | None = None, position_convention: str | None = None, runtime_execution=None, controller_reasoning_effort: str | None = None, k11_late_cleanup_identity: dict | None = None):
     start_time = time.time()
     runtime_execution = runtime_execution or RuntimeExecution.resolve()
     runtime_execution.verify()
@@ -638,6 +785,9 @@ def run(api_model: str, api_base: str, task_type: str, task_idx: int, agent_num:
                                 event_sink=event_sink,
                                 emit_terminal_events=emit_controller_terminal_event)
             runtime_ctrl = ctrl
+            _configure_k11_late_diagnostic_sink(
+                ctrl, runtime_result_path, k11_late_cleanup_identity,
+            )
 
             # response = ctrl.agent_list[0].llm.few_shot_generate_thoughts(system_prompt="", example_prompt="hi")
             # print(response)

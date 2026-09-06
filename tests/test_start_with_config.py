@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,79 @@ def test_runtime_result_preserves_observed_agent_iteration_limit():
 
     assert result["agent_iteration_limit"] == 13
     assert result["agent_iteration_limit_source"] == "VillagerBench.step max_turn"
+
+
+def test_controller_snapshot_includes_separate_execution_ledger():
+    ledger = {"schema_version": "controller-late-execution-ledger/1", "groups": {}}
+    controller = SimpleNamespace(
+        shutdown_complete=True, controller_state="shutdown",
+        shutdown_context={"frozen": True, "diagnostics": {"verdict": {}}},
+        assignment={"Alice": 1}, snapshot_execution_ledger=lambda: ledger,
+        get_k11_provider_ledger_snapshot=lambda: {
+            "schema_version": "k11-execution-provider-ledger/1",
+        },
+        get_k11_late_lifecycle_snapshot=lambda: {
+            "schema_version": "k11-late-lifecycle-ledger/1",
+        },
+        _k11_late_cleanup_identity={},
+    )
+    snapshot = start_with_config._controller_snapshot(controller)
+    assert snapshot["context"] == {
+        "frozen": True, "diagnostics": {"verdict": {}},
+    }
+    assert snapshot["execution_ledger"] is ledger
+
+
+def test_controller_snapshot_uses_fail_closed_ledger_when_unavailable_or_broken():
+    for controller in (SimpleNamespace(
+        shutdown_context={"diagnostics": {"verdict": {}}},
+        _k11_late_cleanup_identity={},
+        get_k11_provider_ledger_snapshot=lambda: {},
+    ), SimpleNamespace(
+        shutdown_context={"diagnostics": {"verdict": {}}},
+        _k11_late_cleanup_identity={},
+        get_k11_provider_ledger_snapshot=lambda: {},
+        snapshot_execution_ledger=lambda: (_ for _ in ()).throw(RuntimeError("secret")),
+    )):
+        ledger = start_with_config._controller_snapshot(controller)["execution_ledger"]
+        assert ledger["schema_version"] == "controller-late-execution-ledger/1"
+        assert ledger["groups"]["items"] == []
+        assert ledger["diagnostic_collection_error"]["error_type"] in {
+            "Unavailable", "RuntimeError",
+        }
+
+
+def test_controller_snapshot_is_unchanged_outside_k11():
+    snapshot = start_with_config._controller_snapshot(SimpleNamespace())
+    assert "execution_ledger" not in snapshot
+    assert "provider_ledger" not in snapshot
+
+
+def test_k11_late_sink_persists_callback_snapshot(tmp_path):
+    controller = SimpleNamespace(
+        snapshot_execution_ledger=lambda: {"captured_at_monotonic_ns": 2},
+        get_k11_provider_ledger_snapshot=lambda: {"captured_at_monotonic_ns": 3},
+        get_k11_late_lifecycle_snapshot=lambda: {"captured_at_monotonic_ns": 4},
+    )
+    identity = {"run_id": "K11-P0-01"}
+    start_with_config._configure_k11_late_diagnostic_sink(
+        controller, tmp_path / "runtime_result.json", identity,
+    )
+    controller._k11_late_diagnostic_sink()
+    writers = [
+        thread for thread in threading.enumerate()
+        if thread.name == "k11-late-diagnostics-writer"
+    ]
+    for writer in writers:
+        writer.join(1)
+    artifact = json.loads(
+        (tmp_path / "k11_late_runtime_diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert artifact["schema_version"] == "k11-late-runtime-diagnostics/1"
+    assert artifact["identity"] == identity
+    assert artifact["execution_ledger"]["captured_at_monotonic_ns"] == 2
+    assert artifact["provider_ledger"]["captured_at_monotonic_ns"] == 3
+    assert artifact["late_lifecycle_ledger"]["captured_at_monotonic_ns"] == 4
 
 
 def _install_harness(monkeypatch, run_minecraft_experiment):

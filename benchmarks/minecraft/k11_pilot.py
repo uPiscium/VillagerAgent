@@ -48,6 +48,11 @@ PROSPECTIVE_MANIFEST_VERSION = 3
 PROSPECTIVE_VALIDATION_CONTRACT = "minecraft-k11-p0-validation-contract/2"
 PROSPECTIVE_TRACE_SCHEMA = "minecraft-k11-trace/3"
 PROSPECTIVE_VALIDATION_ARTIFACT_VERSION = 3
+LATE_CLEANUP_MANIFEST_VERSION = 4
+LATE_CLEANUP_VALIDATION_CONTRACT = "minecraft-k11-p0-validation-contract/3"
+LATE_CLEANUP_VALIDATION_ARTIFACT_VERSION = 4
+LATE_CLEANUP_EVIDENCE_SCHEMA = "minecraft-k11-late-cleanup-evidence/1"
+LATE_CLEANUP_EVIDENCE_FILENAME = "late_cleanup_evidence.json"
 DEVELOPMENT_SMOKE_ARTIFACT_VERSION = 2
 P0_EXPECTED_RUNS = 8
 K11_P0_ACTOR_ROSTER = ("Alice", "Bob")
@@ -114,14 +119,25 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
     document = _load_json(path)
     version = document.get("artifact_version")
     if document.get("artifact_id") != P0_MANIFEST_ID or version not in {
-            P0_MANIFEST_VERSION, PROSPECTIVE_MANIFEST_VERSION}:
+            P0_MANIFEST_VERSION, PROSPECTIVE_MANIFEST_VERSION,
+            LATE_CLEANUP_MANIFEST_VERSION}:
         raise K11PilotContractError("K11 P0 manifest identity mismatch")
-    prospective = version == PROSPECTIVE_MANIFEST_VERSION
-    expected_contract = PROSPECTIVE_VALIDATION_CONTRACT if prospective else P0_VALIDATION_CONTRACT
+    prospective = version in {
+        PROSPECTIVE_MANIFEST_VERSION, LATE_CLEANUP_MANIFEST_VERSION,
+    }
+    expected_contract = {
+        P0_MANIFEST_VERSION: P0_VALIDATION_CONTRACT,
+        PROSPECTIVE_MANIFEST_VERSION: PROSPECTIVE_VALIDATION_CONTRACT,
+        LATE_CLEANUP_MANIFEST_VERSION: LATE_CLEANUP_VALIDATION_CONTRACT,
+    }[version]
     if document.get("validation_contract") != expected_contract:
         raise K11PilotContractError("K11 P0 validation contract identity mismatch")
     if prospective and document.get("trace_schema") != PROSPECTIVE_TRACE_SCHEMA:
         raise K11PilotContractError("K11 P0 trace schema identity mismatch")
+    if (version == LATE_CLEANUP_MANIFEST_VERSION
+            and document.get("late_cleanup_evidence_contract")
+            != LATE_CLEANUP_EVIDENCE_SCHEMA):
+        raise K11PilotContractError("K11 P0 late cleanup evidence identity mismatch")
     if document.get("study_phase") != "K11-P0-instrumentation-validation":
         raise K11PilotContractError("K11 P0 study phase mismatch")
     if document.get("prevalence_inference_allowed") is not False:
@@ -182,7 +198,17 @@ def load_p0_manifest(path: str | Path) -> dict[str, Any]:
 
 
 def _manifest_contract(document: Mapping[str, Any]) -> tuple[str, str, int, bool]:
-    prospective = document.get("artifact_version") == PROSPECTIVE_MANIFEST_VERSION
+    version = document.get("artifact_version")
+    prospective = version in {
+        PROSPECTIVE_MANIFEST_VERSION, LATE_CLEANUP_MANIFEST_VERSION,
+    }
+    if version == LATE_CLEANUP_MANIFEST_VERSION:
+        return (
+            LATE_CLEANUP_VALIDATION_CONTRACT,
+            PROSPECTIVE_TRACE_SCHEMA,
+            LATE_CLEANUP_VALIDATION_ARTIFACT_VERSION,
+            True,
+        )
     return (
         PROSPECTIVE_VALIDATION_CONTRACT if prospective else P0_VALIDATION_CONTRACT,
         PROSPECTIVE_TRACE_SCHEMA if prospective else "minecraft-k11-trace/2",
@@ -555,14 +581,24 @@ def _run_single_row(
     try:
         with K11ProcessInstrumentation(
             trace, observation_horizon_seconds=observation_horizon_seconds,
+            late_cleanup_identity=(
+                measurement_identity
+                if validation_contract == LATE_CLEANUP_VALIDATION_CONTRACT
+                else None
+            ),
         ):
-            result = run_villageragent(**_runtime_kwargs(
+            runtime_kwargs = _runtime_kwargs(
                 row,
                 run_dir,
                 execution=execution,
                 execution_revision=execution_revision,
                 premanifest_path=premanifest_path,
-            ))
+            )
+            if validation_contract == LATE_CLEANUP_VALIDATION_CONTRACT:
+                runtime_kwargs["k11_late_cleanup_identity"] = dict(
+                    measurement_identity,
+                )
+            result = run_villageragent(**runtime_kwargs)
     except BaseException as exc:
         error = str(exc)
         error_type = type(exc).__name__
@@ -615,7 +651,10 @@ def _run_single_row(
         "artifact_id": "minecraft-k11-p0-run-validation",
         "artifact_version": validation_artifact_version,
         **({"trace_schema_version": trace_schema}
-           if validation_contract == PROSPECTIVE_VALIDATION_CONTRACT else {}),
+           if validation_contract in {
+               PROSPECTIVE_VALIDATION_CONTRACT,
+               LATE_CLEANUP_VALIDATION_CONTRACT,
+           } else {}),
         "validation_contract": validation_contract,
         "manifest_digest": manifest_digest,
         "cohort_mode": cohort_mode,
@@ -724,7 +763,10 @@ def _failed_process_summary(
         "artifact_id": "minecraft-k11-p0-run-validation",
         "artifact_version": validation_artifact_version,
         **({"trace_schema_version": trace_schema}
-           if validation_contract == PROSPECTIVE_VALIDATION_CONTRACT else {}),
+           if validation_contract in {
+               PROSPECTIVE_VALIDATION_CONTRACT,
+               LATE_CLEANUP_VALIDATION_CONTRACT,
+           } else {}),
         "validation_contract": validation_contract,
         "manifest_digest": manifest_digest,
         "cohort_mode": cohort_mode,
@@ -1106,6 +1148,447 @@ def _prospective_cleanup_projection(
     return projection
 
 
+def _canonical_artifact_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _complete_inventory(value: Any) -> list[Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    items = value.get("items")
+    retention = value.get("retention")
+    if (not isinstance(items, list) or not isinstance(retention, Mapping)
+            or type(retention.get("capacity")) is not int
+            or type(retention.get("retained")) is not int
+            or type(retention.get("dropped_count")) is not int
+            or retention.get("retained") != len(items)
+            or retention.get("capacity") < len(items)
+            or retention.get("truncated") is not False
+            or retention.get("dropped_count") != 0):
+        return None
+    return items
+
+
+def _build_late_cleanup_evidence(
+    *, run_id: str, manifest_digest: str, runtime_result: Any,
+    trace_artifact: Any, supervision: Mapping[str, Any], shutdown: Any,
+) -> dict[str, Any]:
+    """Bind post-verdict authorities without modifying the scientific cut."""
+    controller = runtime_result.get("controller") if isinstance(runtime_result, Mapping) else None
+    context = controller.get("context") if isinstance(controller, Mapping) else None
+    diagnostics = context.get("diagnostics") if isinstance(context, Mapping) else None
+    verdict = diagnostics.get("verdict") if isinstance(diagnostics, Mapping) else None
+    basis = verdict.get("authoritative_basis") if isinstance(verdict, Mapping) else None
+    cut = trace_artifact.get("measurement_cut") if isinstance(trace_artifact, Mapping) else None
+    active = cut.get("active_executions") if isinstance(cut, Mapping) else None
+    active_items = active.get("items") if isinstance(active, Mapping) else None
+    identity = cut.get("identity") if isinstance(cut, Mapping) else None
+    errors = []
+    for field, value in (
+        ("runtime_result", runtime_result), ("controller", controller),
+        ("controller_verdict", verdict), ("controller_basis", basis),
+        ("measurement_cut", cut), ("measurement_identity", identity),
+        ("h_active_executions", active_items), ("worker_shutdown", shutdown),
+    ):
+        if not isinstance(value, Mapping if field != "h_active_executions" else list):
+            errors.append({"field": field, "error_type": "MissingOrMalformedEvidence"})
+    execution_ledger = controller.get("execution_ledger") if isinstance(controller, Mapping) else None
+    provider_ledger = controller.get("provider_ledger") if isinstance(controller, Mapping) else None
+    lifecycle_ledger = controller.get("late_lifecycle_ledger") if isinstance(controller, Mapping) else None
+    return {
+        "artifact_id": LATE_CLEANUP_EVIDENCE_SCHEMA,
+        "artifact_version": 1,
+        "identity": {
+            "run_id": run_id,
+            "manifest_digest": manifest_digest,
+            "execution_revision": identity.get("execution_revision") if isinstance(identity, Mapping) else None,
+            "runtime_digest": identity.get("runtime_digest") if isinstance(identity, Mapping) else None,
+            "premanifest_identity": identity.get("premanifest_identity") if isinstance(identity, Mapping) else None,
+            "validation_contract": identity.get("validation_contract") if isinstance(identity, Mapping) else None,
+            "trace_schema": identity.get("trace_schema") if isinstance(identity, Mapping) else None,
+        },
+        "measurement_cut": {
+            "identity": dict(identity) if isinstance(identity, Mapping) else None,
+            "digest": _canonical_artifact_digest(cut) if isinstance(cut, Mapping) else None,
+            "close_monotonic_ns": cut.get("window_close_monotonic_ns") if isinstance(cut, Mapping) else None,
+            "event_prefix_high_water_sequence": cut.get("event_prefix_high_water_sequence") if isinstance(cut, Mapping) else None,
+        },
+        "bounded_controller_verdict": {
+            "schema_version": diagnostics.get("schema_version") if isinstance(diagnostics, Mapping) else None,
+            "verdict_frozen_at_monotonic_ns": verdict.get("verdict_frozen_at_monotonic_ns") if isinstance(verdict, Mapping) else None,
+            "shutdown_complete": verdict.get("shutdown_complete") if isinstance(verdict, Mapping) else None,
+            "digest": _canonical_artifact_digest(verdict) if isinstance(verdict, Mapping) else None,
+        },
+        "h_active_executions": {
+            "items": [dict(item) for item in active_items] if isinstance(active_items, list) else [],
+            "retention": dict(active.get("retention", {})) if isinstance(active, Mapping) else {},
+        },
+        "post_verdict_execution_ledger": execution_ledger,
+        "execution_bound_provider_ledger": provider_ledger,
+        "late_lifecycle_ledger": lifecycle_ledger,
+        "authorities": {
+            "movement": controller.get("late_movement") if isinstance(controller, Mapping) else None,
+            "bridge": runtime_result.get("bridge_cleanup") if isinstance(runtime_result, Mapping) else None,
+            "worker_descendants": shutdown,
+            "worker_process_and_group": dict(supervision),
+        },
+        "integrity": {
+            "append_only_metadata": True,
+            "measurement_cut_mutated": False,
+            "collection_errors": errors,
+        },
+    }
+
+
+def _late_cleanup_evidence_projection(
+    evidence: Any, *, runtime_result: Any, trace_artifact: Any,
+    expected_identity: Mapping[str, Any], expected_actors: tuple[str, ...],
+) -> dict[str, Any]:
+    """Fail-closed contract/3 projection from direct late authorities."""
+    projection = {
+        "controller_verdict_at_budget": "unknown",
+        "late_execution_capability_terminal": None,
+        "late_future_reconciliation_state": "unknown",
+        "late_provider_terminal": None,
+        "late_tool_native_terminal": None,
+        "late_agent_lifecycle_terminal": None,
+        "late_movement_terminal": None,
+        "late_bridge_terminal": None,
+        "late_descendant_terminal": None,
+        "late_process_group_terminal": None,
+        "post_window_cleanup_status": "unknown",
+    }
+    if (not isinstance(evidence, Mapping)
+            or evidence.get("artifact_id") != LATE_CLEANUP_EVIDENCE_SCHEMA
+            or evidence.get("artifact_version") != 1
+            or evidence.get("identity") != dict(expected_identity)):
+        return projection
+    integrity = evidence.get("integrity")
+    if (not isinstance(integrity, Mapping)
+            or integrity.get("append_only_metadata") is not True
+            or integrity.get("measurement_cut_mutated") is not False
+            or integrity.get("collection_errors") != []):
+        return projection
+    cut = trace_artifact.get("measurement_cut") if isinstance(trace_artifact, Mapping) else None
+    cut_binding = evidence.get("measurement_cut")
+    if (not isinstance(cut, Mapping) or not isinstance(cut_binding, Mapping)
+            or cut_binding.get("identity") != cut.get("identity")
+            or cut_binding.get("digest") != _canonical_artifact_digest(cut)
+            or cut_binding.get("close_monotonic_ns") != cut.get("window_close_monotonic_ns")
+            or cut_binding.get("event_prefix_high_water_sequence")
+            != cut.get("event_prefix_high_water_sequence")):
+        return projection
+    controller = runtime_result.get("controller") if isinstance(runtime_result, Mapping) else None
+    context = controller.get("context") if isinstance(controller, Mapping) else None
+    diagnostics = context.get("diagnostics") if isinstance(context, Mapping) else None
+    verdict = diagnostics.get("verdict") if isinstance(diagnostics, Mapping) else None
+    verdict_binding = evidence.get("bounded_controller_verdict")
+    if (not isinstance(verdict, Mapping) or not isinstance(verdict_binding, Mapping)
+            or verdict_binding.get("digest") != _canonical_artifact_digest(verdict)
+            or verdict_binding.get("verdict_frozen_at_monotonic_ns")
+            != verdict.get("verdict_frozen_at_monotonic_ns")
+            or type(verdict.get("shutdown_complete")) is not bool):
+        return projection
+    projection["controller_verdict_at_budget"] = (
+        "passed" if verdict["shutdown_complete"] else "failed"
+    )
+    verdict_time = verdict.get("verdict_frozen_at_monotonic_ns")
+    if type(verdict_time) is not int:
+        return projection
+
+    active_items = _complete_inventory(evidence.get("h_active_executions"))
+    cut_active_items = _complete_inventory(cut.get("active_executions"))
+    if active_items is None or cut_active_items is None or active_items != cut_active_items:
+        return projection
+    active_by_id = {}
+    for item in active_items:
+        if (not isinstance(item, Mapping)
+                or not all(isinstance(item.get(key), str) and item.get(key)
+                           for key in ("execution_id", "task_id", "actor_id"))
+                or item["execution_id"] in active_by_id):
+            return projection
+        active_by_id[item["execution_id"]] = dict(item)
+
+    execution_ledger = evidence.get("post_verdict_execution_ledger")
+    if (not isinstance(execution_ledger, Mapping)
+            or execution_ledger.get("schema_version") != "controller-late-execution-ledger/1"
+            or execution_ledger.get("diagnostic_collection_error") not in (None, [])
+            or type(execution_ledger.get("captured_at_monotonic_ns")) is not int
+            or execution_ledger["captured_at_monotonic_ns"] < verdict_time):
+        return projection
+    groups = _complete_inventory(execution_ledger.get("groups"))
+    if groups is None:
+        return projection
+    executions_by_id = {}
+    for group in groups:
+        if not isinstance(group, Mapping):
+            return projection
+        executions = _complete_inventory(group.get("executions"))
+        reconciliation = group.get("reconciliation")
+        if (executions is None or not isinstance(reconciliation, Mapping)
+                or any(type(reconciliation.get(key)) is not bool for key in (
+                    "group_completed", "shutdown_reconciled", "assignments_released",
+                    "terminal_state_persisted", "post_processing_complete",
+                    "execution_terminal_reconciled",
+                )) or reconciliation.get("execution_terminal_reconciled") is not True):
+            return projection
+        for item in executions:
+            if not isinstance(item, Mapping):
+                return projection
+            execution_id = item.get("execution_id")
+            if not isinstance(execution_id, str) or not execution_id or execution_id in executions_by_id:
+                return projection
+            if _complete_inventory(item.get("lifecycle")) is None:
+                return projection
+            executions_by_id[execution_id] = item
+    for execution_id, active in active_by_id.items():
+        item = executions_by_id.get(execution_id)
+        future = item.get("future") if isinstance(item, Mapping) else None
+        started = item.get("future_started") if isinstance(item, Mapping) else None
+        completed = item.get("future_completed") if isinstance(item, Mapping) else None
+        cancellation = item.get("cancellation") if isinstance(item, Mapping) else None
+        requested = cancellation.get("requested") if isinstance(cancellation, Mapping) else None
+        acknowledged = cancellation.get("acknowledged") if isinstance(cancellation, Mapping) else None
+        requested_ns = (
+            cancellation.get("requested_at_monotonic_ns")
+            if isinstance(cancellation, Mapping) else None
+        )
+        acknowledged_ns = (
+            cancellation.get("acknowledged_at_monotonic_ns")
+            if isinstance(cancellation, Mapping) else None
+        )
+        requested_wall = (
+            cancellation.get("requested_at_wall_time")
+            if isinstance(cancellation, Mapping) else None
+        )
+        if (not isinstance(item, Mapping)
+                or item.get("task_id") != active["task_id"]
+                or item.get("actor_id") != active["actor_id"]
+                or not isinstance(future, Mapping)
+                or any(type(future.get(key)) is not bool for key in ("done", "cancelled", "running"))
+                or future.get("done") is not True or future.get("running") is not False
+                or future.get("cancelled") is not False
+                or not isinstance(started, Mapping)
+                or started.get("event") != "future_started"
+                or started.get("execution_id") != execution_id
+                or type(started.get("monotonic_ns")) is not int
+                or not isinstance(completed, Mapping)
+                or completed.get("event") != "future_completed"
+                or completed.get("execution_id") != execution_id
+                or type(completed.get("monotonic_ns")) is not int
+                or completed["monotonic_ns"] < started["monotonic_ns"]
+                or (verdict["shutdown_complete"] is False
+                    and completed["monotonic_ns"] < verdict_time)
+                or not isinstance(cancellation, Mapping)
+                or any(type(cancellation.get(key)) is not bool
+                       for key in ("requested", "acknowledged"))
+                or any(value is not None and type(value) is not int for value in (
+                    cancellation.get("requested_at_monotonic_ns"),
+                    cancellation.get("acknowledged_at_monotonic_ns"),
+                ))
+                or (requested is True and (type(requested_ns) is not int
+                    or isinstance(requested_wall, bool)
+                    or not isinstance(requested_wall, (int, float))))
+                or (requested is False and (requested_ns is not None
+                    or requested_wall is not None or acknowledged is True))
+                or (acknowledged is True and (type(acknowledged_ns) is not int
+                    or type(requested_ns) is not int
+                    or acknowledged_ns < requested_ns))
+                or (acknowledged is False and acknowledged_ns is not None)):
+            return projection
+    projection["late_future_reconciliation_state"] = "terminal"
+    projection["late_execution_capability_terminal"] = True
+
+    provider = evidence.get("execution_bound_provider_ledger")
+    if (not isinstance(provider, Mapping)
+            or provider.get("schema_version") != "k11-execution-provider-ledger/1"
+            or provider.get("diagnostic_collection_error") not in (None, [])
+            or type(provider.get("captured_at_monotonic_ns")) is not int
+            or provider["captured_at_monotonic_ns"] < verdict_time):
+        return projection
+    operations = _complete_inventory(provider.get("operations"))
+    unresolved = _complete_inventory(provider.get("unresolved"))
+    if operations is None or unresolved != []:
+        return projection
+    seen_operations = set()
+    operations_by_execution = {execution_id: [] for execution_id in active_by_id}
+    provider_model_ids_by_execution = {
+        execution_id: set() for execution_id in active_by_id
+    }
+    for operation in operations:
+        if not isinstance(operation, Mapping):
+            return projection
+        operation_id = operation.get("provider_operation_id")
+        if not isinstance(operation_id, str) or not operation_id or operation_id in seen_operations:
+            return projection
+        seen_operations.add(operation_id)
+        start = operation.get("start_monotonic_ns")
+        terminal = operation.get("terminal_monotonic_ns")
+        if (type(start) is not int or operation.get("terminal") is not True
+                or type(terminal) is not int or terminal < start
+                or operation.get("outcome") not in {"completed", "failed"}):
+            return projection
+        execution_id = operation.get("execution_id")
+        if (not isinstance(execution_id, str) or not execution_id
+                or not isinstance(operation.get("task_id"), str)
+                or not operation.get("task_id")
+                or not isinstance(operation.get("actor_id"), str)
+                or not operation.get("actor_id")):
+            return projection
+        model_call_id = operation.get("model_call_id")
+        if not isinstance(model_call_id, str) or not model_call_id:
+            return projection
+        known = executions_by_id.get(execution_id)
+        if (not isinstance(known, Mapping)
+                or operation.get("task_id") != known.get("task_id")
+                or operation.get("actor_id") != known.get("actor_id")):
+            return projection
+        if execution_id in operations_by_execution:
+            operations_by_execution[execution_id].append(operation)
+            provider_model_ids_by_execution[execution_id].add(model_call_id)
+    projection["late_provider_terminal"] = True
+
+    lifecycle = evidence.get("late_lifecycle_ledger")
+    if (not isinstance(lifecycle, Mapping)
+            or lifecycle.get("schema_version") != "k11-late-lifecycle-ledger/1"
+            or lifecycle.get("measurement_identity") != dict(expected_identity)
+            or lifecycle.get("event_prefix_high_water_sequence")
+            != cut.get("event_prefix_high_water_sequence")
+            or lifecycle.get("instrumentation_errors") != []
+            or lifecycle.get("diagnostic_collection_error") not in (None, [])
+            or type(lifecycle.get("captured_at_monotonic_ns")) is not int
+            or lifecycle["captured_at_monotonic_ns"] < verdict_time):
+        return projection
+    post_cut_events = _complete_inventory(lifecycle.get("post_cut_events"))
+    if post_cut_events is None:
+        return projection
+    high_water = cut.get("event_prefix_high_water_sequence")
+    if type(high_water) is not int:
+        return projection
+    if any(not isinstance(event, Mapping)
+           or type(event.get("seq")) is not int or event["seq"] <= high_water
+           for event in post_cut_events):
+        return projection
+    prefix_events = [
+        event for event in trace_artifact.get("events", [])
+        if isinstance(event, Mapping) and type(event.get("seq")) is int
+        and event["seq"] <= high_water
+    ]
+    combined_trace = {
+        **dict(trace_artifact),
+        "events": prefix_events + [dict(event) for event in post_cut_events],
+        "event_count": len(prefix_events) + len(post_cut_events),
+    }
+    for execution_id, active in active_by_id.items():
+        relevant_model_ids = set()
+        for event in combined_trace["events"]:
+            if (event.get("event_type") != "k11.model_call_started"
+                    or event.get("task_id") != active["task_id"]
+                    or event.get("actor_id") != active["actor_id"]):
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, Mapping):
+                return projection
+            relevant_model_ids.add(payload.get("model_call_id"))
+        if (any(not isinstance(value, str) or not value
+                for value in relevant_model_ids)
+                or not relevant_model_ids.issubset(
+                    provider_model_ids_by_execution[execution_id]
+                )):
+            projection["late_provider_terminal"] = None
+            return projection
+    close_ns = cut.get("window_close_monotonic_ns")
+    if type(close_ns) is not int:
+        return projection
+    projection["late_post_close_effect"] = any(
+        event.get("event_type") in {
+            "k11.tool_call_entered", "k11.eac_native_effect_entered",
+        }
+        and type(event.get("monotonic_ns")) is int
+        and event["monotonic_ns"] >= close_ns
+        for event in post_cut_events
+    )
+    if projection["late_post_close_effect"]:
+        projection["post_window_cleanup_status"] = "not_qualified"
+        return projection
+    trace_evidence = _late_trace_cleanup_evidence(combined_trace)
+    projection["late_tool_native_terminal"] = trace_evidence["tool_native"]
+    projection["late_agent_lifecycle_terminal"] = trace_evidence["agent"]
+    authorities = evidence.get("authorities")
+    if not isinstance(authorities, Mapping):
+        return projection
+    movement_snapshot = authorities.get("movement")
+    if (not isinstance(movement_snapshot, Mapping)
+            or type(movement_snapshot.get("captured_at_monotonic_ns")) is not int
+            or movement_snapshot["captured_at_monotonic_ns"] < verdict_time):
+        return projection
+    movement = movement_snapshot.get("result")
+    bridge = authorities.get("bridge")
+    descendants = authorities.get("worker_descendants")
+    process = authorities.get("worker_process_and_group")
+    actors = movement.get("actors") if isinstance(movement, Mapping) else None
+    if (not isinstance(actors, Mapping) or set(actors) != set(expected_actors)
+            or movement.get("terminal") is not True
+            or any(not isinstance(value, Mapping) or value.get("terminal") is not True
+                   for value in actors.values())):
+        return projection
+    projection["late_movement_terminal"] = True
+    bridge_processes = bridge.get("processes") if isinstance(bridge, Mapping) else None
+    if (not isinstance(bridge_processes, Mapping)
+            or set(bridge_processes) != set(expected_actors)
+            or bridge.get("cleanup_complete") is not True
+            or bridge.get("incomplete_process_count") != 0
+            or _complete_inventory({
+                "items": list(bridge_processes.values()),
+                "retention": bridge.get("process_retention"),
+            }) is None
+            or any(not isinstance(value, Mapping)
+                   or type(value.get("pid")) is not int or value["pid"] <= 0
+                   or type(value.get("process_group_id")) is not int
+                   or value["process_group_id"] <= 0
+                   or type(value.get("session_id")) is not int
+                   or value["session_id"] <= 0
+                   or value.get("alive_after_kill") is not False
+                   or value.get("identity_collection_errors") != []
+                   for value in bridge_processes.values())):
+        return projection
+    projection["late_bridge_terminal"] = True
+    remaining = descendants.get("processes_after_cleanup") if isinstance(descendants, Mapping) else None
+    if not isinstance(remaining, list):
+        return projection
+    projection["late_descendant_terminal"] = not remaining
+    if (not isinstance(process, Mapping)
+            or any(type(process.get(key)) is not bool for key in (
+                "artifact_ready", "timed_out", "post_artifact_linger",
+                "post_parent_group_linger", "process_group_alive_after_cleanup",
+                "term_sent", "kill_sent",
+            )) or type(process.get("exit_code")) is not int):
+        return projection
+    projection["late_process_group_terminal"] = (
+        process["process_group_alive_after_cleanup"] is False
+    )
+    affirmative_failure = bool(
+        remaining or process["process_group_alive_after_cleanup"]
+        or process["term_sent"] or process["kill_sent"]
+        or process["exit_code"] != 0 or not projection["late_bridge_terminal"]
+        or not projection["late_movement_terminal"]
+    )
+    if affirmative_failure:
+        projection["post_window_cleanup_status"] = "not_qualified"
+        return projection
+    if (projection["late_tool_native_terminal"] is not True
+            or projection["late_agent_lifecycle_terminal"] is not True):
+        return projection
+    clean_within_budget = verdict["shutdown_complete"] is True
+    projection["post_window_cleanup_status"] = (
+        "qualified_within_budget" if clean_within_budget else "qualified_late"
+    )
+    return projection
+
+
 def _prospective_cleanup_status(
     supervision: Mapping[str, Any], shutdown: Any, runtime_result: Any = None, *,
     trace_artifact: Any = None, expected_actors: tuple[str, ...] | None = None,
@@ -1119,6 +1602,7 @@ def _prospective_cleanup_status(
 
 def _prospective_contamination_excluded(
     summary: Mapping[str, Any], *, cleanup_qualified: bool,
+    late_post_close_effect: bool = False,
 ) -> bool:
     censoring = summary.get("censoring")
     return bool(
@@ -1128,6 +1612,7 @@ def _prospective_contamination_excluded(
         and censoring.get("active_effect_at_horizon") is False
         and censoring.get("post_close_effect") is False
         and censoring.get("uncertainty") is False
+        and late_post_close_effect is False
     )
 
 
@@ -1145,6 +1630,11 @@ def _apply_prospective_cleanup_projection(
     summary["cross_run_contamination_excluded"] = (
         _prospective_contamination_excluded(
             summary, cleanup_qualified=clean,
+            late_post_close_effect=(
+                projection.get("late_post_close_effect")
+                if type(projection.get("late_post_close_effect")) is bool
+                else False
+            ),
         )
     )
     summary["contamination_excluded"] = summary[
@@ -1168,7 +1658,10 @@ def _validate_worker_summary_identity(
             or summary.get("artifact_version") != validation_artifact_version
             or summary.get("run_id") != expected_run_id
             or summary.get("validation_contract") != validation_contract
-            or (validation_contract == PROSPECTIVE_VALIDATION_CONTRACT
+            or (validation_contract in {
+                    PROSPECTIVE_VALIDATION_CONTRACT,
+                    LATE_CLEANUP_VALIDATION_CONTRACT,
+                }
                 and summary.get("trace_schema_version") != trace_schema)
             or summary.get("manifest_digest") != manifest_digest
             or summary.get("cohort_mode") != cohort_mode):
@@ -1282,11 +1775,74 @@ def _run_isolated_row(
                 runtime_result = json.loads(result_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 runtime_result = None
+        if validation_contract == LATE_CLEANUP_VALIDATION_CONTRACT:
+            late_premanifest = _load_json(premanifest_path)
+            expected_runtime_identity = {
+                "run_id": run_id,
+                "manifest_digest": manifest_digest,
+                "execution_revision": execution_revision,
+                "runtime_digest": late_premanifest.get("runtime_digest"),
+                "premanifest_identity": late_premanifest.get("premanifest_identity"),
+                "validation_contract": validation_contract,
+                "trace_schema": trace_schema,
+            }
+        if (validation_contract == LATE_CLEANUP_VALIDATION_CONTRACT
+                and isinstance(runtime_result, dict)):
+            late_runtime = None
+            late_runtime_path = run_dir / "k11_late_runtime_diagnostics.json"
+            try:
+                candidate = _load_json(late_runtime_path)
+            except (OSError, ValueError, K11PilotContractError):
+                candidate = None
+            if (isinstance(candidate, Mapping)
+                    and candidate.get("schema_version")
+                    == "k11-late-runtime-diagnostics/1"
+                    and candidate.get("identity") == expected_runtime_identity
+                    and type(candidate.get("captured_at_monotonic_ns")) is int):
+                late_runtime = candidate
+            if isinstance(late_runtime, Mapping):
+                controller_result = runtime_result.get("controller")
+                if isinstance(controller_result, dict):
+                    for key in (
+                        "execution_ledger", "provider_ledger",
+                        "late_lifecycle_ledger", "late_movement",
+                    ):
+                        candidate = late_runtime.get(key)
+                        current = controller_result.get(key)
+                        candidate_time = candidate.get("captured_at_monotonic_ns") if isinstance(candidate, Mapping) else None
+                        current_time = current.get("captured_at_monotonic_ns") if isinstance(current, Mapping) else None
+                        if (type(candidate_time) is int
+                                and (type(current_time) is not int
+                                     or candidate_time >= current_time)):
+                            controller_result[key] = candidate
         summary["process_supervision"] = dict(supervision)
-        cleanup_projection = _prospective_cleanup_projection(
-            supervision, shutdown, runtime_result, trace_artifact=persisted_trace,
-            expected_actors=_expected_actor_roster(row),
-        )
+        if validation_contract == LATE_CLEANUP_VALIDATION_CONTRACT:
+            late_evidence = _build_late_cleanup_evidence(
+                run_id=run_id, manifest_digest=manifest_digest,
+                runtime_result=runtime_result, trace_artifact=persisted_trace,
+                supervision=supervision, shutdown=shutdown,
+            )
+            (run_dir / LATE_CLEANUP_EVIDENCE_FILENAME).write_text(
+                json.dumps(late_evidence, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            cleanup_projection = _late_cleanup_evidence_projection(
+                late_evidence, runtime_result=runtime_result,
+                trace_artifact=persisted_trace,
+                expected_identity=expected_runtime_identity,
+                expected_actors=_expected_actor_roster(row),
+            )
+            summary["late_cleanup_evidence"] = {
+                "artifact": LATE_CLEANUP_EVIDENCE_FILENAME,
+                "artifact_id": LATE_CLEANUP_EVIDENCE_SCHEMA,
+                "measurement_cut_digest": late_evidence["measurement_cut"]["digest"],
+            }
+        else:
+            cleanup_projection = _prospective_cleanup_projection(
+                supervision, shutdown, runtime_result,
+                trace_artifact=persisted_trace,
+                expected_actors=_expected_actor_roster(row),
+            )
         _apply_prospective_cleanup_projection(summary, cleanup_projection)
     else:
         summary = _apply_process_outcome(summary, supervision)

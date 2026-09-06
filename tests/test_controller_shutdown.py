@@ -13,6 +13,7 @@ from pipeline.controller_tiny import (
     JudgedEvidenceConsistencyError,
     JudgedTaskFailure,
     TaskExecutionGroup,
+    current_execution_diagnostic_identity,
 )
 from env.minecraft_client import MinecraftActionLogError, MinecraftToolTimeoutError
 from env.minecraft_client import AgentExecutionCancelledError, ToolActionBlockedError
@@ -1718,6 +1719,71 @@ def test_execution_ids_are_monotonic_and_follow_worker_lifecycle():
         assert [
             item["event"] for item in execution["lifecycle"]["items"]
         ] == ["submission_created", "future_started", "future_completed"]
+    controller.executor.shutdown(wait=True)
+
+
+def test_late_execution_ledger_is_nonblocking_and_identity_is_reset():
+    controller, _, _ = _controller()
+    task = Task("Ledger", {})
+    observed = []
+
+    class Agent:
+        name = "Alice"
+        supports_cooperative_cancellation = staticmethod(lambda: False)
+
+        def step(self, _task):
+            observed.append(dict(current_execution_diagnostic_identity()))
+            return "done", {}
+
+    group = TaskExecutionGroup(task=task, agents=[Agent()])
+    sink_calls = []
+    controller.get_k11_provider_ledger_snapshot = lambda: {}
+    controller._k11_late_diagnostic_sink = lambda: sink_calls.append("captured")
+    controller.start_execution_group(group)
+    assert group.futures["Alice"].result(timeout=1) == ("done", {})
+    assert observed == [{
+        "execution_id": "execution-00000001",
+        "task_id": task.id,
+        "actor_id": "Alice",
+    }]
+    assert current_execution_diagnostic_identity() is None
+    assert sink_calls == ["captured"]
+    before = dict(controller.assignment)
+    snapshot = controller.snapshot_execution_ledger()
+    execution = snapshot["groups"]["items"][0]["executions"]["items"][0]
+    assert snapshot["schema_version"] == "controller-late-execution-ledger/1"
+    assert execution["future"] == {"done": True, "cancelled": False, "running": False}
+    assert controller.assignment == before
+    controller.executor.shutdown(wait=True)
+
+
+def test_late_execution_ledger_reports_missing_marker_and_lock_failure():
+    controller, _, _ = _controller()
+    future = Future()
+    future.cancel()
+    task = Task("Cancelled", {})
+    group = TaskExecutionGroup(
+        task=task, agents=[SimpleNamespace(name="Alice")],
+        futures={"Alice": future},
+    )
+    controller._started_execution_groups = [group]
+    execution = controller.snapshot_execution_ledger()["groups"]["items"][0]["executions"]["items"][0]
+    assert execution["future"] == {"done": True, "cancelled": True, "running": False}
+    assert execution["future_started"] is None
+    assert execution["future_completed"] is None
+    held = threading.Event()
+    release = threading.Event()
+    def hold_lock():
+        with controller._execution_state_lock:
+            held.set()
+            release.wait(1)
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert held.wait(1)
+    locked = controller.snapshot_execution_ledger()
+    release.set()
+    thread.join(1)
+    assert locked["diagnostic_collection_error"]["error_type"] == "ExecutionStateLockUnavailable"
     controller.executor.shutdown(wait=True)
 
 

@@ -381,3 +381,114 @@ def test_k11_partial_install_failure_restores_already_patched_symbols(monkeypatc
 
     assert EffectGateway.__init__ is original_gateway_init
     assert instrumentation._restores == []
+
+
+def test_k11_provider_ledger_records_sanitized_success_and_restores_snapshot_hook(monkeypatch):
+    from pipeline.controller_tiny import GlobalController
+
+    monkeypatch.setattr(
+        "pipeline.controller_tiny.current_execution_diagnostic_identity",
+        lambda: {"execution_id": "execution-1", "task_id": "task-1", "actor_id": "Alice"},
+        raising=False,
+    )
+    original = getattr(GlobalController, "get_k11_provider_ledger_snapshot", None)
+    trace = K11TraceRecorder("k11-provider-ledger")
+    monkeypatch.setattr(OpenAILanguageModel, "gpt_api", lambda *_args, **_kwargs: "ok")
+    with K11ProcessInstrumentation(
+        trace, provider_ledger_clock=iter(range(10)).__next__,
+        late_cleanup_identity={},
+    ):
+        ledger = GlobalController.get_k11_provider_ledger_snapshot(SimpleNamespace())
+        assert ledger["schema_version"] == "k11-execution-provider-ledger/1"
+        assert ledger["operations"]["items"] == []
+        model = _model()
+        model.gpt_api([], "model", 0)
+        operation = GlobalController.get_k11_provider_ledger_snapshot(
+            SimpleNamespace(),
+        )["operations"]["items"][0]
+        assert operation["outcome"] == "completed"
+        assert set(operation) == {
+            "provider_operation_id", "model_call_id", "execution_id", "task_id",
+            "actor_id", "source",
+            "start_monotonic_ns", "terminal_monotonic_ns", "terminal", "outcome",
+        }
+    assert getattr(GlobalController, "get_k11_provider_ledger_snapshot", None) is original
+
+
+def test_k11_provider_ledger_bound_and_unresolved_metadata():
+    trace = K11TraceRecorder("k11-provider-ledger-bound")
+    instrumentation = K11ProcessInstrumentation(trace, provider_ledger_limit=1)
+    ledger = instrumentation._provider_ledger
+    ledger._identity = lambda: {
+        "execution_id": "execution-1", "task_id": "task-1", "actor_id": "Alice",
+    }
+    ledger.start("first")
+    second = ledger.start("second")
+    ledger.terminal(second, outcome="failed", error=ValueError("secret payload"))
+    ledger.terminal("missing", outcome="failed", error=RuntimeError("secret"))
+    snapshot = ledger.snapshot()
+    assert len(snapshot["operations"]["items"]) == 1
+    assert snapshot["operations"]["retention"]["dropped_count"] == 1
+    assert snapshot["operations"]["items"][0]["error_class"] == "ValueError"
+    assert "secret payload" not in str(snapshot)
+    assert any(
+        item["reason"] == "terminal_without_retained_start"
+        for item in snapshot["unresolved"]["items"]
+    )
+
+
+def test_k11_provider_ledger_ignores_operations_outside_execution_context():
+    instrumentation = K11ProcessInstrumentation(
+        K11TraceRecorder("k11-provider-unbound"),
+    )
+    operation_id = instrumentation._provider_ledger.start("controller-provider")
+    instrumentation._provider_ledger.terminal(operation_id, outcome="completed")
+    snapshot = instrumentation._provider_ledger.snapshot()
+    assert operation_id is None
+    assert snapshot["operations"]["items"] == []
+    assert snapshot["unresolved"]["items"] == []
+    assert instrumentation._provider_ledger.start(
+        "agent-provider", identity_required=True,
+    ) is None
+    assert instrumentation._provider_ledger.snapshot()["unresolved"]["items"] == [
+        {"reason": "provider_start_without_execution_identity"},
+    ]
+
+
+def test_k11_provider_unresolved_retention_is_bounded():
+    instrumentation = K11ProcessInstrumentation(
+        K11TraceRecorder("k11-provider-unresolved"), provider_ledger_limit=1,
+    )
+    ledger = instrumentation._provider_ledger
+    ledger.terminal("missing-1", outcome="failed")
+    ledger.terminal("missing-2", outcome="failed")
+    snapshot = ledger.snapshot()
+    assert len(snapshot["unresolved"]["items"]) == 1
+    assert snapshot["unresolved"]["retention"] == {
+        "capacity": 1, "retained": 1, "truncated": True, "dropped_count": 1,
+    }
+
+
+def test_k11_provider_terminal_callback_survives_instrumentation_restore(monkeypatch):
+    monkeypatch.setattr(
+        "pipeline.controller_tiny.current_execution_diagnostic_identity",
+        lambda: {"execution_id": "execution-1", "task_id": "task-1", "actor_id": "Alice"},
+    )
+    instrumentation = K11ProcessInstrumentation(
+        K11TraceRecorder("k11-provider-late-terminal"),
+        late_cleanup_identity={},
+    )
+    handler = LLMHandler()
+    with instrumentation:
+        handler.on_llm_start({"name": "provider"}, ["secret"], run_id="late")
+    handler.on_llm_error(RuntimeError("secret provider text"), run_id="late")
+    operation = instrumentation._provider_ledger.snapshot()["operations"]["items"][0]
+    assert operation["terminal"] is True
+    assert operation["outcome"] == "failed"
+    assert operation["error_class"] == "RuntimeError"
+    assert "secret provider text" not in str(operation)
+    handler.on_llm_start({"name": "second"}, ["secret"], run_id="after-restore")
+    handler.on_llm_end(SimpleNamespace(llm_output=None), run_id="after-restore")
+    operations = instrumentation._provider_ledger.snapshot()["operations"]["items"]
+    assert len(operations) == 2
+    assert operations[1]["terminal"] is True

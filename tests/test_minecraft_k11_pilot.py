@@ -7,6 +7,8 @@ import benchmarks.minecraft.k11_pilot as k11_pilot
 
 from benchmarks.minecraft.k11_pilot import (
     K11PilotContractError,
+    LATE_CLEANUP_EVIDENCE_SCHEMA,
+    LATE_CLEANUP_VALIDATION_CONTRACT,
     P0_EXPECTED_RUNS,
     P0_VALIDATION_CONTRACT,
     PROSPECTIVE_VALIDATION_CONTRACT,
@@ -111,6 +113,12 @@ def test_k11_v1_manifest_preserves_v0_cohort_and_changes_only_contract_metadata(
     assert v2["artifact_version"] == 3
     assert v2["validation_contract"] == PROSPECTIVE_VALIDATION_CONTRACT
     assert v2["runs"] == v1["runs"]
+    v3 = load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v3.json")
+    assert v3["artifact_version"] == 4
+    assert v3["validation_contract"] == LATE_CLEANUP_VALIDATION_CONTRACT
+    assert v3["trace_schema"] == v2["trace_schema"] == "minecraft-k11-trace/3"
+    assert v3["late_cleanup_evidence_contract"] == LATE_CLEANUP_EVIDENCE_SCHEMA
+    assert v3["runs"] == v2["runs"]
     with pytest.raises(K11PilotContractError, match="manifest identity mismatch"):
         load_p0_manifest(root / "configs/minecraft/k11-p0-natural-manifest-v0.json")
 
@@ -1014,3 +1022,286 @@ def test_k11_prospective_cohort_stops_before_blocked_next_row(
     assert result["stopped_after_run_id"] == "K11-P0-01"
     assert result["blocked_next_run_id"] == "K11-P0-02"
     assert result["p0_passed"] is False
+
+
+def _late_contract_fixture(*, shutdown_complete=False):
+    identity = {
+        "run_id": "K11-P0-01", "manifest_digest": "manifest",
+        "execution_revision": "a" * 40, "runtime_digest": "sha256:runtime",
+        "premanifest_identity": "premanifest",
+        "validation_contract": LATE_CLEANUP_VALIDATION_CONTRACT,
+        "trace_schema": "minecraft-k11-trace/3",
+    }
+    active = {
+        "execution_id": "execution-00000007", "task_id": "task-1",
+        "actor_id": "Alice",
+    }
+    retention = {
+        "capacity": 64, "retained": 1, "truncated": False, "dropped_count": 0,
+    }
+    empty_retention = {
+        "capacity": 64, "retained": 0, "truncated": False, "dropped_count": 0,
+    }
+    trace = {
+        "measurement_cut": {
+            "identity": identity, "window_close_monotonic_ns": 10,
+            "event_prefix_high_water_sequence": 3,
+            "active_executions": {"items": [active], "retention": retention},
+        },
+        "events": [{
+            "seq": 1, "monotonic_ns": 2,
+            "event_type": "k11.model_call_started",
+            "task_id": "task-1", "actor_id": "Alice",
+            "agent_step_id": "step-1", "tool_call_id": None,
+            "payload": {"model_call_id": "model-call-1"},
+        }],
+    }
+    verdict = {
+        "shutdown_complete": shutdown_complete,
+        "verdict_frozen_at_monotonic_ns": 100,
+        "authoritative_basis": {
+            "provider_termination_unconfirmed_task_ids": [],
+            "movement_cancellation": {
+                "terminal": True, "actors": {"Alice": {"terminal": True}},
+            },
+        },
+    }
+    execution = {
+        **active,
+        "future": {"done": True, "cancelled": False, "running": False},
+        "future_started": {
+            "event": "future_started", "execution_id": active["execution_id"],
+            "monotonic_ns": 1,
+        },
+        "future_completed": {
+            "event": "future_completed", "execution_id": active["execution_id"],
+            "monotonic_ns": 150,
+        },
+        "cancellation": {
+            "requested": True, "acknowledged": True,
+            "requested_at_monotonic_ns": 20,
+            "acknowledged_at_monotonic_ns": 149,
+            "requested_at_wall_time": 1.0,
+        },
+        "latest_phase": "model_end",
+        "lifecycle": {"items": [], "retention": empty_retention},
+    }
+    runtime = {
+        "controller": {
+            "context": {"diagnostics": {
+                "schema_version": "controller-shutdown-diagnostics/2",
+                "verdict": verdict,
+            }},
+            "execution_ledger": {
+                "schema_version": "controller-late-execution-ledger/1",
+                "captured_at_monotonic_ns": 200,
+                "groups": {"items": [{
+                    "task_id": "task-1",
+                    "executions": {"items": [execution], "retention": retention},
+                    "reconciliation": {
+                        "group_completed": True, "shutdown_reconciled": False,
+                        "assignments_released": False,
+                        "terminal_state_persisted": True,
+                        "post_processing_complete": False,
+                        "execution_terminal_reconciled": True,
+                    },
+                }], "retention": retention},
+            },
+            "provider_ledger": {
+                "schema_version": "k11-execution-provider-ledger/1",
+                "captured_at_monotonic_ns": 201,
+                "operations": {"items": [{
+                    "provider_operation_id": "provider-operation-00000001",
+                    "model_call_id": "model-call-1",
+                    **active, "source": "LLMHandler.on_llm_start",
+                    "start_monotonic_ns": 2, "terminal_monotonic_ns": 149,
+                    "terminal": True, "outcome": "failed", "error_class": "Error",
+                }], "retention": retention},
+                "unresolved": {"items": [], "retention": empty_retention},
+                "diagnostic_collection_error": None,
+            },
+            "late_lifecycle_ledger": {
+                "schema_version": "k11-late-lifecycle-ledger/1",
+                "captured_at_monotonic_ns": 202,
+                "measurement_identity": identity,
+                "event_prefix_high_water_sequence": 3,
+                "post_cut_events": {"items": [], "retention": empty_retention},
+                "instrumentation_errors": [],
+                "diagnostic_collection_error": None,
+            },
+            "late_movement": {
+                "captured_at_monotonic_ns": 203,
+                "result": {
+                    "terminal": True,
+                    "actors": {"Alice": {"terminal": True}},
+                },
+            },
+        },
+        "bridge_cleanup": {
+            "cleanup_complete": True, "incomplete_process_count": 0,
+            "process_retention": retention,
+            "processes": {"Alice": {
+                "pid": 10, "process_group_id": 10, "session_id": 10,
+                "alive_after_kill": False, "identity_collection_errors": [],
+            }},
+        },
+    }
+    supervision = {
+        "artifact_ready": True, "exit_code": 0, "timed_out": False,
+        "post_artifact_linger": False, "post_parent_group_linger": False,
+        "process_group_alive_after_cleanup": False,
+        "term_sent": False, "kill_sent": False,
+    }
+    shutdown = {"processes_after_cleanup": [], "term_sent": True, "kill_sent": False}
+    evidence = k11_pilot._build_late_cleanup_evidence(
+        run_id=identity["run_id"], manifest_digest=identity["manifest_digest"],
+        runtime_result=runtime, trace_artifact=trace,
+        supervision=supervision, shutdown=shutdown,
+    )
+    return identity, trace, runtime, evidence
+
+
+def _project_late_fixture(identity, trace, runtime, evidence, monkeypatch):
+    monkeypatch.setattr(
+        k11_pilot, "_late_trace_cleanup_evidence",
+        lambda _trace: {"provider": True, "tool_native": True, "agent": True},
+    )
+    return k11_pilot._late_cleanup_evidence_projection(
+        evidence, runtime_result=runtime, trace_artifact=trace,
+        expected_identity=identity, expected_actors=("Alice",),
+    )
+
+
+def test_k11_contract3_qualifies_only_direct_identity_bound_late_proof(monkeypatch):
+    identity, trace, runtime, evidence = _late_contract_fixture()
+    frozen_trace = deepcopy(trace)
+    frozen_verdict = deepcopy(runtime["controller"]["context"]["diagnostics"]["verdict"])
+    result = _project_late_fixture(identity, trace, runtime, evidence, monkeypatch)
+    assert result["controller_verdict_at_budget"] == "failed"
+    assert result["late_future_reconciliation_state"] == "terminal"
+    assert result["late_provider_terminal"] is True
+    assert result["post_window_cleanup_status"] == "qualified_late"
+    assert trace == frozen_trace
+    assert runtime["controller"]["context"]["diagnostics"]["verdict"] == frozen_verdict
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_artifact", "missing_future_marker", "future_not_done",
+    "future_start_marker_malformed", "cancellation_malformed",
+    "cancellation_ack_without_request", "cancellation_time_reversed",
+    "execution_identity_mismatch", "provider_open", "provider_wrong_execution",
+    "provider_unbound", "provider_missing_for_model_start",
+    "execution_truncated", "provider_truncated", "provider_unresolved",
+    "capture_before_verdict", "cut_digest_mismatch", "bridge_failure",
+    "descendant_survives", "process_group_survives", "unreconciled_execution",
+    "late_lifecycle_missing", "late_lifecycle_truncated",
+    "late_movement_missing", "late_movement_nonterminal",
+    "balanced_post_close_effect",
+])
+def test_k11_contract3_late_proof_fails_closed(monkeypatch, mutation):
+    identity, trace, runtime, evidence = _late_contract_fixture()
+    execution = evidence["post_verdict_execution_ledger"]["groups"]["items"][0][
+        "executions"
+    ]["items"][0]
+    provider = evidence["execution_bound_provider_ledger"]
+    if mutation == "missing_artifact":
+        evidence = None
+    elif mutation == "missing_future_marker":
+        execution["future_completed"] = None
+    elif mutation == "future_not_done":
+        execution["future"] = {"done": False, "cancelled": False, "running": True}
+    elif mutation == "future_start_marker_malformed":
+        execution["future_started"]["event"] = "wrong"
+    elif mutation == "cancellation_malformed":
+        execution["cancellation"]["requested"] = "yes"
+    elif mutation == "cancellation_ack_without_request":
+        execution["cancellation"].update({
+            "requested": False, "requested_at_monotonic_ns": None,
+            "requested_at_wall_time": None, "acknowledged": True,
+        })
+    elif mutation == "cancellation_time_reversed":
+        execution["cancellation"]["acknowledged_at_monotonic_ns"] = 19
+    elif mutation == "execution_identity_mismatch":
+        execution["actor_id"] = "Bob"
+    elif mutation == "provider_open":
+        provider["operations"]["items"][0].update({
+            "terminal": False, "terminal_monotonic_ns": None, "outcome": None,
+        })
+    elif mutation == "provider_wrong_execution":
+        provider["operations"]["items"][0]["execution_id"] = "execution-other"
+    elif mutation == "provider_unbound":
+        provider["operations"]["items"][0]["execution_id"] = None
+    elif mutation == "provider_missing_for_model_start":
+        provider["operations"]["items"] = []
+        provider["operations"]["retention"]["retained"] = 0
+    elif mutation == "execution_truncated":
+        evidence["post_verdict_execution_ledger"]["groups"]["retention"].update({
+            "truncated": True, "dropped_count": 1,
+        })
+    elif mutation == "provider_truncated":
+        provider["operations"]["retention"].update({"truncated": True, "dropped_count": 1})
+    elif mutation == "provider_unresolved":
+        provider["unresolved"] = {"items": [{"reason": "mismatch"}], "retention": {
+            "capacity": 64, "retained": 1, "truncated": False, "dropped_count": 0,
+        }}
+    elif mutation == "capture_before_verdict":
+        evidence["post_verdict_execution_ledger"]["captured_at_monotonic_ns"] = 99
+    elif mutation == "cut_digest_mismatch":
+        evidence["measurement_cut"]["digest"] = "sha256:wrong"
+    elif mutation == "bridge_failure":
+        evidence["authorities"]["bridge"]["cleanup_complete"] = False
+    elif mutation == "descendant_survives":
+        evidence["authorities"]["worker_descendants"]["processes_after_cleanup"] = [{"pid": 1}]
+    elif mutation == "unreconciled_execution":
+        evidence["post_verdict_execution_ledger"]["groups"]["items"][0][
+            "reconciliation"
+        ]["execution_terminal_reconciled"] = False
+    elif mutation == "late_lifecycle_missing":
+        evidence["late_lifecycle_ledger"] = None
+    elif mutation == "late_lifecycle_truncated":
+        evidence["late_lifecycle_ledger"]["post_cut_events"]["retention"].update({
+            "truncated": True, "dropped_count": 1,
+        })
+    elif mutation == "late_movement_missing":
+        evidence["authorities"]["movement"] = None
+    elif mutation == "late_movement_nonterminal":
+        evidence["authorities"]["movement"]["result"]["terminal"] = False
+    elif mutation == "balanced_post_close_effect":
+        lifecycle = evidence["late_lifecycle_ledger"]["post_cut_events"]
+        lifecycle["items"] = [{
+            "seq": 4, "monotonic_ns": 11,
+            "event_type": "k11.tool_call_entered",
+        }, {
+            "seq": 5, "monotonic_ns": 12,
+            "event_type": "k11.tool_call_exited",
+        }]
+        lifecycle["retention"]["retained"] = 2
+    else:
+        evidence["authorities"]["worker_process_and_group"][
+            "process_group_alive_after_cleanup"
+        ] = True
+    result = _project_late_fixture(identity, trace, runtime, evidence, monkeypatch)
+    assert result["post_window_cleanup_status"] in {"unknown", "not_qualified"}
+
+
+def test_k11_contract3_within_budget_and_contamination_gate(monkeypatch):
+    identity, trace, runtime, evidence = _late_contract_fixture(shutdown_complete=True)
+    result = _project_late_fixture(identity, trace, runtime, evidence, monkeypatch)
+    assert result["post_window_cleanup_status"] == "qualified_within_budget"
+    summary = {
+        "measurement_snapshot_valid": True,
+        "censoring": {
+            "active_effect_at_horizon": False,
+            "post_close_effect": False,
+            "uncertainty": False,
+        },
+    }
+    k11_pilot._apply_prospective_cleanup_projection(summary, result)
+    assert summary["cross_run_contamination_excluded"] is True
+    assert summary["next_run_admission_allowed"] is True
+    for field in ("active_effect_at_horizon", "post_close_effect"):
+        blocked = deepcopy(summary)
+        blocked["censoring"][field] = True
+        k11_pilot._apply_prospective_cleanup_projection(blocked, result)
+        assert blocked["cross_run_contamination_excluded"] is False
+        assert blocked["next_run_admission_allowed"] is False

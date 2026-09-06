@@ -13,6 +13,9 @@ from functools import wraps
 from types import MethodType
 from typing import Any, Mapping
 
+
+_MISSING = object()
+
 from benchmarks.minecraft.k11_trace import (
     K11TraceRecorder,
     PROSPECTIVE_TRACE_SCHEMA_VERSION,
@@ -99,6 +102,136 @@ def _controlled_shutdown_is_complete(controller, exc: BaseException) -> bool:
         "incomplete_submission_task_ids",
         )
     )
+
+
+class _ProviderOperationLedger:
+    """Bounded, diagnostics-only accounting for provider attempts."""
+
+    def __init__(self, limit=256, clock=None):
+        self.limit = max(1, int(limit))
+        self.clock = clock or time.monotonic_ns
+        self._lock = threading.Lock()
+        self._operations = []
+        self._unresolved = []
+        self._truncated = 0
+        self._unresolved_truncated = 0
+        self._sequence = 0
+
+    @staticmethod
+    def _identity():
+        # This is deliberately lazy: the controller identity accessor is being
+        # introduced independently and K11 must remain importable without it.
+        try:
+            from pipeline import controller_tiny
+            accessor = getattr(controller_tiny, "current_execution_diagnostic_identity", None)
+            if not callable(accessor):
+                return {"execution_id": None, "task_id": None, "actor_id": None}
+            value = accessor()
+            if not isinstance(value, Mapping):
+                value = {key: getattr(value, key, None) for key in (
+                    "execution_id", "task_id", "actor_id")}
+            return {key: value.get(key) for key in (
+                "execution_id", "task_id", "actor_id")}
+        except Exception:
+            return {"execution_id": None, "task_id": None, "actor_id": None}
+
+    def start(self, source, *, identity_required=False, model_call_id=None):
+        identity = self._identity()
+        if not all(isinstance(identity.get(key), str) and identity.get(key)
+                   for key in ("execution_id", "task_id", "actor_id")):
+            if identity_required:
+                self.unresolved("provider_start_without_execution_identity")
+            return None
+        now = self.clock()
+        operation = {
+            "provider_operation_id": None,
+            "model_call_id": model_call_id,
+            **identity,
+            "source": str(source),
+            "start_monotonic_ns": now,
+            "terminal_monotonic_ns": None,
+            "terminal": False,
+            "outcome": None,
+        }
+        with self._lock:
+            self._sequence += 1
+            operation["provider_operation_id"] = f"provider-operation-{self._sequence:08d}"
+            self._operations.append(operation)
+            if len(self._operations) > self.limit:
+                self._operations.pop(0)
+                self._truncated += 1
+        return operation["provider_operation_id"]
+
+    def terminal(self, operation_id, *, outcome, error=None):
+        if operation_id is None:
+            return
+        with self._lock:
+            operation = next((item for item in reversed(self._operations)
+                              if item["provider_operation_id"] == operation_id), None)
+            if operation is None:
+                self._append_unresolved({
+                    "provider_operation_id": operation_id,
+                    "reason": "terminal_without_retained_start",
+                })
+                return
+            operation["terminal_monotonic_ns"] = self.clock()
+            operation["terminal"] = True
+            operation["outcome"] = "failed" if outcome == "failed" else "completed"
+            if error is not None:
+                operation["error_class"] = type(error).__name__
+
+    def unresolved(self, reason, operation_id=None):
+        with self._lock:
+            item = {"reason": reason}
+            if operation_id is not None:
+                item["provider_operation_id"] = operation_id
+            self._append_unresolved(item)
+
+    def _append_unresolved(self, item):
+        self._unresolved.append(item)
+        if len(self._unresolved) > self.limit:
+            self._unresolved.pop(0)
+            self._unresolved_truncated += 1
+
+    def snapshot(self):
+        # A diagnostics collector must never wait behind a provider callback.
+        if not self._lock.acquire(False):
+            return {
+                "schema_version": "k11-execution-provider-ledger/1",
+                "captured_at_monotonic_ns": self.clock(),
+                "operations": {"items": [], "retention": {
+                    "capacity": self.limit, "retained": 0,
+                    "truncated": False, "dropped_count": 0,
+                }},
+                "unresolved": {"items": [], "retention": {
+                    "capacity": self.limit, "retained": 0,
+                    "truncated": False, "dropped_count": 0,
+                }},
+                "diagnostic_collection_error": {
+                    "collector": "provider_ledger",
+                    "error_type": "ProviderLedgerLockUnavailable",
+                },
+            }
+        try:
+            operations = [dict(item) for item in self._operations]
+            unresolved = [dict(item) for item in self._unresolved]
+            return {
+                "schema_version": "k11-execution-provider-ledger/1",
+                "captured_at_monotonic_ns": self.clock(),
+                "operations": {"items": operations, "retention": {
+                    "capacity": self.limit, "retained": len(operations),
+                    "truncated": self._truncated > 0,
+                    "dropped_count": self._truncated,
+                }},
+                "unresolved": {"items": unresolved, "retention": {
+                    "capacity": self.limit, "retained": len(unresolved),
+                    "truncated": self._unresolved_truncated > 0,
+                    "dropped_count": self._unresolved_truncated,
+                }},
+                "diagnostic_collection_error": None,
+            }
+        finally:
+            self._lock.release()
 
 
 def instrument_runtime(runtime, trace: K11TraceRecorder):
@@ -363,7 +496,8 @@ class K11ProcessInstrumentation:
 
     def __init__(self, trace: K11TraceRecorder, *, observation_horizon_seconds=None,
                  waiter=None, clock=None, observation_waiter=None,
-                 monotonic_clock=None):
+                 monotonic_clock=None, provider_ledger_limit=256,
+                 provider_ledger_clock=None, late_cleanup_identity=None):
         if observation_horizon_seconds is not None and (
                 isinstance(observation_horizon_seconds, bool)
                 or not isinstance(observation_horizon_seconds, (int, float))
@@ -382,9 +516,13 @@ class K11ProcessInstrumentation:
         self._observation_run_lock = threading.Lock()
         self._observation_run_started = False
         self._restores: list[tuple[Any, str, Any]] = []
+        self._provider_ledger = _ProviderOperationLedger(
+            provider_ledger_limit, provider_ledger_clock,
+        )
+        self._late_cleanup_enabled = isinstance(late_cleanup_identity, Mapping)
 
     def _patch(self, owner, name: str, replacement) -> None:
-        original = getattr(owner, name)
+        original = getattr(owner, name, _MISSING)
         self._restores.append((owner, name, original))
         setattr(owner, name, replacement)
 
@@ -404,6 +542,55 @@ class K11ProcessInstrumentation:
         from pipeline.agent import BaseAgent
 
         trace = self.trace
+
+        def provider_ledger_snapshot(controller_self):
+            return self._provider_ledger.snapshot()
+
+        def late_lifecycle_snapshot(controller_self):
+            artifact = trace.artifact()
+            cut = artifact.get("measurement_cut")
+            high_water = (
+                cut.get("event_prefix_high_water_sequence")
+                if isinstance(cut, Mapping) else None
+            )
+            if type(high_water) is not int:
+                post_cut = []
+                error = {
+                    "collector": "late_lifecycle_ledger",
+                    "error_type": "MeasurementCutUnavailable",
+                }
+            else:
+                post_cut = [
+                    event for event in artifact.get("events", [])
+                    if isinstance(event, Mapping)
+                    and type(event.get("seq")) is int
+                    and event["seq"] > high_water
+                ]
+                error = None
+            capacity = 512
+            dropped = max(0, len(post_cut) - capacity)
+            retained = post_cut[:capacity]
+            return {
+                "schema_version": "k11-late-lifecycle-ledger/1",
+                "captured_at_monotonic_ns": time.monotonic_ns(),
+                "measurement_identity": (
+                    dict(cut.get("identity"))
+                    if isinstance(cut, Mapping)
+                    and isinstance(cut.get("identity"), Mapping) else None
+                ),
+                "event_prefix_high_water_sequence": high_water,
+                "post_cut_events": {
+                    "items": retained,
+                    "retention": {
+                        "capacity": capacity, "retained": len(retained),
+                        "truncated": dropped > 0, "dropped_count": dropped,
+                    },
+                },
+                "instrumentation_errors": list(
+                    artifact.get("instrumentation_errors", [])
+                ),
+                "diagnostic_collection_error": error,
+            }
 
         if self.observation_horizon_seconds is not None:
             from pipeline.controller_tiny import ControllerShutdownError, GlobalController
@@ -454,6 +641,15 @@ class K11ProcessInstrumentation:
                     window.dispose()
 
             self._patch(GlobalController, "run", controller_run)
+
+        # Runtime-result collection consults this temporary hook when present;
+        # production controllers never retain the instrumentation method.
+        from pipeline.controller_tiny import GlobalController
+        if self._late_cleanup_enabled:
+            self._patch(GlobalController, "get_k11_provider_ledger_snapshot",
+                        provider_ledger_snapshot)
+            self._patch(GlobalController, "get_k11_late_lifecycle_snapshot",
+                        late_lifecycle_snapshot)
 
         # Wrap native callbacks at gateway construction time.  Consequently the
         # per-action prepare marker can be the final instrumentation operation
@@ -572,26 +768,65 @@ class K11ProcessInstrumentation:
         self._patch(VillagerBench, "_guard_tool_action", guard_tool_action)
 
         original_llm_start = LLMHandler.on_llm_start
-        @wraps(original_llm_start)
-        def llm_start(handler_self, serialized, prompts, **kwargs):
-            result = original_llm_start(handler_self, serialized, prompts, **kwargs)
+        original_llm_end = LLMHandler.on_llm_end
+        original_llm_error = LLMHandler.on_llm_error
+
+        def complete_llm_operation(handler_self, *, failed, error=None, **kwargs):
+            run_id = kwargs.get("run_id")
+            if run_id is not None:
+                pending = getattr(handler_self, "_k11_model_calls_by_run_id", {})
+                model_call_id, scope, operation_id = pending.pop(
+                    str(run_id), (None, current_scope(), _MISSING))
+            else:
+                stack = getattr(handler_self, "_k11_model_call_stack", [])
+                model_call_id, scope, operation_id = (
+                    stack.pop() if stack else (None, current_scope(), _MISSING))
+            if operation_id is _MISSING:
+                self._provider_ledger.unresolved(
+                    "error_without_matching_start" if failed
+                    else "end_without_matching_start",
+                )
+            elif operation_id is not None:
+                self._provider_ledger.terminal(
+                    operation_id, outcome="failed" if failed else "completed",
+                    error=error,
+                )
+            trace.record(
+                "k11.model_call_failed" if failed else "k11.model_call_completed",
+                source="LLMHandler.on_llm_error" if failed else "LLMHandler.on_llm_end",
+                scope=scope,
+                payload={
+                    "model_call_id": model_call_id,
+                    **({"error_type": type(error).__name__} if failed else {}),
+                },
+            )
+        def start_llm_operation(handler_self, serialized, **kwargs):
             scope = current_scope()
             model_call_id = trace.new_identity(
                 "model-call", actor_id=scope.actor_id if scope is not None else None,
             )
             run_id = kwargs.get("run_id")
+            provider_operation_id = (
+                self._provider_ledger.start(
+                    "LLMHandler.on_llm_start",
+                    identity_required=bool(
+                        scope is not None and scope.task_id and scope.actor_id
+                    ),
+                    model_call_id=model_call_id,
+                ) if self._late_cleanup_enabled else None
+            )
             if run_id is not None:
                 pending = getattr(handler_self, "_k11_model_calls_by_run_id", None)
                 if pending is None:
                     pending = {}
                     handler_self._k11_model_calls_by_run_id = pending
-                pending[str(run_id)] = (model_call_id, scope)
+                pending[str(run_id)] = (model_call_id, scope, provider_operation_id)
             else:
                 stack = getattr(handler_self, "_k11_model_call_stack", None)
                 if stack is None:
                     stack = []
                     handler_self._k11_model_call_stack = stack
-                stack.append((model_call_id, scope))
+                stack.append((model_call_id, scope, provider_operation_id))
             trace.record(
                 "k11.model_call_started",
                 source="LLMHandler.on_llm_start",
@@ -601,45 +836,51 @@ class K11ProcessInstrumentation:
                     "model_name": serialized.get("name") if isinstance(serialized, Mapping) else None,
                 },
             )
+            if (self._late_cleanup_enabled
+                    and not getattr(handler_self, "_k11_persistent_terminal_callbacks", False)):
+                def persistent_start(instance, next_serialized, prompts, **start_kwargs):
+                    result = original_llm_start(
+                        instance, next_serialized, prompts, **start_kwargs,
+                    )
+                    start_llm_operation(instance, next_serialized, **start_kwargs)
+                    return result
+
+                def persistent_end(instance, llm_result, **end_kwargs):
+                    result = original_llm_end(instance, llm_result, **end_kwargs)
+                    complete_llm_operation(instance, failed=False, **end_kwargs)
+                    return result
+
+                def persistent_error(instance, error, **error_kwargs):
+                    result = original_llm_error(instance, error, **error_kwargs)
+                    complete_llm_operation(
+                        instance, failed=True, error=error, **error_kwargs,
+                    )
+                    return result
+
+                handler_self.on_llm_start = MethodType(persistent_start, handler_self)
+                handler_self.on_llm_end = MethodType(persistent_end, handler_self)
+                handler_self.on_llm_error = MethodType(persistent_error, handler_self)
+                handler_self._k11_persistent_terminal_callbacks = True
+
+        @wraps(original_llm_start)
+        def llm_start(handler_self, serialized, prompts, **kwargs):
+            result = original_llm_start(handler_self, serialized, prompts, **kwargs)
+            start_llm_operation(handler_self, serialized, **kwargs)
             return result
         self._patch(LLMHandler, "on_llm_start", llm_start)
 
-        original_llm_end = LLMHandler.on_llm_end
         @wraps(original_llm_end)
         def llm_end(handler_self, llm_result, **kwargs):
             result = original_llm_end(handler_self, llm_result, **kwargs)
-            run_id = kwargs.get("run_id")
-            if run_id is not None:
-                pending = getattr(handler_self, "_k11_model_calls_by_run_id", {})
-                model_call_id, scope = pending.pop(str(run_id), (None, current_scope()))
-            else:
-                stack = getattr(handler_self, "_k11_model_call_stack", [])
-                model_call_id, scope = stack.pop() if stack else (None, current_scope())
-            trace.record(
-                "k11.model_call_completed",
-                source="LLMHandler.on_llm_end",
-                scope=scope,
-                payload={"model_call_id": model_call_id},
-            )
+            complete_llm_operation(handler_self, failed=False, **kwargs)
             return result
         self._patch(LLMHandler, "on_llm_end", llm_end)
 
-        original_llm_error = LLMHandler.on_llm_error
         @wraps(original_llm_error)
         def llm_error(handler_self, error, **kwargs):
             result = original_llm_error(handler_self, error, **kwargs)
-            run_id = kwargs.get("run_id")
-            if run_id is not None:
-                pending = getattr(handler_self, "_k11_model_calls_by_run_id", {})
-                model_call_id, scope = pending.pop(str(run_id), (None, current_scope()))
-            else:
-                stack = getattr(handler_self, "_k11_model_call_stack", [])
-                model_call_id, scope = stack.pop() if stack else (None, current_scope())
-            trace.record(
-                "k11.model_call_failed",
-                source="LLMHandler.on_llm_error",
-                scope=scope,
-                payload={"model_call_id": model_call_id, "error_type": type(error).__name__},
+            complete_llm_operation(
+                handler_self, failed=True, error=error, **kwargs,
             )
             return result
         self._patch(LLMHandler, "on_llm_error", llm_error)
@@ -655,6 +896,15 @@ class K11ProcessInstrumentation:
                 model_call_id = trace.new_identity(
                     "model-call", actor_id=scope.actor_id if scope is not None else None,
                 )
+                provider_operation_id = (
+                    self._provider_ledger.start(
+                        f"OpenAILanguageModel.{name}",
+                        identity_required=bool(
+                            scope is not None and scope.task_id and scope.actor_id
+                        ),
+                        model_call_id=model_call_id,
+                    ) if self._late_cleanup_enabled else None
+                )
                 source = f"OpenAILanguageModel.{name}"
                 trace.record(
                     "k11.model_call_started",
@@ -668,6 +918,9 @@ class K11ProcessInstrumentation:
                 try:
                     result = original_provider_call(model_self, *args, **kwargs)
                 except BaseException as exc:
+                    self._provider_ledger.terminal(
+                        provider_operation_id, outcome="failed", error=exc,
+                    )
                     trace.record(
                         "k11.model_call_failed",
                         source=source,
@@ -676,6 +929,7 @@ class K11ProcessInstrumentation:
                     )
                     raise
                 else:
+                    self._provider_ledger.terminal(provider_operation_id, outcome="completed")
                     trace.record(
                         "k11.model_call_completed",
                         source=source,
@@ -703,6 +957,13 @@ class K11ProcessInstrumentation:
                 if scope is None:
                     return original_generate(model_self, *args, **kwargs)
                 model_call_id = trace.new_identity("model-call", actor_id=scope.actor_id)
+                provider_operation_id = (
+                    self._provider_ledger.start(
+                        "VLLMLanguageModel.few_shot_generate_thoughts",
+                        identity_required=True,
+                        model_call_id=model_call_id,
+                    ) if self._late_cleanup_enabled else None
+                )
                 trace.record(
                     "k11.model_call_started",
                     source="VLLMLanguageModel.few_shot_generate_thoughts",
@@ -711,6 +972,9 @@ class K11ProcessInstrumentation:
                 try:
                     result = original_generate(model_self, *args, **kwargs)
                 except BaseException as exc:
+                    self._provider_ledger.terminal(
+                        provider_operation_id, outcome="failed", error=exc,
+                    )
                     trace.record(
                         "k11.model_call_failed",
                         source="VLLMLanguageModel.few_shot_generate_thoughts",
@@ -718,6 +982,7 @@ class K11ProcessInstrumentation:
                     )
                     raise
                 else:
+                    self._provider_ledger.terminal(provider_operation_id, outcome="completed")
                     trace.record(
                         "k11.model_call_completed",
                         source="VLLMLanguageModel.few_shot_generate_thoughts",
@@ -732,7 +997,13 @@ class K11ProcessInstrumentation:
 
     def _restore(self) -> None:
         for owner, name, original in reversed(self._restores):
-            setattr(owner, name, original)
+            if original is _MISSING:
+                try:
+                    delattr(owner, name)
+                except AttributeError:
+                    pass
+            else:
+                setattr(owner, name, original)
         self._restores.clear()
 
     def __exit__(self, exc_type, exc, tb):
