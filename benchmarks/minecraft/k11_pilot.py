@@ -50,6 +50,7 @@ PROSPECTIVE_TRACE_SCHEMA = "minecraft-k11-trace/3"
 PROSPECTIVE_VALIDATION_ARTIFACT_VERSION = 3
 DEVELOPMENT_SMOKE_ARTIFACT_VERSION = 2
 P0_EXPECTED_RUNS = 8
+K11_P0_ACTOR_ROSTER = ("Alice", "Bob")
 COHORT_MODES = frozenset({"development_smoke", "formal_p0"})
 EAC_IDENTITY_SOURCE = "current_immutable_checkout"
 RUN_PROCESS_TIMEOUT_SECONDS = 900.0
@@ -219,6 +220,7 @@ def _validate_run(row: Mapping[str, Any]) -> None:
     ):
         if key not in config:
             raise K11PilotContractError(f"K11 P0 runtime is missing {key}")
+    _expected_actor_roster(row)
 
 
 def _assert_clean_checkout(root: Path) -> None:
@@ -289,6 +291,22 @@ def _runtime_kwargs(
     config.setdefault("world_initialization", None)
     config.setdefault("position_convention", None)
     return config
+
+
+def _expected_actor_roster(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """Bind cleanup evidence to the fixed K11 P0 two-actor cohort."""
+    runtime = row.get("runtime")
+    if not isinstance(runtime, Mapping):
+        raise K11PilotContractError("K11 row runtime is malformed")
+    agent_num = runtime.get("agent_num")
+    if type(agent_num) is not int or agent_num != len(K11_P0_ACTOR_ROSTER):
+        raise K11PilotContractError("K11 row agent count is invalid")
+    document = runtime.get("document")
+    if document is not None and not isinstance(document, Mapping):
+        raise K11PilotContractError("K11 row document is malformed")
+    if isinstance(document, Mapping) and document.get("action") in {"chat", "handover"}:
+        raise K11PilotContractError("K11 P0 does not admit roster-expanding actions")
+    return K11_P0_ACTOR_ROSTER
 
 
 def _event_type_counts(trace_artifact: Mapping[str, Any]) -> dict[str, int]:
@@ -753,12 +771,149 @@ def _apply_process_outcome(
     return summary
 
 
-def _prospective_cleanup_status(
-    supervision: Mapping[str, Any], shutdown: Any, runtime_result: Any = None,
-) -> str:
-    """Classify cleanup only; cleanup defects are not rewritten as runtime errors."""
-    if not isinstance(shutdown, Mapping) or not isinstance(runtime_result, Mapping):
-        return "unknown"
+def _late_trace_lifecycle_terminal(
+    trace_artifact: Any, start_type: str, terminal_types: set[str], identity,
+) -> bool | None:
+    if not isinstance(trace_artifact, Mapping):
+        return None
+    events = trace_artifact.get("events")
+    if not isinstance(events, list):
+        return None
+    starts: dict[str, list[Mapping[str, Any]]] = {}
+    terminals: dict[str, list[Mapping[str, Any]]] = {}
+    for event in events:
+        if not isinstance(event, Mapping):
+            return None
+        event_type = event.get("event_type")
+        if event_type != start_type and event_type not in terminal_types:
+            continue
+        lifecycle_id = identity(event)
+        if not isinstance(lifecycle_id, str) or not lifecycle_id:
+            return None
+        table = starts if event_type == start_type else terminals
+        table.setdefault(lifecycle_id, []).append(event)
+    if set(starts) != set(terminals):
+        return None
+    for lifecycle_id, start_rows in starts.items():
+        terminal_rows = terminals[lifecycle_id]
+        if len(start_rows) != 1 or len(terminal_rows) != 1:
+            return None
+        start_seq = start_rows[0].get("seq")
+        terminal_seq = terminal_rows[0].get("seq")
+        if (type(start_seq) is not int or type(terminal_seq) is not int
+                or start_seq >= terminal_seq):
+            return None
+    return True
+
+
+def _late_trace_cleanup_evidence(trace_artifact: Any) -> dict[str, bool | None]:
+    if (not isinstance(trace_artifact, Mapping)
+            or validate_trace(trace_artifact).get("valid") is not True
+            or trace_artifact.get("instrumentation_errors") != []):
+        return {"provider": None, "tool_native": None, "agent": None}
+    cut = trace_artifact.get("measurement_cut")
+    if not isinstance(cut, Mapping):
+        return {"provider": None, "tool_native": None, "agent": None}
+    for name in (
+        "active_executions", "open_lifecycles", "prepared_requests",
+        "evidence_high_water", "censoring_inventory",
+    ):
+        collection = cut.get(name)
+        retention = collection.get("retention") if isinstance(collection, Mapping) else None
+        if (not isinstance(retention, Mapping)
+                or retention.get("truncated") is not False
+                or retention.get("dropped_count") != 0):
+            return {"provider": None, "tool_native": None, "agent": None}
+
+    scope_fields = ("task_id", "actor_id", "agent_step_id", "tool_call_id")
+
+    def bound_identity(kind: str, lifecycle_id: Any, event, *, request=None):
+        if not isinstance(lifecycle_id, str) or not lifecycle_id:
+            return None
+        value = {
+            "kind": kind,
+            "id": lifecycle_id,
+            "scope": {field: event.get(field) for field in scope_fields},
+        }
+        if request is not None:
+            if not isinstance(request, Mapping):
+                return None
+            value["exact_request"] = request
+            payload = event.get("payload")
+            value["exact_request_digest"] = (
+                payload.get("exact_request_digest")
+                if isinstance(payload, Mapping) else None
+            )
+        return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+    def payload_identity(field, kind):
+        def selected(event):
+            payload = event.get("payload")
+            lifecycle_id = payload.get(field) if isinstance(payload, Mapping) else None
+            return bound_identity(kind, lifecycle_id, event)
+        return selected
+
+    def candidate_identity(event):
+        payload = event.get("payload")
+        request = payload.get("exact_request") if isinstance(payload, Mapping) else None
+        candidate_id = request.get("candidate_id") if isinstance(request, Mapping) else None
+        return bound_identity("native", candidate_id, event, request=request)
+
+    provider = _late_trace_lifecycle_terminal(
+        trace_artifact, "k11.model_call_started",
+        {"k11.model_call_completed", "k11.model_call_failed"},
+        payload_identity("model_call_id", "model"),
+    )
+    tool = _late_trace_lifecycle_terminal(
+        trace_artifact, "k11.tool_call_entered", {"k11.tool_call_exited"},
+        lambda event: bound_identity(
+            "tool", event.get("tool_call_id"), event,
+        ),
+    )
+    native = _late_trace_lifecycle_terminal(
+        trace_artifact, "k11.eac_native_effect_entered",
+        {"k11.eac_native_effect_completed"}, candidate_identity,
+    )
+    agent = _late_trace_lifecycle_terminal(
+        trace_artifact, "k11.agent_step_started", {"k11.agent_step_completed"},
+        lambda event: bound_identity(
+            "agent", event.get("agent_step_id"), event,
+        ),
+    )
+    tool_native = (
+        True if tool is True and native is True
+        else None if tool is None or native is None
+        else False
+    )
+    return {
+        "provider": provider,
+        "tool_native": tool_native,
+        "agent": agent,
+    }
+
+
+def _prospective_cleanup_projection(
+    supervision: Any, shutdown: Any, runtime_result: Any = None, *,
+    trace_artifact: Any = None, expected_actors: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Classify append-only cleanup without rewriting the budget-time verdict."""
+    unknown = {
+        "controller_verdict_at_budget": "unknown",
+        "late_execution_capability_terminal": None,
+        "late_future_reconciliation_state": "unknown",
+        "late_provider_terminal": None,
+        "late_tool_native_terminal": None,
+        "late_agent_lifecycle_terminal": None,
+        "late_movement_terminal": None,
+        "late_bridge_terminal": None,
+        "late_descendant_terminal": None,
+        "late_process_group_terminal": None,
+        "post_window_cleanup_status": "unknown",
+    }
+    if (not isinstance(supervision, Mapping)
+            or not isinstance(shutdown, Mapping)
+            or not isinstance(runtime_result, Mapping)):
+        return unknown
     supervision_types = {
         "artifact_ready": bool, "timed_out": bool,
         "post_artifact_linger": bool, "post_parent_group_linger": bool,
@@ -766,17 +921,13 @@ def _prospective_cleanup_status(
     }
     if any(type(supervision.get(key)) is not expected
            for key, expected in supervision_types.items()):
-        return "unknown"
+        return unknown
     if (supervision.get("artifact_ready") is not True
             or type(supervision.get("exit_code")) is not int):
-        return "unknown"
+        return unknown
     remaining_processes = shutdown.get("processes_after_cleanup")
     if not isinstance(remaining_processes, list):
-        return "unknown"
-    if remaining_processes:
-        return "not_qualified"
-    if supervision.get("process_group_alive_after_cleanup") is not False:
-        return "unknown"
+        return unknown
     controller = runtime_result.get("controller")
     context = controller.get("context") if isinstance(controller, Mapping) else None
     diagnostics = context.get("diagnostics") if isinstance(context, Mapping) else None
@@ -784,41 +935,226 @@ def _prospective_cleanup_status(
     basis = verdict.get("authoritative_basis") if isinstance(verdict, Mapping) else None
     bridge = runtime_result.get("bridge_cleanup")
     if not all(isinstance(value, Mapping) for value in (verdict, basis, bridge)):
-        return "unknown"
+        return unknown
     if type(verdict.get("shutdown_complete")) is not bool:
-        return "unknown"
+        return unknown
+    projection = dict(unknown)
+    projection["controller_verdict_at_budget"] = (
+        "passed" if verdict["shutdown_complete"] else "failed"
+    )
+    projection["late_future_reconciliation_state"] = (
+        "terminal" if verdict["shutdown_complete"] else "unknown"
+    )
+    if remaining_processes or supervision["process_group_alive_after_cleanup"] is True:
+        projection["post_window_cleanup_status"] = "not_qualified"
+        return projection
     providers = basis.get("provider_termination_unconfirmed_task_ids")
-    if providers != []:
-        return "unknown"
+    if not isinstance(providers, list):
+        return projection
     movement = basis.get("movement_cancellation")
-    if not isinstance(movement, Mapping) or movement.get("terminal") is not True:
-        return "unknown"
+    if not isinstance(movement, Mapping) or type(movement.get("terminal")) is not bool:
+        return projection
     if (type(bridge.get("cleanup_complete")) is not bool
             or type(bridge.get("incomplete_process_count")) is not int):
-        return "unknown"
-    if (bridge["cleanup_complete"] is not True
+        return projection
+    if (bridge["cleanup_complete"] is False
             or bridge["incomplete_process_count"] != 0):
-        return "not_qualified"
+        projection["late_bridge_terminal"] = False
+        projection["post_window_cleanup_status"] = "not_qualified"
+        return projection
     basis_lists = (
         "live_threads", "active_task_ids", "active_agent_ids",
         "incomplete_submission_task_ids", "undrained_queues",
     )
     if any(not isinstance(basis.get(key), list) for key in basis_lists):
-        return "unknown"
-    if verdict.get("shutdown_complete") is not True or any(
-        basis[key] for key in basis_lists
+        return projection
+    actors = movement.get("actors")
+    if not isinstance(actors, Mapping) or any(
+        not isinstance(value, Mapping) or type(value.get("terminal")) is not bool
+        for value in actors.values()
     ):
-        return "unknown"
+        return projection
+    projection["late_movement_terminal"] = bool(
+        movement["terminal"] and all(value["terminal"] for value in actors.values())
+    )
+    bridge_retention = bridge.get("process_retention")
+    bridge_processes = bridge.get("processes")
+    if (not isinstance(bridge_retention, Mapping)
+            or type(bridge_retention.get("capacity")) is not int
+            or type(bridge_retention.get("retained")) is not int
+            or bridge_retention.get("truncated") is not False
+            or type(bridge_retention.get("dropped_count")) is not int
+            or bridge_retention["dropped_count"] != 0
+            or not isinstance(bridge_processes, Mapping)):
+        return projection
+    if (bridge_retention["retained"] != len(bridge_processes)
+            or bridge_retention["capacity"] < len(bridge_processes)):
+        return projection
+    bridge_evidence_clean = all(
+        isinstance(value, Mapping)
+        and type(value.get("pid")) is int and value["pid"] > 0
+        and type(value.get("process_group_id")) is int
+        and value["process_group_id"] > 0
+        and type(value.get("session_id")) is int and value["session_id"] > 0
+        and value.get("alive_after_kill") is False
+        and value.get("identity_collection_errors") == []
+        for value in bridge_processes.values()
+    )
+    projection["late_bridge_terminal"] = bool(
+        bridge["cleanup_complete"] and bridge["incomplete_process_count"] == 0
+        and bridge_evidence_clean
+    )
+    controller_assignments = controller.get("active_assignments")
+    trace_actors = {
+        event.get("actor_id")
+        for event in trace_artifact.get("events", [])
+        if isinstance(event, Mapping)
+        and event.get("event_type") == "k11.agent_step_started"
+        and isinstance(event.get("actor_id"), str) and event.get("actor_id")
+    } if isinstance(trace_artifact, Mapping) else set()
+    if (not isinstance(expected_actors, tuple) or not expected_actors
+            or len(set(expected_actors)) != len(expected_actors)
+            or any(not isinstance(actor, str) or not actor for actor in expected_actors)):
+        projection["late_movement_terminal"] = None
+        projection["late_bridge_terminal"] = None
+        return projection
+    configured_actors = set(expected_actors)
+    if (not isinstance(controller_assignments, Mapping)
+            or any(not isinstance(actor, str) or not actor
+                   or not isinstance(task_id, str) or not task_id
+                   for actor, task_id in controller_assignments.items())):
+        projection["late_movement_terminal"] = None
+        projection["late_bridge_terminal"] = None
+        return projection
+    assignment_actors = set(controller_assignments)
+    if any(
+        not isinstance(actor, str) or not actor
+        for actor in basis["active_agent_ids"]
+    ):
+        projection["late_movement_terminal"] = None
+        projection["late_bridge_terminal"] = None
+        return projection
+    active_actors = set(basis["active_agent_ids"])
+    actor_values = configured_actors | set(actors) | trace_actors | assignment_actors | active_actors
+    if (not configured_actors
+            or any(not isinstance(actor, str) or not actor for actor in actor_values)
+            or set(actors) != configured_actors
+            or set(bridge_processes) != configured_actors
+            or not trace_actors.issubset(configured_actors)
+            or not assignment_actors.issubset(configured_actors)
+            or not active_actors.issubset(assignment_actors)):
+        projection["late_movement_terminal"] = None
+        projection["late_bridge_terminal"] = None
+        return projection
+    if type(supervision.get("term_sent")) is not bool or type(
+        supervision.get("kill_sent")
+    ) is not bool:
+        return projection
+    if (type(shutdown.get("term_sent")) is not bool
+            or type(shutdown.get("kill_sent")) is not bool):
+        return projection
+
+    natural_worker_exit = bool(
+        supervision["exit_code"] == 0
+        and supervision["term_sent"] is False
+        and supervision["kill_sent"] is False
+        and supervision["process_group_alive_after_cleanup"] is False
+    )
+    projection["late_execution_capability_terminal"] = natural_worker_exit
+    projection["late_descendant_terminal"] = not remaining_processes
+    projection["late_process_group_terminal"] = (
+        supervision["process_group_alive_after_cleanup"] is False
+    )
+    trace_evidence = _late_trace_cleanup_evidence(trace_artifact)
+    projection["late_provider_terminal"] = (
+        True if providers == [] and trace_evidence["provider"] is True else None
+    )
+    projection["late_tool_native_terminal"] = trace_evidence["tool_native"]
+    projection["late_agent_lifecycle_terminal"] = trace_evidence["agent"]
+
+    affirmative_failure = bool(
+        remaining_processes
+        or supervision["process_group_alive_after_cleanup"] is True
+        or supervision["term_sent"] is True
+        or supervision["kill_sent"] is True
+        or projection["late_bridge_terminal"] is False
+        or projection["late_movement_terminal"] is False
+        or projection["late_tool_native_terminal"] is False
+    )
+    if affirmative_failure:
+        projection["post_window_cleanup_status"] = "not_qualified"
+        return projection
+
+    required_terminal = (
+        "late_execution_capability_terminal", "late_provider_terminal",
+        "late_tool_native_terminal", "late_agent_lifecycle_terminal",
+        "late_movement_terminal", "late_bridge_terminal",
+        "late_descendant_terminal", "late_process_group_terminal",
+    )
+    if not all(projection[name] is True for name in required_terminal):
+        return projection
     clean_within_budget = (
         verdict.get("shutdown_complete") is True
+        and not any(basis[key] for key in basis_lists)
         and supervision.get("timed_out") is False
         and supervision.get("post_artifact_linger") is False
         and supervision.get("post_parent_group_linger") is False
-        and supervision.get("exit_code") == 0
     )
-    if clean_within_budget:
-        return "qualified_within_budget"
-    return "qualified_late"
+    projection["post_window_cleanup_status"] = (
+        "qualified_within_budget" if clean_within_budget else "qualified_late"
+    )
+    return projection
+
+
+def _prospective_cleanup_status(
+    supervision: Mapping[str, Any], shutdown: Any, runtime_result: Any = None, *,
+    trace_artifact: Any = None, expected_actors: tuple[str, ...] | None = None,
+) -> str:
+    """Compatibility wrapper returning the append-only cleanup status."""
+    return _prospective_cleanup_projection(
+        supervision, shutdown, runtime_result, trace_artifact=trace_artifact,
+        expected_actors=expected_actors,
+    )["post_window_cleanup_status"]
+
+
+def _prospective_contamination_excluded(
+    summary: Mapping[str, Any], *, cleanup_qualified: bool,
+) -> bool:
+    censoring = summary.get("censoring")
+    return bool(
+        cleanup_qualified
+        and summary.get("measurement_snapshot_valid") is True
+        and isinstance(censoring, Mapping)
+        and censoring.get("active_effect_at_horizon") is False
+        and censoring.get("post_close_effect") is False
+        and censoring.get("uncertainty") is False
+    )
+
+
+def _apply_prospective_cleanup_projection(
+    summary: dict[str, Any], projection: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Append cleanup/admission fields without changing frozen run evidence."""
+    summary["late_cleanup"] = dict(projection)
+    summary["cleanup_status"] = projection.get(
+        "post_window_cleanup_status", "unknown",
+    )
+    clean = summary["cleanup_status"] in {
+        "qualified_within_budget", "qualified_late",
+    }
+    summary["cross_run_contamination_excluded"] = (
+        _prospective_contamination_excluded(
+            summary, cleanup_qualified=clean,
+        )
+    )
+    summary["contamination_excluded"] = summary[
+        "cross_run_contamination_excluded"
+    ]
+    summary["next_run_admission_allowed"] = bool(
+        clean and summary["cross_run_contamination_excluded"] is True
+    )
+    summary["next_run_admission"] = summary["next_run_admission_allowed"]
+    return summary
 
 
 def _validate_worker_summary_identity(
@@ -885,6 +1221,7 @@ def _run_isolated_row(
         json.dumps(supervision, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    persisted_trace = None
     if validation_path.is_file():
         summary = json.loads(validation_path.read_text(encoding="utf-8"))
         _validate_worker_summary_identity(
@@ -946,21 +1283,11 @@ def _run_isolated_row(
             except (OSError, ValueError):
                 runtime_result = None
         summary["process_supervision"] = dict(supervision)
-        summary["cleanup_status"] = _prospective_cleanup_status(
-            supervision, shutdown, runtime_result
+        cleanup_projection = _prospective_cleanup_projection(
+            supervision, shutdown, runtime_result, trace_artifact=persisted_trace,
+            expected_actors=_expected_actor_roster(row),
         )
-        clean = summary["cleanup_status"] in {"qualified_within_budget", "qualified_late"}
-        if summary.get("measurement_snapshot_valid") is True:
-            summary["cross_run_contamination_excluded"] = bool(
-                clean and not summary.get("censoring", {}).get("active_effect_at_horizon")
-                and not summary.get("censoring", {}).get("post_close_effect")
-                and not summary.get("censoring", {}).get("uncertainty")
-            )
-            summary["contamination_excluded"] = summary["cross_run_contamination_excluded"]
-        summary["next_run_admission_allowed"] = bool(
-            clean and summary.get("cross_run_contamination_excluded") is True
-        )
-        summary["next_run_admission"] = summary["next_run_admission_allowed"]
+        _apply_prospective_cleanup_projection(summary, cleanup_projection)
     else:
         summary = _apply_process_outcome(summary, supervision)
     validation_path.write_text(

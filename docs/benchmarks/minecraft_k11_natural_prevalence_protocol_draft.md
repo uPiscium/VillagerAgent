@@ -171,6 +171,14 @@ unresolved and makes the prospective result ineligible; it is not converted to
 censoring. A trace with no primary actions is likewise ineligible, rather than
 being interpreted as zero prevalence.
 
+Post-window cleanup is a distinct append-only authority. The controller verdict
+at its bounded grace deadline is immutable, but a failed budget-time verdict may
+later receive `qualified_late` only from identity-bound, complete, non-truncated
+evidence that execution capability, providers, tool/native effects, movement,
+bridge children, worker descendants, and the process group are terminal. This
+late projection does not alter the cut, runtime error, or scientific fields;
+missing evidence remains `unknown`.
+
 K11 introduces a dedicated append-only in-memory trace for all new K11 high-frequency instrumentation.
 
 The K11 trace must not write to disk from the measured critical path and must not add a new synchronization lock to the EAC prepare/evidence/execute seam.

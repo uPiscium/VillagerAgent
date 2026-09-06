@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -690,11 +691,16 @@ def test_k11_post_close_completion_alone_does_not_block() -> None:
 def _prospective_runtime_cleanup(*, shutdown_complete=True, providers=None,
                                  movement_terminal=True, bridge_complete=True):
     return {
-        "controller": {"context": {"diagnostics": {"verdict": {
+        "controller": {
+            "active_assignments": {"Alice": "task-1"},
+            "context": {"diagnostics": {"verdict": {
             "shutdown_complete": shutdown_complete,
             "authoritative_basis": {
                 "provider_termination_unconfirmed_task_ids": providers or [],
-                "movement_cancellation": {"terminal": movement_terminal},
+                "movement_cancellation": {
+                    "terminal": movement_terminal,
+                    "actors": {"Alice": {"terminal": movement_terminal}},
+                },
                 "live_threads": [] if shutdown_complete else ["controller-worker"],
                 "active_task_ids": [], "active_agent_ids": [],
                 "incomplete_submission_task_ids": [], "undrained_queues": [],
@@ -703,34 +709,263 @@ def _prospective_runtime_cleanup(*, shutdown_complete=True, providers=None,
         "bridge_cleanup": {
             "cleanup_complete": bridge_complete,
             "incomplete_process_count": 0 if bridge_complete else 1,
+            "process_retention": {
+                "capacity": 64, "retained": 1,
+                "truncated": False, "dropped_count": 0,
+            },
+            "processes": {
+                "Alice": {
+                    "pid": 10, "process_group_id": 10, "session_id": 10,
+                    "alive_after_kill": not bridge_complete,
+                    "identity_collection_errors": [],
+                },
+            },
         },
     }
 
 
-def test_k11_prospective_cleanup_status_is_separate_and_fail_closed() -> None:
+def test_k11_prospective_cleanup_status_is_separate_and_fail_closed(
+    monkeypatch,
+) -> None:
     supervision = {
         "exit_code": 0, "artifact_ready": True, "timed_out": False,
         "post_artifact_linger": False,
         "post_parent_group_linger": False, "process_group_alive_after_cleanup": False,
+        "term_sent": False, "kill_sent": False,
     }
-    worker = {"processes_after_cleanup": []}
+    worker = {"processes_after_cleanup": [], "term_sent": True, "kill_sent": False}
+    trace = {"events": [{"event_type": "k11.agent_step_started", "actor_id": "Alice"}]}
+    monkeypatch.setattr(
+        k11_pilot, "_late_trace_cleanup_evidence",
+        lambda _trace: {"provider": True, "tool_native": True, "agent": True},
+    )
     assert k11_pilot._prospective_cleanup_status(
-        supervision, worker, _prospective_runtime_cleanup(),
+        supervision, worker, _prospective_runtime_cleanup(), trace_artifact=trace,
+        expected_actors=("Alice",),
     ) == "qualified_within_budget"
     assert k11_pilot._prospective_cleanup_status(
         supervision, worker, _prospective_runtime_cleanup(shutdown_complete=False),
-    ) == "unknown"
+        trace_artifact=trace, expected_actors=("Alice",),
+    ) == "qualified_late"
     late_supervision = {**supervision, "timed_out": True}
     assert k11_pilot._prospective_cleanup_status(
-        late_supervision, worker, _prospective_runtime_cleanup(),
+        late_supervision, worker,
+        _prospective_runtime_cleanup(shutdown_complete=False), trace_artifact=trace,
+        expected_actors=("Alice",),
     ) == "qualified_late"
     assert k11_pilot._prospective_cleanup_status(
         supervision, worker, _prospective_runtime_cleanup(providers=["task-1"]),
+        trace_artifact=trace, expected_actors=("Alice",),
     ) == "unknown"
     assert k11_pilot._prospective_cleanup_status(
         supervision, {"processes_after_cleanup": [{"pid": 1}]},
-        _prospective_runtime_cleanup(),
+        _prospective_runtime_cleanup(), trace_artifact=trace,
+        expected_actors=("Alice",),
     ) == "not_qualified"
+
+
+def test_k11_late_cleanup_projection_preserves_frozen_failure(monkeypatch) -> None:
+    supervision = {
+        "exit_code": 0, "artifact_ready": True, "timed_out": False,
+        "post_artifact_linger": False, "post_parent_group_linger": False,
+        "process_group_alive_after_cleanup": False,
+        "term_sent": False, "kill_sent": False,
+    }
+    worker = {"processes_after_cleanup": [], "term_sent": True, "kill_sent": False}
+    runtime = _prospective_runtime_cleanup(shutdown_complete=False)
+    frozen_verdict = deepcopy(runtime["controller"]["context"]["diagnostics"]["verdict"])
+    measurement = {"measurement_snapshot_valid": True, "measurement_analysis_eligible": True}
+    trace = {
+        "measurement_cut": {"in_window_event_digest": "sha256:frozen"},
+        "events": [{"event_type": "k11.agent_step_started", "actor_id": "Alice"}],
+    }
+    frozen_trace = deepcopy(trace)
+    monkeypatch.setattr(
+        k11_pilot, "_late_trace_cleanup_evidence",
+        lambda _trace: {"provider": True, "tool_native": True, "agent": True},
+    )
+
+    result = k11_pilot._prospective_cleanup_projection(
+        supervision, worker, runtime, trace_artifact=trace,
+        expected_actors=("Alice",),
+    )
+
+    assert result["controller_verdict_at_budget"] == "failed"
+    assert result["late_execution_capability_terminal"] is True
+    assert result["late_future_reconciliation_state"] == "unknown"
+    assert result["post_window_cleanup_status"] == "qualified_late"
+    assert runtime["controller"]["context"]["diagnostics"]["verdict"] == frozen_verdict
+    assert trace == frozen_trace
+    assert measurement == {
+        "measurement_snapshot_valid": True, "measurement_analysis_eligible": True,
+    }
+    summary = {
+        "measurement_snapshot_valid": True,
+        "censoring": {
+            "active_effect_at_horizon": False,
+            "post_close_effect": False,
+            "uncertainty": False,
+        },
+    }
+    assert k11_pilot._prospective_contamination_excluded(
+        summary, cleanup_qualified=True,
+    ) is True
+    for field in ("active_effect_at_horizon", "post_close_effect", "uncertainty"):
+        blocked = deepcopy(summary)
+        blocked["censoring"][field] = True
+        assert k11_pilot._prospective_contamination_excluded(
+            blocked, cleanup_qualified=True,
+        ) is False
+
+    production_summary = {
+        **summary,
+        "runtime_error": "frozen controller failure",
+        "measurement_snapshot": {
+            "in_window_event_digest": "sha256:frozen",
+        },
+        "measurement_analysis_eligible": True,
+    }
+    frozen_fields = deepcopy(production_summary)
+    k11_pilot._apply_prospective_cleanup_projection(
+        production_summary, result,
+    )
+    assert production_summary["runtime_error"] == frozen_fields["runtime_error"]
+    assert production_summary["measurement_snapshot"] == frozen_fields[
+        "measurement_snapshot"
+    ]
+    assert production_summary["measurement_analysis_eligible"] is True
+    assert production_summary["cleanup_status"] == "qualified_late"
+    assert production_summary["cross_run_contamination_excluded"] is True
+    assert production_summary["next_run_admission_allowed"] is True
+
+
+@pytest.mark.parametrize("mutation", [
+    "parent_term", "surviving_group", "bridge_failure", "provider_uncertain",
+    "truncated_bridge", "missing_trace", "omitted_movement_actor",
+    "omitted_bridge_actor", "within_parent_term", "within_truncated_bridge",
+    "missing_assignments", "malformed_assignments",
+])
+def test_k11_late_cleanup_rejects_incomplete_or_forced_evidence(
+    monkeypatch, mutation,
+) -> None:
+    supervision = {
+        "exit_code": 0, "artifact_ready": True, "timed_out": False,
+        "post_artifact_linger": False, "post_parent_group_linger": False,
+        "process_group_alive_after_cleanup": False,
+        "term_sent": False, "kill_sent": False,
+    }
+    worker = {"processes_after_cleanup": [], "term_sent": True, "kill_sent": False}
+    runtime = _prospective_runtime_cleanup(
+        shutdown_complete=mutation.startswith("within_"),
+    )
+    trace_evidence = {"provider": True, "tool_native": True, "agent": True}
+    trace = {"events": [{"event_type": "k11.agent_step_started", "actor_id": "Alice"}]}
+    monkeypatch.setattr(
+        k11_pilot, "_late_trace_cleanup_evidence", lambda _trace: trace_evidence,
+    )
+    if mutation in {"parent_term", "within_parent_term"}:
+        supervision["term_sent"] = True
+    elif mutation == "surviving_group":
+        supervision["process_group_alive_after_cleanup"] = True
+    elif mutation == "bridge_failure":
+        runtime["bridge_cleanup"]["cleanup_complete"] = False
+        runtime["bridge_cleanup"]["incomplete_process_count"] = 1
+    elif mutation == "provider_uncertain":
+        runtime["controller"]["context"]["diagnostics"]["verdict"][
+            "authoritative_basis"
+        ]["provider_termination_unconfirmed_task_ids"] = ["task-1"]
+    elif mutation in {"truncated_bridge", "within_truncated_bridge"}:
+        runtime["bridge_cleanup"]["process_retention"]["truncated"] = True
+        runtime["bridge_cleanup"]["process_retention"]["dropped_count"] = 1
+    elif mutation == "omitted_movement_actor":
+        runtime["controller"]["context"]["diagnostics"]["verdict"][
+            "authoritative_basis"
+        ]["movement_cancellation"]["actors"] = {}
+    elif mutation == "omitted_bridge_actor":
+        runtime["bridge_cleanup"]["processes"] = {}
+        runtime["bridge_cleanup"]["process_retention"]["retained"] = 0
+    elif mutation == "missing_assignments":
+        runtime["controller"].pop("active_assignments")
+    elif mutation == "malformed_assignments":
+        runtime["controller"]["active_assignments"] = {"Alice": None}
+    else:
+        trace_evidence["agent"] = None
+
+    result = k11_pilot._prospective_cleanup_projection(
+        supervision, worker, runtime, trace_artifact=trace,
+        expected_actors=("Alice",),
+    )
+
+    assert result["post_window_cleanup_status"] in {"unknown", "not_qualified"}
+
+
+def test_k11_late_lifecycle_requires_scope_correlation() -> None:
+    trace = {"events": [
+        {
+            "event_type": "k11.agent_step_started", "agent_step_id": "step-1",
+            "task_id": "task-1", "actor_id": "Alice", "seq": 1,
+        },
+        {
+            "event_type": "k11.agent_step_completed", "agent_step_id": "step-1",
+            "task_id": "task-1", "actor_id": "Bob", "seq": 2,
+        },
+    ]}
+
+    result = k11_pilot._late_trace_lifecycle_terminal(
+        trace, "k11.agent_step_started", {"k11.agent_step_completed"},
+        lambda event: json.dumps({
+            "id": event.get("agent_step_id"),
+            "task": event.get("task_id"),
+            "actor": event.get("actor_id"),
+        }, sort_keys=True),
+    )
+
+    assert result is None
+
+
+def test_k11_late_cleanup_uses_configured_roster_not_active_assignments(
+    monkeypatch,
+) -> None:
+    supervision = {
+        "exit_code": 0, "artifact_ready": True, "timed_out": False,
+        "post_artifact_linger": False, "post_parent_group_linger": False,
+        "process_group_alive_after_cleanup": False,
+        "term_sent": False, "kill_sent": False,
+    }
+    worker = {"processes_after_cleanup": [], "term_sent": True, "kill_sent": False}
+    runtime = _prospective_runtime_cleanup(shutdown_complete=True)
+    runtime["controller"]["active_assignments"] = {}
+    movement = runtime["controller"]["context"]["diagnostics"]["verdict"][
+        "authoritative_basis"
+    ]["movement_cancellation"]
+    movement["actors"]["Bob"] = {"terminal": True}
+    runtime["bridge_cleanup"]["processes"]["Bob"] = {
+        "pid": 11, "process_group_id": 10, "session_id": 10,
+        "alive_after_kill": False, "identity_collection_errors": [],
+    }
+    runtime["bridge_cleanup"]["process_retention"]["retained"] = 2
+    trace = {"events": [{"event_type": "k11.agent_step_started", "actor_id": "Alice"}]}
+    monkeypatch.setattr(
+        k11_pilot, "_late_trace_cleanup_evidence",
+        lambda _trace: {"provider": True, "tool_native": True, "agent": True},
+    )
+
+    result = k11_pilot._prospective_cleanup_projection(
+        supervision, worker, runtime, trace_artifact=trace,
+        expected_actors=("Alice", "Bob"),
+    )
+
+    assert result["post_window_cleanup_status"] == "qualified_within_budget"
+
+
+def test_k11_expected_actor_roster_is_bound_to_runtime_row() -> None:
+    assert k11_pilot._expected_actor_roster({
+        "runtime": {"agent_num": 2},
+    }) == ("Alice", "Bob")
+    with pytest.raises(K11PilotContractError, match="roster-expanding"):
+        k11_pilot._expected_actor_roster({
+            "runtime": {"agent_num": 2, "document": {"action": "chat"}},
+        })
 
 
 def test_k11_prospective_cohort_stops_before_blocked_next_row(

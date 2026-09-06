@@ -85,6 +85,8 @@ It contains exactly eight Advisory, `task_type=none`, non-judged, non-production
 
 A run may be structurally valid with zero qualifying in-window evidence. Such a zero-evidence run is retained and is not retried or replaced for that reason. The prospective measurement snapshot, structural validation, censoring, and analysis cuts are recorded separately. Contamination is excluded rather than repaired. An active tool/native effect at H, any post-close tool/native entry, uncertainty, or uncertain/failed cleanup blocks the next row. A post-close completion of an effect already censored at H remains cleanup metadata and does not rewrite measurement. The formal loop stops before that next row, with no retry or skip; counts and status counts report the completed prefix. Development smoke and other prior development artifacts are not eligible for retroactive promotion into the formal eight-run cohort.
 
+The controller shutdown verdict remains the immutable verdict at its bounded grace deadline. A failed deadline verdict may be followed by a separate append-only `qualified_late` cleanup result only when identity-bound evidence affirmatively establishes natural worker exit, absent process group and descendants, terminal provider/tool/native/movement state, complete bridge cleanup, and complete non-truncated evidence. Direct Future reconciliation remains reported independently and may be `unknown` when process containment already proves that execution capability ended. Missing, truncated, collection-error, parent-forced-termination, or surviving-process evidence remains `unknown` or `not_qualified`; it never rewrites the controller verdict or measurement cut.
+
 At pilot start the runner:
 
 1. requires a clean Git checkout;
